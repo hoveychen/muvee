@@ -1,0 +1,61 @@
+# Binaries
+bin/
+dist/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Web
+web/node_modules/
+web/dist/
+web/embed/dist/
+web/.vite/
+web/tsconfig.tsbuildinfo
+
+# Docs
+docs/node_modules/
+docs/build/
+docs/.docusaurus/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Docker
+.docker/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# TLS / Certs
+*.pem
+*.key
+*.crt
+letsencrypt/
+
+# Temp
+tmp/

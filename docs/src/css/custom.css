@@ -1,0 +1,234 @@
+/* ── Fonts ── */
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Lora:ital,wght@0,400;0,600;0,700;1,400;1,600&display=swap');
+
+/* ── Design tokens — mirrors web/src/index.css ── */
+:root {
+  --bg-base:   #0f0f0f;
+  --bg-card:   #1a1a1a;
+  --bg-hover:  #242424;
+  --fg-primary: #e8e4dc;
+  --fg-muted:  #7a7570;
+  --accent:    #c8f03c;
+  --danger:    #e05a4e;
+  --border:    #2e2e2e;
+
+  /* ── Docusaurus overrides ── */
+  --ifm-color-primary:          #c8f03c;
+  --ifm-color-primary-dark:     #b4db2a;
+  --ifm-color-primary-darker:   #a8cd22;
+  --ifm-color-primary-darkest:  #88a91a;
+  --ifm-color-primary-light:    #d2f550;
+  --ifm-color-primary-lighter:  #d8f762;
+  --ifm-color-primary-lightest: #e4fa86;
+
+  --ifm-background-color:         var(--bg-base);
+  --ifm-background-surface-color: var(--bg-card);
+  --ifm-navbar-background-color:  #111111;
+  --ifm-footer-background-color:  #111111;
+
+  --ifm-color-content:         var(--fg-primary);
+  --ifm-color-content-secondary: var(--fg-muted);
+
+  --ifm-font-family-base:       'Lora', Georgia, serif;
+  --ifm-font-family-monospace:  'DM Mono', 'Courier New', monospace;
+  --ifm-code-font-size:         88%;
+
+  --ifm-link-color:             var(--accent);
+  --ifm-link-hover-color:       #d8f762;
+
+  --ifm-navbar-link-color:      var(--fg-primary);
+  --ifm-navbar-link-hover-color: var(--accent);
+
+  --ifm-menu-color:             var(--fg-muted);
+  --ifm-menu-color-active:      var(--accent);
+  --ifm-menu-link-sublist-icon-filter: invert(1);
+
+  --ifm-toc-link-color:         var(--fg-muted);
+  --ifm-toc-border-color:       var(--border);
+
+  --ifm-hr-border-color:        var(--border);
+  --ifm-table-border-color:     var(--border);
+  --ifm-blockquote-border-color: var(--accent);
+  --ifm-blockquote-color:       var(--fg-muted);
+
+  --ifm-code-background:        var(--bg-card);
+  --docusaurus-highlighted-code-line-bg: rgba(200, 240, 60, 0.08);
+
+  --ifm-heading-color:          var(--fg-primary);
+  --ifm-h1-font-size:           2rem;
+  --ifm-h2-font-size:           1.4rem;
+  --ifm-h3-font-size:           1.15rem;
+  --ifm-heading-font-weight:    700;
+  --ifm-heading-line-height:    1.25;
+}
+
+/* Force dark — no light theme */
+[data-theme='dark'],
+:root {
+  color-scheme: dark;
+}
+
+/* ── Global resets ── */
+html {
+  background-color: var(--bg-base);
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--fg-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Navbar ── */
+.navbar {
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.navbar__title {
+  font-family: 'DM Mono', monospace;
+  font-weight: 500;
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.navbar__logo {
+  height: 28px;
+}
+
+/* ── Sidebar ── */
+.theme-doc-sidebar-container {
+  border-right: 1px solid var(--border) !important;
+}
+
+.menu__link {
+  border-radius: 3px;
+  font-size: 0.875rem;
+  transition: color 120ms, background 120ms;
+}
+
+.menu__link:hover {
+  color: var(--accent);
+  background: rgba(200, 240, 60, 0.06);
+}
+
+.menu__link--active {
+  color: var(--accent) !important;
+  background: rgba(200, 240, 60, 0.1) !important;
+  font-weight: 600;
+}
+
+/* ── Doc content ── */
+.markdown h1 { border-bottom: 1px solid var(--border); padding-bottom: 0.4em; }
+.markdown h2 { border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+
+.markdown a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.markdown a:hover {
+  text-decoration: underline;
+  color: var(--ifm-link-hover-color);
+}
+
+/* ── Code blocks ── */
+.prism-code {
+  background: #161616 !important;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+code {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: var(--ifm-code-font-size);
+  color: var(--accent);
+}
+
+/* ── Tables ── */
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+table th {
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  font-family: 'DM Mono', monospace;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+}
+table td {
+  border-bottom: 1px solid var(--border);
+}
+table tr:hover td {
+  background: var(--bg-hover);
+}
+
+/* ── Pagination ── */
+.pagination-nav__link {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  transition: border-color 120ms, background 120ms;
+}
+.pagination-nav__link:hover {
+  border-color: var(--accent);
+  background: rgba(200, 240, 60, 0.05);
+}
+.pagination-nav__label {
+  color: var(--accent);
+}
+
+/* ── Footer ── */
+.footer {
+  border-top: 1px solid var(--border);
+}
+.footer__title {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+}
+.footer__link-item {
+  color: var(--fg-muted);
+  transition: color 120ms;
+}
+.footer__link-item:hover {
+  color: var(--accent);
+}
+.footer__copyright {
+  color: var(--fg-muted);
+  font-size: 0.8rem;
+}
+
+/* ── TOC ── */
+.table-of-contents__link {
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  transition: color 120ms;
+}
+.table-of-contents__link:hover,
+.table-of-contents__link--active {
+  color: var(--accent);
+}
+
+/* ── Breadcrumbs ── */
+.breadcrumbs__item--active .breadcrumbs__link {
+  color: var(--fg-muted);
+}
+
+/* ── Admonitions ── */
+.alert {
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: var(--bg-card);
+}
+.alert--info    { border-left-color: var(--accent); }
+.alert--warning { border-left-color: #e0aa3c; }
+.alert--danger  { border-left-color: var(--danger); }
+.alert--success { border-left-color: #4ecb71; }

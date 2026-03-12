@@ -1,0 +1,15 @@
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    # Reusable ForwardAuth middleware template
+    # Each project gets its own via Docker labels, but shared ones can be defined here
+    muvee-forward-auth:
+      forwardAuth:
+        address: "http://muvee-authservice:4181/verify"
+        authResponseHeaders:
+          - "X-Forwarded-User"
+        trustForwardHeader: true

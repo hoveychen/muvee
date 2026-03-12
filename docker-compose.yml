@@ -1,0 +1,101 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: muvee
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-muvee}
+      POSTGRES_DB: muvee
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - muvee-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U muvee"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  registry:
+    image: registry:2
+    environment:
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
+    volumes:
+      - registry_data:/data
+    networks:
+      - muvee-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.registry.rule=Host(`registry.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.registry.entrypoints=websecure"
+      - "traefik.http.routers.registry.tls.certresolver=letsencrypt"
+      - "traefik.http.services.registry.loadbalancer.server.port=5000"
+
+  # ── Control-plane server (API + embedded React UI) ─────────────────────────
+  muvee-server:
+    image: ghcr.io/hoveychen/muvee:latest
+    # For local/offline builds:
+    #   build: { context: ., dockerfile: Dockerfile.local }
+    command: ["server"]
+    environment:
+      DATABASE_URL: postgres://muvee:${POSTGRES_PASSWORD:-muvee}@postgres:5432/muvee?sslmode=disable
+      MIGRATIONS_DIR: /app/db/migrations
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URL: https://www.${BASE_DOMAIN}/auth/google/callback
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS}
+      JWT_SECRET: ${JWT_SECRET}
+      BASE_DOMAIN: ${BASE_DOMAIN}
+      PORT: "8080"
+    volumes:
+      - ./db/migrations:/app/db/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - muvee-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.muvee.rule=Host(`www.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.muvee.entrypoints=websecure"
+      - "traefik.http.routers.muvee.tls.certresolver=letsencrypt"
+      - "traefik.http.services.muvee.loadbalancer.server.port=8080"
+
+  # ── Traefik ForwardAuth sidecar ────────────────────────────────────────────
+  muvee-authservice:
+    image: ghcr.io/hoveychen/muvee:latest
+    command: ["authservice"]
+    environment:
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      FORWARD_AUTH_REDIRECT_URL: https://www.${BASE_DOMAIN}/_oauth
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: "4181"
+    networks:
+      - muvee-net
+
+  traefik:
+    image: traefik:v3.3
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8081:8080"  # Traefik dashboard (optional, remove in production)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - letsencrypt_data:/letsencrypt
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL}
+    networks:
+      - muvee-net
+
+volumes:
+  postgres_data:
+  registry_data:
+  letsencrypt_data:
+
+networks:
+  muvee-net:
+    external: true

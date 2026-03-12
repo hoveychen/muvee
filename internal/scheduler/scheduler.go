@@ -1,0 +1,203 @@
+package scheduler
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hoveychen/muvee/internal/store"
+)
+
+type Scheduler struct {
+	store *store.Store
+}
+
+func New(st *store.Store) *Scheduler {
+	return &Scheduler{store: st}
+}
+
+type nodeScore struct {
+	node          *store.Node
+	score         float64
+	missingBytes  int64
+	cachedDatasets map[uuid.UUID]bool
+}
+
+// PickDeployNode selects the best deploy node for a set of dependency datasets.
+// Weights: W1=10 (cache hit), W2=0.001 (missing bytes), W3=0.0001 (free storage), W4=5 (container count, approximated by tasks)
+func (s *Scheduler) PickDeployNode(ctx context.Context, datasetIDs []uuid.UUID) (*store.Node, error) {
+	nodes, err := s.store.GetDeployNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("no deploy nodes available")
+	}
+
+	// Filter out nodes that haven't been seen in the last 2 minutes (offline)
+	var activeNodes []*store.Node
+	for _, n := range nodes {
+		if time.Since(n.LastSeenAt) < 2*time.Minute {
+			activeNodes = append(activeNodes, n)
+		}
+	}
+	if len(activeNodes) == 0 {
+		return nil, fmt.Errorf("no active deploy nodes")
+	}
+
+	// Get dataset sizes
+	datasetSizes := make(map[uuid.UUID]int64)
+	for _, id := range datasetIDs {
+		d, err := s.store.GetDataset(ctx, id)
+		if err != nil || d == nil {
+			continue
+		}
+		datasetSizes[id] = d.SizeBytes
+	}
+
+	var scores []nodeScore
+	for _, node := range activeNodes {
+		nodeDSs, err := s.store.GetNodeDatasets(ctx, node.ID)
+		if err != nil {
+			continue
+		}
+		cached := make(map[uuid.UUID]bool)
+		for _, nd := range nodeDSs {
+			cached[nd.DatasetID] = true
+		}
+
+		var cacheHits int
+		var missingBytes int64
+		for _, id := range datasetIDs {
+			if cached[id] {
+				cacheHits++
+			} else {
+				missingBytes += datasetSizes[id]
+			}
+		}
+		freeBytes := node.MaxStorageBytes - node.UsedStorageBytes
+		score := float64(cacheHits)*10.0 - float64(missingBytes)*0.000001 + float64(freeBytes)*0.0000001
+		scores = append(scores, nodeScore{
+			node:           node,
+			score:          score,
+			missingBytes:   missingBytes,
+			cachedDatasets: cached,
+		})
+	}
+	if len(scores) == 0 {
+		return nil, fmt.Errorf("no scorable nodes")
+	}
+	sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
+	best := scores[0]
+
+	// Check if we need to evict to free space
+	freeBytes := best.node.MaxStorageBytes - best.node.UsedStorageBytes
+	if best.missingBytes > freeBytes {
+		needed := best.missingBytes - freeBytes
+		evictList, err := s.store.GetLRUDatasetsForNode(ctx, best.node.ID, needed)
+		if err != nil {
+			return nil, fmt.Errorf("get LRU datasets: %w", err)
+		}
+		for _, nd := range evictList {
+			if err := s.store.RemoveNodeDataset(ctx, nd.NodeID, nd.DatasetID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return best.node, nil
+}
+
+// PickBuilderNode returns any active builder node.
+func (s *Scheduler) PickBuilderNode(ctx context.Context) (*store.Node, error) {
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range nodes {
+		if n.Role == store.NodeRoleBuilder && time.Since(n.LastSeenAt) < 2*time.Minute {
+			return n, nil
+		}
+	}
+	return nil, fmt.Errorf("no active builder nodes")
+}
+
+// DispatchBuild creates a build task on the best builder node.
+func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
+	builderNode, err := s.PickBuilderNode(ctx)
+	if err != nil {
+		return err
+	}
+	task := &store.Task{
+		Type:         store.TaskTypeBuild,
+		NodeID:       &builderNode.ID,
+		DeploymentID: deployment.ID,
+		Payload: map[string]interface{}{
+			"git_url":         project.GitURL,
+			"git_branch":      project.GitBranch,
+			"dockerfile_path": project.DockerfilePath,
+			"deployment_id":   deployment.ID.String(),
+			"project_id":      project.ID.String(),
+			"domain_prefix":   project.DomainPrefix,
+		},
+	}
+	_, err = s.store.CreateTask(ctx, task)
+	return err
+}
+
+// DispatchDeploy selects a deploy node and creates a deploy task.
+func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deployment, project *store.Project, imageTag string) error {
+	pds, err := s.store.GetProjectDatasets(ctx, project.ID)
+	if err != nil {
+		return err
+	}
+	var depDatasetIDs []uuid.UUID
+	for _, pd := range pds {
+		if pd.MountMode == store.MountModeDependency {
+			depDatasetIDs = append(depDatasetIDs, pd.DatasetID)
+		}
+	}
+
+	deployNode, err := s.PickDeployNode(ctx, depDatasetIDs)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetDeploymentNode(ctx, deployment.ID, deployNode.ID); err != nil {
+		return err
+	}
+
+	// Build dataset mount list
+	var datasets []map[string]interface{}
+	for _, pd := range pds {
+		ds, err := s.store.GetDataset(ctx, pd.DatasetID)
+		if err != nil || ds == nil {
+			continue
+		}
+		datasets = append(datasets, map[string]interface{}{
+			"id":         ds.ID.String(),
+			"name":       ds.Name,
+			"nfs_path":   ds.NFSPath,
+			"version":    ds.Version,
+			"size_bytes": ds.SizeBytes,
+			"mount_mode": string(pd.MountMode),
+		})
+	}
+
+	task := &store.Task{
+		Type:         store.TaskTypeDeploy,
+		NodeID:       &deployNode.ID,
+		DeploymentID: deployment.ID,
+		Payload: map[string]interface{}{
+			"image_tag":      imageTag,
+			"deployment_id":  deployment.ID.String(),
+			"project_id":     project.ID.String(),
+			"domain_prefix":  project.DomainPrefix,
+			"auth_required":  project.AuthRequired,
+			"auth_domains":   project.AuthAllowedDomains,
+			"datasets":       datasets,
+		},
+	}
+	_, err = s.store.CreateTask(ctx, task)
+	return err
+}

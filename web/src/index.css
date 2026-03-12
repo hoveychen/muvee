@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-base: #0f0f0f;
+  --bg-card: #1a1a1a;
+  --bg-hover: #242424;
+  --fg-primary: #e8e4dc;
+  --fg-muted: #7a7570;
+  --accent: #c8f03c;
+  --danger: #e05a4e;
+  --border: #2e2e2e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--fg-primary);
+  font-family: 'Lora', serif;
+  margin: 0;
+  padding: 0;
+}
+
+/* Status dot animations */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.status-running { animation: pulse-dot 2s infinite; }
+
+/* Terminal scroll area */
+.terminal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.terminal-scroll::-webkit-scrollbar { width: 4px; }
+.terminal-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Page enter animation */
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-enter {
+  animation: page-enter 180ms ease-out;
+}
+
+/* Log line fade in */
+@keyframes log-line-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.log-line {
+  animation: log-line-in 120ms ease-out;
+}

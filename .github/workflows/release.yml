@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  packages: write   # needed to push to ghcr.io
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      # ── Build frontend and embed into Go package ──────────────────────────
+      - name: Install web dependencies
+        run: cd web && npm ci
+
+      - name: Build frontend
+        run: cd web && npm run build
+
+      - name: Copy dist into embed package
+        run: |
+          rm -rf web/embed/dist
+          cp -r web/dist web/embed/dist
+
+      # ── Cross-compile single muvee binary ─────────────────────────────────
+      - name: Build binaries (cross-platform)
+        env:
+          VERSION: ${{ github.ref_name }}
+          LDFLAGS: "-s -w -X main.version=${{ github.ref_name }}"
+        run: |
+          mkdir -p release
+
+          for GOOS in linux darwin; do
+            for GOARCH in amd64 arm64; do
+              OUTPUT="release/muvee_${GOOS}_${GOARCH}"
+              echo "Building $OUTPUT"
+              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+                go build -ldflags="$LDFLAGS" \
+                -o "$OUTPUT" ./cmd/muvee
+            done
+          done
+
+      # ── Package supporting files ──────────────────────────────────────────
+      - name: Package release assets
+        run: |
+          cp docker-compose.yml release/
+          cp .env.example release/
+          cp -r db/migrations release/migrations
+          cp -r traefik release/traefik
+
+          # Create convenience tarballs per platform
+          for GOOS in linux darwin; do
+            for GOARCH in amd64 arm64; do
+              TARNAME="muvee_${{ github.ref_name }}_${GOOS}_${GOARCH}.tar.gz"
+              tar -czf "release/${TARNAME}" \
+                -C release \
+                "muvee_${GOOS}_${GOARCH}" \
+                docker-compose.yml \
+                .env.example \
+                migrations \
+                traefik
+            done
+          done
+
+      # ── Generate checksums ────────────────────────────────────────────────
+      - name: Generate checksums
+        working-directory: release
+        run: |
+          sha256sum muvee_*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      # ── Push Docker image to ghcr.io ──────────────────────────────────────
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.local
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/muvee:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/muvee:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Create GitHub Release ─────────────────────────────────────────────
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "muvee ${{ github.ref_name }}"
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          generate_release_notes: true
+          files: |
+            release/muvee_*.tar.gz
+            release/checksums.txt
+            release/docker-compose.yml
+            release/.env.example
