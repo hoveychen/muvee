@@ -2,8 +2,6 @@ package monitor
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/store"
 )
@@ -243,9 +242,9 @@ func fileChecksum(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	h := sha256.New()
+	h := xxhash.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return fmt.Sprintf("%016x", h.Sum64()), nil
 }
