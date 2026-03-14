@@ -195,6 +195,7 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 			"domain_prefix":  project.DomainPrefix,
 			"auth_required":  project.AuthRequired,
 			"auth_domains":   project.AuthAllowedDomains,
+			"container_port": project.ContainerPort,
 			"datasets":       datasets,
 		},
 	}

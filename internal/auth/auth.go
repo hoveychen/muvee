@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,11 +20,12 @@ import (
 )
 
 type Service struct {
-	oauth2Config *oauth2.Config
-	verifier     *gooidc.IDTokenVerifier
-	jwtSecret    []byte
+	oauth2Config   *oauth2.Config
+	verifier       *gooidc.IDTokenVerifier
+	jwtSecret      []byte
 	allowedDomains []string
-	store        *store.Store
+	adminEmails    map[string]struct{}
+	store          *store.Store
 }
 
 type Claims struct {
@@ -55,6 +59,13 @@ func New(st *store.Store) (*Service, error) {
 			filtered = append(filtered, d)
 		}
 	}
+	adminEmails := make(map[string]struct{})
+	for _, e := range strings.Split(os.Getenv("ADMIN_EMAILS"), ",") {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			adminEmails[e] = struct{}{}
+		}
+	}
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		secret = "change-me-in-production"
@@ -70,6 +81,7 @@ func New(st *store.Store) (*Service, error) {
 		verifier:       provider.Verifier(&gooidc.Config{ClientID: clientID}),
 		jwtSecret:      []byte(secret),
 		allowedDomains: filtered,
+		adminEmails:    adminEmails,
 		store:          st,
 	}, nil
 }
@@ -105,6 +117,13 @@ func (s *Service) HandleCallback(ctx context.Context, code string) (*store.User,
 	user, err := s.store.UpsertUser(ctx, claims.Email, claims.Name, claims.Picture)
 	if err != nil {
 		return nil, "", fmt.Errorf("upsert user: %w", err)
+	}
+	// Auto-promote users listed in ADMIN_EMAILS on every login.
+	if _, isAdmin := s.adminEmails[claims.Email]; isAdmin && user.Role != store.UserRoleAdmin {
+		if err := s.store.SetUserRole(ctx, user.ID, store.UserRoleAdmin); err != nil {
+			return nil, "", fmt.Errorf("promote admin: %w", err)
+		}
+		user.Role = store.UserRoleAdmin
 	}
 	jwt, err := s.signJWT(user)
 	if err != nil {
@@ -161,7 +180,36 @@ func (s *Service) ParseJWT(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
+// CreateAPIToken generates a new random API token for a user, stores its hash, and returns the token.
+func (s *Service) CreateAPIToken(ctx context.Context, userID uuid.UUID, name string) (*store.ApiToken, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, fmt.Errorf("generate token: %w", err)
+	}
+	tokenStr := "mvt_" + hex.EncodeToString(raw)
+	hash := sha256.Sum256([]byte(tokenStr))
+	hashHex := hex.EncodeToString(hash[:])
+
+	t, err := s.store.CreateAPIToken(ctx, userID, name, hashHex)
+	if err != nil {
+		return nil, err
+	}
+	t.Token = tokenStr
+	return t, nil
+}
+
+func (s *Service) lookupAPIToken(ctx context.Context, tokenStr string) (*store.User, error) {
+	hash := sha256.Sum256([]byte(tokenStr))
+	hashHex := hex.EncodeToString(hash[:])
+	apiToken, err := s.store.GetAPITokenByHash(ctx, hashHex)
+	if err != nil || apiToken == nil {
+		return nil, fmt.Errorf("invalid token")
+	}
+	return s.store.GetUserByID(ctx, apiToken.UserID)
+}
+
 // Middleware injects the authenticated user into the request context.
+// Accepts both JWT session tokens and long-lived API tokens (prefix "mvt_").
 func (s *Service) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := extractToken(r)
@@ -169,21 +217,36 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		claims, err := s.ParseJWT(tokenStr)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+
+		var user *store.User
+
+		if strings.HasPrefix(tokenStr, "mvt_") {
+			// API token path
+			var err error
+			user, err = s.lookupAPIToken(r.Context(), tokenStr)
+			if err != nil || user == nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		} else {
+			// JWT path
+			claims, err := s.ParseJWT(tokenStr)
+			if err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			userID, err := uuid.Parse(claims.UserID)
+			if err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			user, err = s.store.GetUserByID(r.Context(), userID)
+			if err != nil || user == nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
-		userID, err := uuid.Parse(claims.UserID)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		user, err := s.store.GetUserByID(r.Context(), userID)
-		if err != nil || user == nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+
 		ctx := context.WithValue(r.Context(), CtxUserKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

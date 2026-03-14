@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -12,16 +13,16 @@ import (
 )
 
 type Config struct {
-	DeploymentID   string
-	ProjectID      string
-	DomainPrefix   string
-	ImageTag       string
-	AuthRequired   bool
-	AuthDomains    string
-	Datasets       []DatasetSpec
-	BaseDomain     string
-	AuthServiceURL string // e.g. http://muvee-authservice/verify
-	RegistryAddr   string
+	DeploymentID  string
+	ProjectID     string
+	DomainPrefix  string
+	ImageTag      string
+	ContainerPort int // port the container listens on (default 8080)
+	AuthRequired  bool
+	AuthDomains   string
+	Datasets      []DatasetSpec
+	BaseDomain    string
+	RegistryAddr  string
 }
 
 type DatasetSpec struct {
@@ -33,10 +34,18 @@ type DatasetSpec struct {
 	MountMode string
 }
 
-func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.Store, logFn func(string)) error {
+// Deploy starts the container on the local Docker daemon and returns the host port
+// that was dynamically assigned. Traefik discovers this endpoint via the HTTP provider
+// served by the muvee control plane.
+func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.Store, logFn func(string)) (int, error) {
 	deploymentID, err := uuid.Parse(cfg.DeploymentID)
 	if err != nil {
-		return fmt.Errorf("invalid deployment id: %w", err)
+		return 0, fmt.Errorf("invalid deployment id: %w", err)
+	}
+
+	containerPort := cfg.ContainerPort
+	if containerPort == 0 {
+		containerPort = 8080
 	}
 
 	// Stop old container for this project (rolling update)
@@ -63,36 +72,17 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 	logFn("Preparing dataset mounts...")
 	depMounts, rwMounts, err := cache.SetupMounts(ctx, deploymentID, mounts)
 	if err != nil {
-		return fmt.Errorf("setup mounts: %w", err)
+		return 0, fmt.Errorf("setup mounts: %w", err)
 	}
 	allMounts := append(depMounts, rwMounts...)
 
-	// Build docker run command
-	domain := cfg.DomainPrefix + "." + cfg.BaseDomain
+	// Build docker run command. Port 0 on the host lets Docker pick a free port.
+	// The actual assigned port is retrieved via `docker port` after startup.
 	dockerArgs := []string{
 		"run", "-d",
 		"--name", oldContainer,
 		"--restart", "unless-stopped",
-		"--label", "traefik.enable=true",
-		"--label", fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", cfg.DomainPrefix, domain),
-		"--label", fmt.Sprintf("traefik.http.routers.%s.entrypoints=websecure", cfg.DomainPrefix),
-		"--label", fmt.Sprintf("traefik.http.routers.%s.tls.certresolver=letsencrypt", cfg.DomainPrefix),
-		"--label", fmt.Sprintf("traefik.http.routers.%s-http.rule=Host(`%s`)", cfg.DomainPrefix, domain),
-		"--label", fmt.Sprintf("traefik.http.routers.%s-http.entrypoints=web", cfg.DomainPrefix),
-		"--label", fmt.Sprintf("traefik.http.routers.%s-http.middlewares=redirect-to-https", cfg.DomainPrefix),
-	}
-
-	if cfg.AuthRequired && cfg.AuthServiceURL != "" {
-		mwName := cfg.DomainPrefix + "-auth"
-		verifyURL := fmt.Sprintf("%s?project=%s", cfg.AuthServiceURL, cfg.ProjectID)
-		if cfg.AuthDomains != "" {
-			verifyURL += "&domains=" + cfg.AuthDomains
-		}
-		dockerArgs = append(dockerArgs,
-			"--label", fmt.Sprintf("traefik.http.middlewares.%s.forwardauth.address=%s", mwName, verifyURL),
-			"--label", fmt.Sprintf("traefik.http.middlewares.%s.forwardauth.authResponseHeaders=X-Forwarded-User", mwName),
-			"--label", fmt.Sprintf("traefik.http.routers.%s.middlewares=%s", cfg.DomainPrefix, mwName),
-		)
+		"-p", fmt.Sprintf("0:%d", containerPort),
 	}
 
 	for _, m := range allMounts {
@@ -102,10 +92,34 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 	dockerArgs = append(dockerArgs, cfg.ImageTag)
 	logFn(fmt.Sprintf("Starting container: docker %s", strings.Join(dockerArgs, " ")))
 	if err := runCmd(ctx, logFn, "docker", dockerArgs...); err != nil {
-		return fmt.Errorf("docker run: %w", err)
+		return 0, fmt.Errorf("docker run: %w", err)
 	}
-	logFn("Container started successfully.")
-	return nil
+
+	// Retrieve the dynamically assigned host port.
+	out, err := exec.CommandContext(ctx, "docker", "port", oldContainer, strconv.Itoa(containerPort)).Output()
+	if err != nil {
+		return 0, fmt.Errorf("docker port lookup: %w", err)
+	}
+	hostPort, err := parseHostPort(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("parse host port from %q: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	logFn(fmt.Sprintf("Container started, listening on host port %d.", hostPort))
+	return hostPort, nil
+}
+
+// parseHostPort extracts the port number from `docker port` output.
+// Examples: "0.0.0.0:32768", "[::]:32768", "0.0.0.0:32768\n[::]:32768"
+func parseHostPort(raw string) (int, error) {
+	// Take first line only
+	line := strings.SplitN(raw, "\n", 2)[0]
+	// Find last ":" to handle IPv6 addresses
+	idx := strings.LastIndex(line, ":")
+	if idx < 0 {
+		return 0, fmt.Errorf("unexpected format: %q", line)
+	}
+	return strconv.Atoi(line[idx+1:])
 }
 
 func runCmd(ctx context.Context, logFn func(string), name string, args ...string) error {

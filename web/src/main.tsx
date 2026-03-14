@@ -62,6 +62,41 @@ function NewProject() {
     }
   }
 
+  const inputStyle = {
+    background: 'var(--bg-hover)',
+    border: '1px solid var(--border)',
+    color: 'var(--fg-primary)',
+    fontFamily: 'DM Mono',
+    outline: 'none',
+  }
+  const labelStyle = {
+    fontFamily: 'DM Mono',
+    fontSize: '0.7rem',
+    color: 'var(--fg-muted)',
+    letterSpacing: '0.1em',
+    display: 'block',
+    marginBottom: '0.4rem',
+  }
+  const textField = (label: string, key: keyof import('./lib/types').Project, required = true, placeholder?: string) => (
+    <div key={key}>
+      <label style={labelStyle}>{label.toUpperCase()}</label>
+      <input
+        type="text"
+        value={(form[key] ?? '') as string}
+        onChange={e => setForm({ ...form, [key]: e.target.value })}
+        required={required}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 rounded-sm text-sm"
+        style={inputStyle}
+        onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
+        onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
+      />
+    </div>
+  )
+
+  const nameIsValidPrefix = isValidDomainPrefix(form.name ?? '')
+  const domainPrefixRequired = !nameIsValidPrefix
+
   return (
     <RequireAuth>
       <Layout>
@@ -71,23 +106,37 @@ function NewProject() {
             <h1 style={{ fontFamily: 'Bebas Neue', fontSize: '3rem', color: 'var(--fg-primary)', lineHeight: 1 }}>Create Project</h1>
           </div>
           <form onSubmit={handleSubmit} className="space-y-5">
-            {(['name', 'git_url', 'git_branch', 'domain_prefix', 'dockerfile_path'] as const).map(key => (
-              <div key={key}>
-                <label style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)', letterSpacing: '0.1em', display: 'block', marginBottom: '0.4rem' }}>
-                  {key.replace(/_/g, ' ').toUpperCase()}
-                </label>
-                <input
-                  type="text"
-                  value={(form[key] ?? '') as string}
-                  onChange={e => setForm({ ...form, [key]: e.target.value })}
-                  required={key !== 'dockerfile_path'}
-                  className="w-full px-3 py-2 rounded-sm text-sm"
-                  style={{ background: 'var(--bg-hover)', border: '1px solid var(--border)', color: 'var(--fg-primary)', fontFamily: 'DM Mono', outline: 'none' }}
-                  onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
-                  onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
-                />
-              </div>
-            ))}
+            {textField('Name', 'name')}
+            {textField('Git URL', 'git_url')}
+            {textField('Git Branch', 'git_branch')}
+
+            <div>
+              <label style={labelStyle}>
+                DOMAIN PREFIX
+                {domainPrefixRequired && (
+                  <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>
+                )}
+              </label>
+              <input
+                type="text"
+                value={(form.domain_prefix ?? '') as string}
+                onChange={e => setForm({ ...form, domain_prefix: e.target.value })}
+                required={domainPrefixRequired}
+                placeholder={nameIsValidPrefix ? form.name : undefined}
+                className="w-full px-3 py-2 rounded-sm text-sm"
+                style={inputStyle}
+                onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
+                onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
+              />
+              <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
+                {nameIsValidPrefix
+                  ? `Optional — defaults to "${form.name}" if left blank`
+                  : 'Required — project name cannot be used as a subdomain'}
+              </p>
+            </div>
+
+            {textField('Dockerfile Path', 'dockerfile_path', false)}
+
             <button
               type="submit"
               disabled={saving}
@@ -106,6 +155,7 @@ function NewProject() {
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from './lib/api'
+import { isValidDomainPrefix } from './lib/utils'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

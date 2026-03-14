@@ -22,9 +22,10 @@ type authClaims struct {
 }
 
 var (
-	oauth2Cfg   *oauth2.Config
+	oauth2Cfg    *oauth2.Config
 	oidcVerifier *gooidc.IDTokenVerifier
-	jwtSecret   []byte
+	jwtSecret    []byte
+	adminEmails  map[string]struct{}
 )
 
 func main() {
@@ -40,6 +41,13 @@ func main() {
 		secret = "change-me-in-production"
 	}
 	jwtSecret = []byte(secret)
+	adminEmails = make(map[string]struct{})
+	for _, e := range strings.Split(os.Getenv("ADMIN_EMAILS"), ",") {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			adminEmails[e] = struct{}{}
+		}
+	}
 
 	provider, err := gooidc.NewProvider(ctx, "https://accounts.google.com")
 	if err != nil {
@@ -56,6 +64,7 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Get("/verify", handleVerify)
+	r.Get("/verify-admin", handleVerifyAdmin)
 	r.Get("/_oauth", handleOAuthCallback)
 
 	port := os.Getenv("PORT")
@@ -83,6 +92,25 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "access denied: email domain not permitted", http.StatusForbidden)
 			return
 		}
+	}
+	w.Header().Set("X-Forwarded-User", claims.Email)
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleVerifyAdmin(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("muvee_fwd_session")
+	if err != nil {
+		redirectToLogin(w, r)
+		return
+	}
+	claims, err := parseForwardJWT(cookie.Value)
+	if err != nil {
+		redirectToLogin(w, r)
+		return
+	}
+	if _, ok := adminEmails[claims.Email]; !ok {
+		http.Error(w, "access denied: admin only", http.StatusForbidden)
+		return
 	}
 	w.Header().Set("X-Forwarded-User", claims.Email)
 	w.WriteHeader(http.StatusOK)

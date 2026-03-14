@@ -34,12 +34,29 @@ Edit `.env`:
 GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-secret
 ALLOWED_DOMAINS=your-company.com
+ADMIN_EMAILS=admin@your-company.com
 BASE_DOMAIN=example.com
 JWT_SECRET=your-random-secret
 ACME_EMAIL=admin@example.com
+REGISTRY_USER=registry-user
+REGISTRY_PASSWORD=a-strong-password
+AGENT_SECRET=your-agent-secret   # shared secret between server and all agents
 ```
 
-### 2. Start the control plane
+`ADMIN_EMAILS` is a comma-separated list of Google accounts that receive the `admin` role on login and can access the Traefik dashboard at `https://traefik.BASE_DOMAIN`.
+
+`AGENT_SECRET` protects the `/api/agent/*` endpoints. Generate with `openssl rand -hex 32` and use the same value on the server and all agent nodes.
+
+### 2. Generate registry credentials
+
+The private Docker registry uses htpasswd Basic Auth. Run once on the control plane host **before** starting Docker Compose:
+
+```bash
+docker run --entrypoint htpasswd httpd:2 -Bbn \
+  "$REGISTRY_USER" "$REGISTRY_PASSWORD" > registry/htpasswd
+```
+
+### 3. Start the control plane
 
 ```bash
 # Create the Docker network first
@@ -50,29 +67,38 @@ docker compose up -d
 ```
 
 This starts:
-- **muvee-server** — API + embedded web UI (`:8080`)
+- **muvee-server** — API + embedded web UI at `https://www.BASE_DOMAIN`
 - **muvee-authservice** — Traefik ForwardAuth sidecar (`:4181`)
 - **PostgreSQL** — metadata store
-- **Traefik** — reverse proxy with automatic HTTPS (`:80`, `:443`)
-- **Registry** — private Docker image registry
+- **Traefik** — reverse proxy with automatic HTTPS; dashboard at `https://traefik.BASE_DOMAIN` (admin only)
+- **Registry** — private Docker image registry at `https://registry.BASE_DOMAIN` (htpasswd auth)
 
-### 3. Connect agent nodes
+### 4. Connect agent nodes
 
-On each worker node (builder or deploy), run:
+Both builder and deploy nodes need registry credentials — builder to push images, deploy to pull them before running containers.
+
+> **Important:** `CONTROL_PLANE_URL` must be the **internal network address** of the control plane (not the public domain). The agent uses this address to auto-detect which network interface — and IP — Traefik should use to reach deployed containers.
 
 ```bash
 # Builder node
 docker run -d --name muvee-agent \
   -e NODE_ROLE=builder \
-  -e CONTROL_PLANE_URL=https://www.example.com \
+  -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
+  -e AGENT_SECRET=your-agent-secret \
   -e REGISTRY_ADDR=registry.example.com \
+  -e REGISTRY_USER=registry-user \
+  -e REGISTRY_PASSWORD=a-strong-password \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/hoveychen/muvee:latest agent
 
 # Deploy node
 docker run -d --name muvee-agent \
   -e NODE_ROLE=deploy \
-  -e CONTROL_PLANE_URL=https://www.example.com \
+  -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
+  -e AGENT_SECRET=your-agent-secret \
+  -e REGISTRY_ADDR=registry.example.com \
+  -e REGISTRY_USER=registry-user \
+  -e REGISTRY_PASSWORD=a-strong-password \
   -e DATA_DIR=/muvee/data \
   -e BASE_DOMAIN=example.com \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -81,7 +107,9 @@ docker run -d --name muvee-agent \
   ghcr.io/hoveychen/muvee:latest agent
 ```
 
-### 4. Create your first project
+The agent runs `docker login <REGISTRY_ADDR>` on startup using the provided credentials.
+
+### 5. Create your first project
 
 1. Open `https://www.example.com` and sign in with Google
 2. Click **New Project**

@@ -23,6 +23,13 @@ export function timeAgo(dateStr: string): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
+const RESERVED_DOMAIN_PREFIXES = new Set(['www', 'registry', 'traefik', 'muvee'])
+const VALID_DOMAIN_PREFIX_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
+
+export function isValidDomainPrefix(s: string): boolean {
+  return !!s && VALID_DOMAIN_PREFIX_RE.test(s) && !RESERVED_DOMAIN_PREFIXES.has(s)
+}
+
 export function statusColor(status: string): string {
   switch (status) {
     case 'running': return '#c8f03c'

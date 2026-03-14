@@ -70,6 +70,19 @@ export interface DatasetSnapshot {
   version: number
 }
 
+export interface ApiToken {
+  id: string
+  name: string
+  last_used_at: string | null
+  created_at: string
+}
+
+export interface CreatedApiToken {
+  id: string
+  name: string
+  token: string
+}
+
 export interface FileHistory {
   id: string
   dataset_id: string

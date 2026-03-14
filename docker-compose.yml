@@ -19,8 +19,12 @@ services:
     image: registry:2
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: "Muvee Registry"
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
     volumes:
       - registry_data:/data
+      - ./registry/htpasswd:/auth/htpasswd:ro
     networks:
       - muvee-net
     labels:
@@ -43,8 +47,11 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URL: https://www.${BASE_DOMAIN}/auth/google/callback
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
       JWT_SECRET: ${JWT_SECRET}
       BASE_DOMAIN: ${BASE_DOMAIN}
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://muvee-authservice:4181}
+      AGENT_SECRET: ${AGENT_SECRET}
       PORT: "8080"
     volumes:
       - ./db/migrations:/app/db/migrations:ro
@@ -69,6 +76,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       FORWARD_AUTH_REDIRECT_URL: https://www.${BASE_DOMAIN}/_oauth
       JWT_SECRET: ${JWT_SECRET}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
       PORT: "4181"
     networks:
       - muvee-net
@@ -80,7 +88,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8081:8080"  # Traefik dashboard (optional, remove in production)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
@@ -88,8 +95,16 @@ services:
       - letsencrypt_data:/letsencrypt
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
+      BASE_DOMAIN: ${BASE_DOMAIN}
     networks:
       - muvee-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.middlewares=muvee-forward-auth-admin@file"
 
 volumes:
   postgres_data:

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, ChevronDown, ChevronUp, Trash2, ArrowLeft } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Dataset, Deployment, Project, ProjectDataset } from '../lib/types'
-import { statusColor, timeAgo, formatBytes } from '../lib/utils'
+import { statusColor, timeAgo, formatBytes, isValidDomainPrefix } from '../lib/utils'
 
 type Tab = 'deploy' | 'config' | 'datasets'
 
@@ -264,35 +264,68 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
   onDelete: () => void
   saving: boolean
 }) {
-  const field = (label: string, key: keyof Project, type = 'text') => (
+  const inputStyle = {
+    background: 'var(--bg-hover)',
+    border: '1px solid var(--border)',
+    color: 'var(--fg-primary)',
+    fontFamily: 'DM Mono',
+    outline: 'none',
+  }
+  const field = (label: string, key: keyof Project, hint?: string) => (
     <div key={key}>
       <label style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)', letterSpacing: '0.1em', display: 'block', marginBottom: '0.4rem' }}>
         {label.toUpperCase()}
       </label>
       <input
-        type={type}
+        type="text"
         value={(form[key] ?? '') as string}
         onChange={e => onChange({ ...form, [key]: e.target.value })}
         className="w-full px-3 py-2 rounded-sm text-sm"
-        style={{
-          background: 'var(--bg-hover)',
-          border: '1px solid var(--border)',
-          color: 'var(--fg-primary)',
-          fontFamily: 'DM Mono',
-          outline: 'none',
-        }}
+        style={inputStyle}
         onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
         onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
       />
+      {hint && (
+        <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+          {hint}
+        </p>
+      )}
     </div>
   )
+
+  const nameIsValidPrefix = isValidDomainPrefix(form.name ?? '')
+  const domainPrefixRequired = !nameIsValidPrefix
 
   return (
     <div className="max-w-lg space-y-5">
       {field('Project Name', 'name')}
       {field('Git URL', 'git_url')}
       {field('Git Branch', 'git_branch')}
-      {field('Domain Prefix', 'domain_prefix')}
+
+      <div>
+        <label style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)', letterSpacing: '0.1em', display: 'block', marginBottom: '0.4rem' }}>
+          DOMAIN PREFIX
+          {domainPrefixRequired && (
+            <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>
+          )}
+        </label>
+        <input
+          type="text"
+          value={(form.domain_prefix ?? '') as string}
+          onChange={e => onChange({ ...form, domain_prefix: e.target.value })}
+          placeholder={nameIsValidPrefix ? form.name : undefined}
+          className="w-full px-3 py-2 rounded-sm text-sm"
+          style={inputStyle}
+          onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
+          onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
+        />
+        <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
+          {nameIsValidPrefix
+            ? `Optional — defaults to "${form.name}" if left blank`
+            : 'Required — project name cannot be used as a subdomain'}
+        </p>
+      </div>
+
       {field('Dockerfile Path', 'dockerfile_path')}
 
       <div>

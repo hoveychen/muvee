@@ -5,11 +5,18 @@ http:
         scheme: https
         permanent: true
 
-    # Reusable ForwardAuth middleware template
-    # Each project gets its own via Docker labels, but shared ones can be defined here
+    # Any authenticated user (domain-restricted by ALLOWED_DOMAINS in authservice)
     muvee-forward-auth:
       forwardAuth:
         address: "http://muvee-authservice:4181/verify"
+        authResponseHeaders:
+          - "X-Forwarded-User"
+        trustForwardHeader: true
+
+    # Admin-only: only emails listed in ADMIN_EMAILS pass through
+    muvee-forward-auth-admin:
+      forwardAuth:
+        address: "http://muvee-authservice:4181/verify-admin"
         authResponseHeaders:
           - "X-Forwarded-User"
         trustForwardHeader: true

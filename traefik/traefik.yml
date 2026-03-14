@@ -1,6 +1,6 @@
 api:
   dashboard: true
-  insecure: true  # Dashboard available at :8081
+  insecure: false  # Dashboard served via HTTPS router at traefik.BASE_DOMAIN
 
 entryPoints:
   web:
@@ -22,15 +22,24 @@ certificatesResolvers:
         entryPoint: web
 
 providers:
+  # Docker provider: discovers control-plane services (muvee-server, registry, traefik dashboard)
+  # that are defined with labels in docker-compose.yml on the same host.
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
     network: muvee-net
 
-  # Static config for the control plane itself
+  # File provider: static middlewares (redirect-to-https, muvee-forward-auth).
   file:
     filename: /etc/traefik/dynamic.yml
     watch: true
+
+  # HTTP provider: dynamically discovers deployed project containers across all nodes.
+  # muvee-server generates this config from the DB, polling every 5 seconds.
+  http:
+    endpoint: "http://muvee-server:8080/api/traefik/config"
+    pollInterval: "5s"
+    pollTimeout: "3s"
 
 log:
   level: INFO

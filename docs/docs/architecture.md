@@ -53,7 +53,7 @@ sidebar_position: 4
 A single binary deployed on worker nodes. Role is configured via `NODE_ROLE` env var:
 
 - **builder** — polls for build tasks, runs `git clone` + `docker buildx build` + `docker push`
-- **deploy** — polls for deploy tasks, runs data sync (rsync / NFS bind-mount), `docker run` with Traefik labels
+- **deploy** — polls for deploy tasks, runs data sync (rsync / NFS bind-mount), `docker run -p 0:{port}`, reports `host_port` back to the control plane
 
 ### ForwardAuth Service (`cmd/authservice`)
 
@@ -92,13 +92,16 @@ Deploy Agent picks up task
       symlink → /muvee/data/mounts/{deployment_id}/{name}
   → For each readwrite dataset:
       NFS bind-mount directly
-  → docker run
-      -v /muvee/data/mounts/... 
-      -l traefik.http.routers.{proj}...
+  → docker run -p 0:{container_port} -v /muvee/data/mounts/...
+  → docker port → discover assigned host_port
+  → POST /api/agent/tasks/{id}/complete { host_port }
     │
     ▼
-Traefik detects new container labels
-  → {project}.domain.com now routes to container
+Control plane stores host_ip + host_port in deployments table
+    │
+    ▼
+Traefik HTTP provider polls GET /api/traefik/config (every 5s)
+  → {project}.domain.com → http://{node_ip}:{host_port}
 ```
 
 ## Affinity Scoring

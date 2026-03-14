@@ -45,10 +45,9 @@ jobs:
           rm -rf web/embed/dist
           cp -r web/dist web/embed/dist
 
-      # ── Cross-compile single muvee binary ─────────────────────────────────
-      - name: Build binaries (cross-platform)
+      # ── Cross-compile muvee server/agent binary (Linux only) ─────────────
+      - name: Build muvee server binaries
         env:
-          VERSION: ${{ github.ref_name }}
           LDFLAGS: "-s -w -X main.version=${{ github.ref_name }}"
         run: |
           mkdir -p release
@@ -63,6 +62,33 @@ jobs:
             done
           done
 
+      # ── Cross-compile muveectl CLI (Linux + macOS + Windows) ──────────────
+      - name: Build muveectl CLI binaries
+        env:
+          LDFLAGS: "-s -w -X main.version=${{ github.ref_name }}"
+        run: |
+          mkdir -p release/muveectl
+
+          # Linux & macOS
+          for GOOS in linux darwin; do
+            for GOARCH in amd64 arm64; do
+              OUTPUT="release/muveectl/muveectl_${GOOS}_${GOARCH}"
+              echo "Building $OUTPUT"
+              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+                go build -ldflags="$LDFLAGS" \
+                -o "$OUTPUT" ./cmd/muveectl
+            done
+          done
+
+          # Windows
+          for GOARCH in amd64 arm64; do
+            OUTPUT="release/muveectl/muveectl_windows_${GOARCH}.exe"
+            echo "Building $OUTPUT"
+            CGO_ENABLED=0 GOOS=windows GOARCH=$GOARCH \
+              go build -ldflags="$LDFLAGS" \
+              -o "$OUTPUT" ./cmd/muveectl
+          done
+
       # ── Package supporting files ──────────────────────────────────────────
       - name: Package release assets
         run: |
@@ -71,7 +97,7 @@ jobs:
           cp -r db/migrations release/migrations
           cp -r traefik release/traefik
 
-          # Create convenience tarballs per platform
+          # Tarballs for muvee server (linux/darwin)
           for GOOS in linux darwin; do
             for GOARCH in amd64 arm64; do
               TARNAME="muvee_${{ github.ref_name }}_${GOOS}_${GOARCH}.tar.gz"
@@ -85,11 +111,24 @@ jobs:
             done
           done
 
+          # muveectl CLI: tarballs for linux/darwin, zip for windows
+          for GOOS in linux darwin; do
+            for GOARCH in amd64 arm64; do
+              tar -czf "release/muveectl_${{ github.ref_name }}_${GOOS}_${GOARCH}.tar.gz" \
+                -C release/muveectl \
+                "muveectl_${GOOS}_${GOARCH}"
+            done
+          done
+          for GOARCH in amd64 arm64; do
+            zip -j "release/muveectl_${{ github.ref_name }}_windows_${GOARCH}.zip" \
+              "release/muveectl/muveectl_windows_${GOARCH}.exe"
+          done
+
       # ── Generate checksums ────────────────────────────────────────────────
       - name: Generate checksums
         working-directory: release
         run: |
-          sha256sum muvee_*.tar.gz > checksums.txt
+          sha256sum muvee_*.tar.gz muveectl_*.tar.gz muveectl_*.zip > checksums.txt
           cat checksums.txt
 
       # ── Push Docker image to ghcr.io ──────────────────────────────────────
@@ -126,6 +165,8 @@ jobs:
           generate_release_notes: true
           files: |
             release/muvee_*.tar.gz
+            release/muveectl_*.tar.gz
+            release/muveectl_*.zip
             release/checksums.txt
             release/docker-compose.yml
             release/.env.example

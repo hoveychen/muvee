@@ -23,17 +23,18 @@ type User struct {
 }
 
 type Project struct {
-	ID               uuid.UUID `db:"id"`
-	Name             string    `db:"name"`
-	GitURL           string    `db:"git_url"`
-	GitBranch        string    `db:"git_branch"`
-	DomainPrefix     string    `db:"domain_prefix"`
-	DockerfilePath   string    `db:"dockerfile_path"`
-	OwnerID          uuid.UUID `db:"owner_id"`
-	AuthRequired     bool      `db:"auth_required"`
-	AuthAllowedDomains string  `db:"auth_allowed_domains"`
-	CreatedAt        time.Time `db:"created_at"`
-	UpdatedAt        time.Time `db:"updated_at"`
+	ID                 uuid.UUID `db:"id"`
+	Name               string    `db:"name"`
+	GitURL             string    `db:"git_url"`
+	GitBranch          string    `db:"git_branch"`
+	DomainPrefix       string    `db:"domain_prefix"`
+	DockerfilePath     string    `db:"dockerfile_path"`
+	OwnerID            uuid.UUID `db:"owner_id"`
+	AuthRequired       bool      `db:"auth_required"`
+	AuthAllowedDomains string    `db:"auth_allowed_domains"`
+	ContainerPort      int       `db:"container_port"`
+	CreatedAt          time.Time `db:"created_at"`
+	UpdatedAt          time.Time `db:"updated_at"`
 }
 
 type MountMode string
@@ -83,15 +84,28 @@ const (
 )
 
 type Deployment struct {
-	ID         uuid.UUID        `db:"id"`
-	ProjectID  uuid.UUID        `db:"project_id"`
-	ImageTag   string           `db:"image_tag"`
-	CommitSHA  string           `db:"commit_sha"`
-	Status     DeploymentStatus `db:"status"`
-	NodeID     *uuid.UUID       `db:"node_id"`
-	Logs       string           `db:"logs"`
-	CreatedAt  time.Time        `db:"created_at"`
-	UpdatedAt  time.Time        `db:"updated_at"`
+	ID        uuid.UUID        `db:"id"`
+	ProjectID uuid.UUID        `db:"project_id"`
+	ImageTag  string           `db:"image_tag"`
+	CommitSHA string           `db:"commit_sha"`
+	Status    DeploymentStatus `db:"status"`
+	NodeID    *uuid.UUID       `db:"node_id"`
+	HostPort  int              `db:"host_port"`
+	Logs      string           `db:"logs"`
+	CreatedAt time.Time        `db:"created_at"`
+	UpdatedAt time.Time        `db:"updated_at"`
+}
+
+// RunningDeploymentInfo is a denormalized view of a running deployment
+// used to generate Traefik HTTP provider configuration.
+type RunningDeploymentInfo struct {
+	DeploymentID       uuid.UUID `db:"deployment_id"`
+	ProjectID          uuid.UUID `db:"project_id"`
+	DomainPrefix       string    `db:"domain_prefix"`
+	AuthRequired       bool      `db:"auth_required"`
+	AuthAllowedDomains string    `db:"auth_allowed_domains"`
+	HostIP             string    `db:"host_ip"`
+	HostPort           int       `db:"host_port"`
 }
 
 type NodeRole string
@@ -105,6 +119,7 @@ type Node struct {
 	ID               uuid.UUID `db:"id"`
 	Hostname         string    `db:"hostname"`
 	Role             NodeRole  `db:"role"`
+	HostIP           string    `db:"host_ip"`
 	MaxStorageBytes  int64     `db:"max_storage_bytes"`
 	UsedStorageBytes int64     `db:"used_storage_bytes"`
 	LastSeenAt       time.Time `db:"last_seen_at"`
@@ -134,6 +149,17 @@ const (
 	FileEventModified FileEventType = "modified"
 	FileEventDeleted  FileEventType = "deleted"
 )
+
+type ApiToken struct {
+	ID         uuid.UUID  `db:"id"`
+	UserID     uuid.UUID  `db:"user_id"`
+	Name       string     `db:"name"`
+	TokenHash  string     `db:"token_hash"`
+	LastUsedAt *time.Time `db:"last_used_at"`
+	CreatedAt  time.Time  `db:"created_at"`
+	// Token is only populated when freshly created (never stored)
+	Token string `db:"-"`
+}
 
 type DatasetFileHistory struct {
 	ID           uuid.UUID     `db:"id"`

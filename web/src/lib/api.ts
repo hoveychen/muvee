@@ -46,6 +46,12 @@ export const api = {
     history: (id: string, file?: string) => request<import('./types').FileHistory[]>(`/api/datasets/${id}/history${file ? `?file=${encodeURIComponent(file)}` : ''}`),
   },
 
+  tokens: {
+    list: () => request<import('./types').ApiToken[]>('/api/tokens'),
+    create: (name: string) => request<import('./types').CreatedApiToken>('/api/tokens', { method: 'POST', body: JSON.stringify({ name }) }),
+    delete: (id: string) => request(`/api/tokens/${id}`, { method: 'DELETE' }),
+  },
+
   nodes: {
     list: () => request<import('./types').Node[]>('/api/nodes'),
   },

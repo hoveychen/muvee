@@ -48,8 +48,24 @@ func runServer() {
 	if baseDomain == "" {
 		baseDomain = "localhost"
 	}
+	authServiceURL := os.Getenv("AUTH_SERVICE_URL")
+	agentSecret := os.Getenv("AGENT_SECRET")
+	if agentSecret == "" {
+		log.Println("Warning: AGENT_SECRET is not set; agent endpoints are unauthenticated")
+	}
+	registryAddr := os.Getenv("REGISTRY_ADDR")
+	if registryAddr == "" {
+		registryAddr = "localhost:5000"
+	}
 
-	srv := api.NewServer(st, authSvc, sched, mon, baseDomain)
+	srv := api.NewServer(st, authSvc, sched, mon, api.ServerConfig{
+		BaseDomain:       baseDomain,
+		AuthServiceURL:   authServiceURL,
+		AgentSecret:      agentSecret,
+		RegistryAddr:     registryAddr,
+		RegistryUser:     os.Getenv("REGISTRY_USER"),
+		RegistryPassword: os.Getenv("REGISTRY_PASSWORD"),
+	})
 	handler := mountFrontend(srv.Router())
 
 	go processBuildCompletions(ctx, st, sched)
