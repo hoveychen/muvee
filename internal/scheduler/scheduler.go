@@ -129,18 +129,44 @@ func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deploym
 	if err != nil {
 		return err
 	}
+
+	// Collect decrypted secrets; find git credentials (SSH key or HTTPS token).
+	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
+	var gitSSHKey, gitUsername, gitToken string
+	for _, sec := range secrets {
+		if !sec.UseForGit {
+			continue
+		}
+		switch sec.SecretType {
+		case store.SecretTypeSSHKey:
+			gitSSHKey = sec.PlainValue
+		case store.SecretTypePassword:
+			gitUsername = sec.GitUsername
+			gitToken = sec.PlainValue
+		}
+	}
+
+	payload := map[string]interface{}{
+		"git_url":         project.GitURL,
+		"git_branch":      project.GitBranch,
+		"dockerfile_path": project.DockerfilePath,
+		"deployment_id":   deployment.ID.String(),
+		"project_id":      project.ID.String(),
+		"domain_prefix":   project.DomainPrefix,
+	}
+	if gitSSHKey != "" {
+		payload["git_ssh_key"] = gitSSHKey
+	}
+	if gitUsername != "" && gitToken != "" {
+		payload["git_username"] = gitUsername
+		payload["git_token"] = gitToken
+	}
+
 	task := &store.Task{
 		Type:         store.TaskTypeBuild,
 		NodeID:       &builderNode.ID,
 		DeploymentID: deployment.ID,
-		Payload: map[string]interface{}{
-			"git_url":         project.GitURL,
-			"git_branch":      project.GitBranch,
-			"dockerfile_path": project.DockerfilePath,
-			"deployment_id":   deployment.ID.String(),
-			"project_id":      project.ID.String(),
-			"domain_prefix":   project.DomainPrefix,
-		},
+		Payload:      payload,
 	}
 	_, err = s.store.CreateTask(ctx, task)
 	return err
@@ -184,6 +210,15 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 		})
 	}
 
+	// Collect env vars from secrets (all types with env_var_name set).
+	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
+	envVars := make(map[string]string)
+	for _, sec := range secrets {
+		if sec.EnvVarName != "" {
+			envVars[sec.EnvVarName] = sec.PlainValue
+		}
+	}
+
 	task := &store.Task{
 		Type:         store.TaskTypeDeploy,
 		NodeID:       &deployNode.ID,
@@ -197,6 +232,7 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 			"auth_domains":   project.AuthAllowedDomains,
 			"container_port": project.ContainerPort,
 			"datasets":       datasets,
+			"env_vars":       envVars,
 		},
 	}
 	_, err = s.store.CreateTask(ctx, task)

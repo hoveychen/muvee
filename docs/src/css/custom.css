@@ -1,40 +1,37 @@
-/* ── Fonts ── */
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Lora:ital,wght@0,400;0,600;0,700;1,400;1,600&display=swap');
-
 /* ── Design tokens — mirrors web/src/index.css ── */
 :root {
-  --bg-base:   #0f0f0f;
-  --bg-card:   #1a1a1a;
-  --bg-hover:  #242424;
-  --fg-primary: #e8e4dc;
-  --fg-muted:  #7a7570;
-  --accent:    #c8f03c;
-  --danger:    #e05a4e;
-  --border:    #2e2e2e;
+  --bg-base:    #0d1117;
+  --bg-card:    #161b22;
+  --bg-hover:   #21262d;
+  --fg-primary: #e6edf3;
+  --fg-muted:   #7d8590;
+  --accent:     #58a6ff;
+  --danger:     #f85149;
+  --border:     #30363d;
 
   /* ── Docusaurus overrides ── */
-  --ifm-color-primary:          #c8f03c;
-  --ifm-color-primary-dark:     #b4db2a;
-  --ifm-color-primary-darker:   #a8cd22;
-  --ifm-color-primary-darkest:  #88a91a;
-  --ifm-color-primary-light:    #d2f550;
-  --ifm-color-primary-lighter:  #d8f762;
-  --ifm-color-primary-lightest: #e4fa86;
+  --ifm-color-primary:          #58a6ff;
+  --ifm-color-primary-dark:     #388bfd;
+  --ifm-color-primary-darker:   #2f80ed;
+  --ifm-color-primary-darkest:  #1c68da;
+  --ifm-color-primary-light:    #79c0ff;
+  --ifm-color-primary-lighter:  #9ecbff;
+  --ifm-color-primary-lightest: #cae8ff;
 
   --ifm-background-color:         var(--bg-base);
   --ifm-background-surface-color: var(--bg-card);
-  --ifm-navbar-background-color:  #111111;
-  --ifm-footer-background-color:  #111111;
+  --ifm-navbar-background-color:  var(--bg-card);
+  --ifm-footer-background-color:  var(--bg-card);
 
-  --ifm-color-content:         var(--fg-primary);
+  --ifm-color-content:           var(--fg-primary);
   --ifm-color-content-secondary: var(--fg-muted);
 
-  --ifm-font-family-base:       'Lora', Georgia, serif;
-  --ifm-font-family-monospace:  'DM Mono', 'Courier New', monospace;
+  --ifm-font-family-base:       var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif);
+  --ifm-font-family-monospace:  var(--font-mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace);
   --ifm-code-font-size:         88%;
 
   --ifm-link-color:             var(--accent);
-  --ifm-link-hover-color:       #d8f762;
+  --ifm-link-hover-color:       #79c0ff;
 
   --ifm-navbar-link-color:      var(--fg-primary);
   --ifm-navbar-link-hover-color: var(--accent);
@@ -52,7 +49,7 @@
   --ifm-blockquote-color:       var(--fg-muted);
 
   --ifm-code-background:        var(--bg-card);
-  --docusaurus-highlighted-code-line-bg: rgba(200, 240, 60, 0.08);
+  --docusaurus-highlighted-code-line-bg: rgba(88, 166, 255, 0.08);
 
   --ifm-heading-color:          var(--fg-primary);
   --ifm-h1-font-size:           2rem;
@@ -86,11 +83,10 @@ body {
 }
 
 .navbar__title {
-  font-family: 'DM Mono', monospace;
-  font-weight: 500;
+  font-weight: 600;
   font-size: 1rem;
-  letter-spacing: 0.04em;
-  color: var(--accent);
+  letter-spacing: 0.02em;
+  color: var(--fg-primary);
 }
 
 .navbar__logo {
@@ -103,19 +99,19 @@ body {
 }
 
 .menu__link {
-  border-radius: 3px;
+  border-radius: 6px;
   font-size: 0.875rem;
   transition: color 120ms, background 120ms;
 }
 
 .menu__link:hover {
   color: var(--accent);
-  background: rgba(200, 240, 60, 0.06);
+  background: rgba(88, 166, 255, 0.06);
 }
 
 .menu__link--active {
   color: var(--accent) !important;
-  background: rgba(200, 240, 60, 0.1) !important;
+  background: rgba(88, 166, 255, 0.1) !important;
   font-weight: 600;
 }
 
@@ -134,18 +130,18 @@ body {
 
 /* ── Code blocks ── */
 .prism-code {
-  background: #161616 !important;
+  background: var(--bg-card) !important;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 code {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 0.1em 0.35em;
   font-size: var(--ifm-code-font-size);
-  color: var(--accent);
+  color: var(--fg-primary);
 }
 
 /* ── Tables ── */
@@ -156,7 +152,6 @@ table {
 table th {
   background: var(--bg-card);
   color: var(--fg-muted);
-  font-family: 'DM Mono', monospace;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -172,12 +167,12 @@ table tr:hover td {
 /* ── Pagination ── */
 .pagination-nav__link {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   transition: border-color 120ms, background 120ms;
 }
 .pagination-nav__link:hover {
   border-color: var(--accent);
-  background: rgba(200, 240, 60, 0.05);
+  background: rgba(88, 166, 255, 0.05);
 }
 .pagination-nav__label {
   color: var(--accent);
@@ -188,7 +183,6 @@ table tr:hover td {
   border-top: 1px solid var(--border);
 }
 .footer__title {
-  font-family: 'DM Mono', monospace;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -225,10 +219,10 @@ table tr:hover td {
 /* ── Admonitions ── */
 .alert {
   border-left-width: 3px;
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg-card);
 }
 .alert--info    { border-left-color: var(--accent); }
-.alert--warning { border-left-color: #e0aa3c; }
+.alert--warning { border-left-color: #d29922; }
 .alert--danger  { border-left-color: var(--danger); }
-.alert--success { border-left-color: #4ecb71; }
+.alert--success { border-left-color: #3fb950; }

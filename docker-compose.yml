@@ -52,6 +52,9 @@ services:
       BASE_DOMAIN: ${BASE_DOMAIN}
       AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://muvee-authservice:4181}
       AGENT_SECRET: ${AGENT_SECRET}
+      REGISTRY_ADDR: ${REGISTRY_ADDR}
+      REGISTRY_USER: ${REGISTRY_USER}
+      REGISTRY_PASSWORD: ${REGISTRY_PASSWORD}
       PORT: "8080"
     volumes:
       - ./db/migrations:/app/db/migrations:ro

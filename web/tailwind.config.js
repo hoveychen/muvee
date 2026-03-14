@@ -4,23 +4,22 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['Bebas Neue', 'sans-serif'],
-        body: ['Lora', 'serif'],
-        mono: ['DM Mono', 'monospace'],
+        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', '"Noto Sans"', 'Helvetica', 'Arial', 'sans-serif'],
+        mono: ['ui-monospace', 'SFMono-Regular', '"SF Mono"', 'Menlo', 'Consolas', '"Liberation Mono"', 'monospace'],
       },
       colors: {
         bg: {
-          base: '#0f0f0f',
-          card: '#1a1a1a',
-          hover: '#242424',
+          base: '#0d1117',
+          card: '#161b22',
+          hover: '#21262d',
         },
         fg: {
-          primary: '#e8e4dc',
-          muted: '#7a7570',
+          primary: '#e6edf3',
+          muted: '#7d8590',
         },
-        accent: '#c8f03c',
-        danger: '#e05a4e',
-        border: '#2e2e2e',
+        accent: '#58a6ff',
+        danger: '#f85149',
+        border: '#30363d',
       },
     },
   },

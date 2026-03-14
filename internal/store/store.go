@@ -8,16 +8,22 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hoveychen/muvee/internal/crypto"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Store struct {
-	db *pgxpool.Pool
+	db            *pgxpool.Pool
+	encryptionKey []byte // 32-byte AES-256-GCM key; may be nil (secrets disabled)
 }
 
 func New(db *pgxpool.Pool) *Store {
 	return &Store{db: db}
+}
+
+func NewWithEncryption(db *pgxpool.Pool, encryptionKey []byte) *Store {
+	return &Store{db: db, encryptionKey: encryptionKey}
 }
 
 func (s *Store) DB() *pgxpool.Pool {
@@ -692,4 +698,161 @@ func (s *Store) ListAPITokensForUser(ctx context.Context, userID uuid.UUID) ([]*
 func (s *Store) DeleteAPIToken(ctx context.Context, id, userID uuid.UUID) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM api_tokens WHERE id = $1 AND user_id = $2`, id, userID)
 	return err
+}
+
+// ─── Secrets ─────────────────────────────────────────────────────────────────
+
+func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string, secretType SecretType, plaintextValue string) (*Secret, error) {
+	if s.encryptionKey == nil {
+		return nil, fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
+	}
+	encrypted, err := crypto.Encrypt(s.encryptionKey, plaintextValue)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt secret: %w", err)
+	}
+	sec := &Secret{
+		ID:             uuid.New(),
+		UserID:         userID,
+		Name:           name,
+		Type:           secretType,
+		EncryptedValue: encrypted,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO secrets (id, user_id, name, type, encrypted_value, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, sec.ID, sec.UserID, sec.Name, sec.Type, sec.EncryptedValue, sec.CreatedAt, sec.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return sec, nil
+}
+
+func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Secret, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, user_id, name, type, encrypted_value, created_at, updated_at
+		FROM secrets WHERE user_id = $1 ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var secrets []*Secret
+	for rows.Next() {
+		var sec Secret
+		if err := rows.Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.CreatedAt, &sec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, &sec)
+	}
+	return secrets, nil
+}
+
+func (s *Store) GetSecret(ctx context.Context, id, userID uuid.UUID) (*Secret, error) {
+	var sec Secret
+	err := s.db.QueryRow(ctx, `
+		SELECT id, user_id, name, type, encrypted_value, created_at, updated_at
+		FROM secrets WHERE id = $1 AND user_id = $2
+	`, id, userID).Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.CreatedAt, &sec.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &sec, nil
+}
+
+func (s *Store) DeleteSecret(ctx context.Context, id, userID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM secrets WHERE id = $1 AND user_id = $2`, id, userID)
+	return err
+}
+
+// GetProjectSecretsWithMeta returns secrets bound to a project along with name/type metadata.
+// Encrypted values are NOT decrypted — use GetProjectSecretsDecrypted for runtime injection.
+func (s *Store) GetProjectSecretsWithMeta(ctx context.Context, projectID uuid.UUID) ([]*ProjectSecretWithMeta, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT ps.project_id, ps.secret_id, ps.env_var_name, ps.use_for_git, ps.git_username,
+		       sec.name AS secret_name, sec.type AS secret_type
+		FROM project_secrets ps
+		JOIN secrets sec ON sec.id = ps.secret_id
+		WHERE ps.project_id = $1
+		ORDER BY sec.name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*ProjectSecretWithMeta
+	for rows.Next() {
+		var ps ProjectSecretWithMeta
+		if err := rows.Scan(&ps.ProjectID, &ps.SecretID, &ps.EnvVarName, &ps.UseForGit, &ps.GitUsername, &ps.SecretName, &ps.SecretType); err != nil {
+			return nil, err
+		}
+		result = append(result, &ps)
+	}
+	return result, nil
+}
+
+type DecryptedProjectSecret struct {
+	SecretID    uuid.UUID
+	SecretName  string
+	SecretType  SecretType
+	EnvVarName  string
+	UseForGit   bool
+	GitUsername string // HTTPS username for git clone (password type with use_for_git=true)
+	PlainValue  string
+}
+
+// GetProjectSecretsDecrypted returns all secrets for a project with decrypted values.
+// Used by the scheduler when building task payloads.
+func (s *Store) GetProjectSecretsDecrypted(ctx context.Context, projectID uuid.UUID) ([]*DecryptedProjectSecret, error) {
+	if s.encryptionKey == nil {
+		return nil, nil
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT ps.secret_id, ps.env_var_name, ps.use_for_git, ps.git_username,
+		       sec.name, sec.type, sec.encrypted_value
+		FROM project_secrets ps
+		JOIN secrets sec ON sec.id = ps.secret_id
+		WHERE ps.project_id = $1
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*DecryptedProjectSecret
+	for rows.Next() {
+		var d DecryptedProjectSecret
+		var encVal string
+		if err := rows.Scan(&d.SecretID, &d.EnvVarName, &d.UseForGit, &d.GitUsername, &d.SecretName, &d.SecretType, &encVal); err != nil {
+			return nil, err
+		}
+		plain, err := crypto.Decrypt(s.encryptionKey, encVal)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt secret %s: %w", d.SecretID, err)
+		}
+		d.PlainValue = plain
+		result = append(result, &d)
+	}
+	return result, nil
+}
+
+// SetProjectSecrets replaces all secret bindings for a project.
+func (s *Store) SetProjectSecrets(ctx context.Context, projectID uuid.UUID, bindings []ProjectSecret) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM project_secrets WHERE project_id = $1`, projectID); err != nil {
+		return err
+	}
+	for _, b := range bindings {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO project_secrets (project_id, secret_id, env_var_name, use_for_git, git_username)
+			VALUES ($1, $2, $3, $4, $5)
+		`, projectID, b.SecretID, b.EnvVarName, b.UseForGit, b.GitUsername); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

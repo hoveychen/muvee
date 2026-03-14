@@ -108,6 +108,11 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/tokens", s.createToken)
 		r.Delete("/api/tokens/{id}", s.deleteToken)
 
+		// Secrets
+		r.Get("/api/secrets", s.listSecrets)
+		r.Post("/api/secrets", s.createSecret)
+		r.Delete("/api/secrets/{id}", s.deleteSecret)
+
 		// Projects
 		r.Get("/api/projects", s.listProjects)
 		r.Post("/api/projects", s.createProject)
@@ -116,6 +121,8 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/projects/{id}", s.deleteProject)
 		r.Get("/api/projects/{id}/datasets", s.getProjectDatasets)
 		r.Put("/api/projects/{id}/datasets", s.setProjectDatasets)
+		r.Get("/api/projects/{id}/secrets", s.getProjectSecrets)
+		r.Put("/api/projects/{id}/secrets", s.setProjectSecrets)
 		r.Post("/api/projects/{id}/deploy", s.triggerDeploy)
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
 
@@ -1007,3 +1014,131 @@ func mustParseUUID(s string) uuid.UUID {
 
 // Suppress unused import
 var _ = time.Now
+
+// ─── Secrets ─────────────────────────────────────────────────────────────────
+
+func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	secrets, err := s.store.ListSecretsForUser(r.Context(), user.ID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	type safeSecret struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	out := make([]safeSecret, 0, len(secrets))
+	for _, sec := range secrets {
+		out = append(out, safeSecret{
+			ID:        sec.ID.String(),
+			Name:      sec.Name,
+			Type:      string(sec.Type),
+			CreatedAt: sec.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: sec.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+	jsonOK(w, out)
+}
+
+func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	var body struct {
+		Name  string `json:"name"`
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if body.Name == "" || body.Value == "" {
+		jsonErr(w, fmt.Errorf("name and value are required"), 400)
+		return
+	}
+	if body.Type != "password" && body.Type != "ssh_key" {
+		jsonErr(w, fmt.Errorf("type must be 'password' or 'ssh_key'"), 400)
+		return
+	}
+	sec, err := s.store.CreateSecret(r.Context(), user.ID, body.Name, store.SecretType(body.Type), body.Value)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{
+		"id":   sec.ID.String(),
+		"name": sec.Name,
+		"type": string(sec.Type),
+	})
+}
+
+func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	if err := s.store.DeleteSecret(r.Context(), id, user.ID); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) getProjectSecrets(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	bindings, err := s.store.GetProjectSecretsWithMeta(r.Context(), projectID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	type item struct {
+		SecretID    string `json:"secret_id"`
+		SecretName  string `json:"secret_name"`
+		SecretType  string `json:"secret_type"`
+		EnvVarName  string `json:"env_var_name"`
+		UseForGit   bool   `json:"use_for_git"`
+		GitUsername string `json:"git_username"`
+	}
+	out := make([]item, 0, len(bindings))
+	for _, b := range bindings {
+		out = append(out, item{
+			SecretID:    b.SecretID.String(),
+			SecretName:  b.SecretName,
+			SecretType:  string(b.SecretType),
+			EnvVarName:  b.EnvVarName,
+			UseForGit:   b.UseForGit,
+			GitUsername: b.GitUsername,
+		})
+	}
+	jsonOK(w, out)
+}
+
+func (s *Server) setProjectSecrets(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	var body []struct {
+		SecretID    string `json:"secret_id"`
+		EnvVarName  string `json:"env_var_name"`
+		UseForGit   bool   `json:"use_for_git"`
+		GitUsername string `json:"git_username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	var bindings []store.ProjectSecret
+	for _, b := range body {
+		bindings = append(bindings, store.ProjectSecret{
+			ProjectID:   projectID,
+			SecretID:    mustParseUUID(b.SecretID),
+			EnvVarName:  b.EnvVarName,
+			UseForGit:   b.UseForGit,
+			GitUsername: b.GitUsername,
+		})
+	}
+	if err := s.store.SetProjectSecrets(r.Context(), projectID, bindings); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}

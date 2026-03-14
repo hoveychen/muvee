@@ -25,7 +25,16 @@ If `AGENT_SECRET` is not set, the server logs a warning and accepts all agent re
 Agents use a **long-poll pull model** — no inbound connections from the control plane are needed.
 
 ```
-Agent → GET /api/agent/tasks?node_id={id}        (every 5s)
+Agent → POST /api/agent/register                  (on startup)
+     header: X-Agent-Secret: <secret>
+     body: { hostname, role, host_ip, max_storage }
+     ← Node (with assigned node ID)
+
+Agent → GET  /api/agent/config                    (on startup, after register)
+     header: X-Agent-Secret: <secret>
+     ← { registry_addr, registry_user, registry_password, base_domain }
+
+Agent → GET  /api/agent/tasks?node_id={id}        (every 5s)
      header: X-Agent-Secret: <secret>
      ← []Task (pending tasks for this node)
 
@@ -58,7 +67,7 @@ Both builder and deploy nodes must authenticate with the private registry:
 - **Builder** — pushes the newly built image (`docker buildx build --push`)
 - **Deploy** — pulls the image before starting the container (`docker run` triggers an implicit `docker pull` if the image is not cached locally)
 
-Set `REGISTRY_USER` and `REGISTRY_PASSWORD` on every agent node. The agent runs `docker login <REGISTRY_ADDR>` automatically on startup.
+Registry credentials are **distributed automatically**. On startup, each agent calls `GET /api/agent/config` and receives `registry_addr`, `registry_user`, and `registry_password` from the control plane. The agent then runs `docker login <registry_addr>` automatically. You only need to set `REGISTRY_ADDR`, `REGISTRY_USER`, and `REGISTRY_PASSWORD` once on the control plane.
 
 ### REGISTRY_ADDR: public vs. internal address
 
@@ -97,7 +106,6 @@ Using an internal address is generally preferred for co-located nodes — it avo
 Requires:
 - `git` CLI
 - `docker` CLI with `buildx` support
-- `REGISTRY_USER` / `REGISTRY_PASSWORD` set
 
 On receiving a build task:
 
@@ -111,7 +119,6 @@ Requires:
 - `docker` CLI
 - `rsync` (for dependency datasets)
 - NFS mounted at the same path as configured in each Dataset's `nfs_path`
-- `REGISTRY_USER` / `REGISTRY_PASSWORD` set (to pull images)
 - Network connectivity back to the control plane (for `CONTROL_PLANE_URL`)
 
 On receiving a deploy task:

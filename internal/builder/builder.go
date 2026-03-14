@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,14 @@ type BuildConfig struct {
 	DeploymentID   string
 	ProjectID      string
 	RegistryAddr   string
+	// SSHKey is the PEM-encoded private key used for git clone over SSH.
+	// If empty, git clone uses the default SSH agent / HTTPS.
+	SSHKey string
+	// GitUsername and GitToken are used for HTTPS authentication.
+	// The builder rewrites the git URL to https://GitUsername:GitToken@host/...
+	// For GitHub fine-grained PATs, set GitUsername to "x-access-token".
+	GitUsername string
+	GitToken    string
 }
 
 func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, error) {
@@ -26,10 +35,41 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 	}
 	defer os.RemoveAll(workDir)
 
-	// Clone
+	cloneURL := cfg.GitURL
+
+	// Write SSH key to a temp file if provided, and configure GIT_SSH_COMMAND.
+	var gitEnv []string
+	if cfg.SSHKey != "" {
+		keyFile, err := os.CreateTemp("", "muvee-sshkey-*")
+		if err != nil {
+			return "", fmt.Errorf("create ssh key file: %w", err)
+		}
+		defer os.Remove(keyFile.Name())
+		if err := os.WriteFile(keyFile.Name(), []byte(cfg.SSHKey), 0600); err != nil {
+			return "", fmt.Errorf("write ssh key file: %w", err)
+		}
+		gitEnv = append(gitEnv, fmt.Sprintf(
+			"GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null",
+			keyFile.Name(),
+		))
+	}
+
+	// Inject HTTPS credentials into the URL if provided.
+	// This supports GitHub fine-grained PATs (username=x-access-token) and
+	// other HTTPS-based git authentication (GitLab PATs, etc.).
+	if cfg.GitUsername != "" && cfg.GitToken != "" {
+		u, err := url.Parse(cfg.GitURL)
+		if err != nil {
+			return "", fmt.Errorf("parse git url: %w", err)
+		}
+		u.User = url.UserPassword(cfg.GitUsername, cfg.GitToken)
+		cloneURL = u.String()
+	}
+
+	// Clone — log the original URL (without credentials) for safety.
 	logFn(fmt.Sprintf("Cloning %s@%s...", cfg.GitURL, cfg.GitBranch))
-	cloneArgs := []string{"clone", "--depth=1", "--branch", cfg.GitBranch, cfg.GitURL, workDir}
-	if err := runCmd(ctx, logFn, "git", cloneArgs...); err != nil {
+	cloneArgs := []string{"clone", "--depth=1", "--branch", cfg.GitBranch, cloneURL, workDir}
+	if err := runCmdEnv(ctx, logFn, gitEnv, "git", cloneArgs...); err != nil {
 		return "", fmt.Errorf("git clone: %w", err)
 	}
 
@@ -65,7 +105,14 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 }
 
 func runCmd(ctx context.Context, logFn func(string), name string, args ...string) error {
+	return runCmdEnv(ctx, logFn, nil, name, args...)
+}
+
+func runCmdEnv(ctx context.Context, logFn func(string), env []string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {

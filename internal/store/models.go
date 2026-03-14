@@ -190,6 +190,42 @@ const (
 	TaskStatusFailed    TaskStatus = "failed"
 )
 
+type SecretType string
+
+const (
+	SecretTypePassword SecretType = "password"
+	SecretTypeSSHKey   SecretType = "ssh_key"
+)
+
+type Secret struct {
+	ID             uuid.UUID  `db:"id"`
+	UserID         uuid.UUID  `db:"user_id"`
+	Name           string     `db:"name"`
+	Type           SecretType `db:"type"`
+	EncryptedValue string     `db:"encrypted_value"`
+	CreatedAt      time.Time  `db:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at"`
+}
+
+type ProjectSecret struct {
+	ProjectID   uuid.UUID `db:"project_id"`
+	SecretID    uuid.UUID `db:"secret_id"`
+	EnvVarName  string    `db:"env_var_name"`
+	UseForGit   bool      `db:"use_for_git"`
+	// GitUsername is the HTTPS username used when UseForGit=true and the secret type is password.
+	// The builder rewrites the git URL as https://GitUsername:SECRET@host/...
+	// For GitHub fine-grained PATs, use "x-access-token" or "oauth2".
+	GitUsername string `db:"git_username"`
+}
+
+// ProjectSecretWithMeta is a ProjectSecret enriched with the Secret's name and type,
+// used when listing secrets bound to a project.
+type ProjectSecretWithMeta struct {
+	ProjectSecret
+	SecretName string     `db:"secret_name"`
+	SecretType SecretType `db:"secret_type"`
+}
+
 type Task struct {
 	ID           uuid.UUID              `db:"id"`
 	Type         TaskType               `db:"type"`

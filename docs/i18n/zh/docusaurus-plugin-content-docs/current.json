@@ -1,0 +1,14 @@
+{
+  "sidebar.tutorialSidebar.category.Getting Started": {
+    "message": "快速入门",
+    "description": "The label for category Getting Started in sidebar tutorialSidebar"
+  },
+  "sidebar.tutorialSidebar.category.Architecture": {
+    "message": "架构设计",
+    "description": "The label for category Architecture in sidebar tutorialSidebar"
+  },
+  "sidebar.tutorialSidebar.category.Operations": {
+    "message": "运维操作",
+    "description": "The label for category Operations in sidebar tutorialSidebar"
+  }
+}

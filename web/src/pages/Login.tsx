@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
 
+const MONO = 'var(--font-mono)'
+
 export default function LoginPage() {
   useEffect(() => {
-    document.title = 'MUVEE — Sign In'
+    document.title = 'muvee — Sign In'
   }, [])
 
   return (
@@ -10,33 +12,22 @@ export default function LoginPage() {
       {/* Left panel */}
       <div
         className="hidden lg:flex flex-col justify-between w-1/2 p-16 relative overflow-hidden"
-        style={{ background: '#111' }}
+        style={{ background: 'var(--bg-card)', borderRight: '1px solid var(--border)' }}
       >
-        {/* Noise texture overlay */}
+        {/* Subtle grid pattern */}
         <div
-          className="absolute inset-0 opacity-30 pointer-events-none"
+          className="absolute inset-0 pointer-events-none"
           style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='1'/%3E%3C/svg%3E")`,
-            backgroundSize: '180px',
-          }}
-        />
-        {/* Diagonal accent line */}
-        <div
-          className="absolute top-0 right-0 w-px h-full"
-          style={{ background: 'var(--border)' }}
-        />
-        <div
-          className="absolute"
-          style={{
-            top: '20%', left: '-10%', width: '60%', height: '2px',
-            background: 'var(--accent)', transform: 'rotate(-12deg)', opacity: 0.4,
+            backgroundImage: `radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0)`,
+            backgroundSize: '28px 28px',
+            opacity: 0.4,
           }}
         />
 
         <div className="relative z-10">
           <span
-            className="text-xs tracking-[0.3em] uppercase"
-            style={{ color: 'var(--accent)', fontFamily: 'DM Mono, monospace' }}
+            className="text-xs tracking-widest uppercase"
+            style={{ color: 'var(--fg-muted)', fontFamily: MONO }}
           >
             Private Cloud Platform
           </span>
@@ -44,25 +35,25 @@ export default function LoginPage() {
 
         <div className="relative z-10">
           <h1
-            className="text-[11rem] leading-none tracking-tight"
-            style={{ fontFamily: 'Bebas Neue, sans-serif', color: 'var(--fg-primary)', lineHeight: '0.9' }}
+            className="font-bold leading-none tracking-tight"
+            style={{ fontSize: '6rem', color: 'var(--fg-primary)', lineHeight: '1' }}
           >
-            MU<br />VEE
+            muvee
           </h1>
           <p
-            className="mt-8 text-lg max-w-sm"
-            style={{ fontFamily: 'Lora, serif', color: 'var(--fg-muted)', lineHeight: '1.7' }}
+            className="mt-6 text-lg max-w-sm"
+            style={{ color: 'var(--fg-muted)', lineHeight: '1.7' }}
           >
             Deploy containers. Manage datasets.
             Monitor your data warehouse. All in one place.
           </p>
         </div>
 
-        <div className="relative z-10 flex gap-8" style={{ color: 'var(--fg-muted)', fontFamily: 'DM Mono, monospace', fontSize: '0.75rem' }}>
+        <div className="relative z-10 flex gap-6" style={{ color: 'var(--fg-muted)', fontFamily: MONO, fontSize: '0.78rem' }}>
           <span>Git → Docker → Deploy</span>
-          <span style={{ color: 'var(--border)' }}>|</span>
+          <span style={{ color: 'var(--border)' }}>·</span>
           <span>LRU Dataset Cache</span>
-          <span style={{ color: 'var(--border)' }}>|</span>
+          <span style={{ color: 'var(--border)' }}>·</span>
           <span>Traefik Routing</span>
         </div>
       </div>
@@ -76,47 +67,45 @@ export default function LoginPage() {
           {/* Mobile logo */}
           <div className="lg:hidden mb-10">
             <h1
-              className="text-6xl"
-              style={{ fontFamily: 'Bebas Neue, sans-serif', color: 'var(--fg-primary)' }}
+              className="text-5xl font-bold"
+              style={{ color: 'var(--fg-primary)' }}
             >
-              MUVEE
+              muvee
             </h1>
           </div>
 
           <div
-            className="rounded-sm p-8"
+            className="rounded-md p-8"
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
           >
             <h2
-              className="text-2xl mb-2"
-              style={{ fontFamily: 'Bebas Neue, sans-serif', color: 'var(--fg-primary)', letterSpacing: '0.05em' }}
+              className="text-xl font-semibold mb-1"
+              style={{ color: 'var(--fg-primary)' }}
             >
-              Sign In
+              Sign in
             </h2>
             <p
               className="text-sm mb-8"
-              style={{ fontFamily: 'DM Mono, monospace', color: 'var(--fg-muted)' }}
+              style={{ fontFamily: MONO, color: 'var(--fg-muted)' }}
             >
               Authorized personnel only
             </p>
 
             <a
               href="/auth/google/login"
-              className="flex items-center justify-center gap-3 w-full py-3 px-4 rounded-sm text-sm transition-all duration-150"
+              className="flex items-center justify-center gap-3 w-full py-2.5 px-4 rounded-md text-sm transition-all duration-150"
               style={{
                 background: 'var(--bg-hover)',
                 color: 'var(--fg-primary)',
                 border: '1px solid var(--border)',
-                fontFamily: 'DM Mono, monospace',
+                fontWeight: 500,
                 textDecoration: 'none',
               }}
               onMouseEnter={e => {
                 (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--accent)'
-                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--accent)'
               }}
               onMouseLeave={e => {
                 (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border)'
-                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--fg-primary)'
               }}
             >
               <GoogleIcon />
@@ -125,8 +114,8 @@ export default function LoginPage() {
           </div>
 
           <p
-            className="text-center mt-6 text-xs"
-            style={{ fontFamily: 'DM Mono, monospace', color: 'var(--fg-muted)' }}
+            className="text-center mt-5 text-xs"
+            style={{ fontFamily: MONO, color: 'var(--fg-muted)' }}
           >
             Access restricted to authorized domains
           </p>

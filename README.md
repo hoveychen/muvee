@@ -60,17 +60,28 @@ A     *.example.com      <your-vps-ip>   (covers all project subdomains)
 
 Make sure ports **80** and **443** are open on the VPS firewall. Traefik will obtain a Let's Encrypt certificate automatically.
 
-**1 — Configure**
+**1 — Create Google OAuth2 credentials**
+
+muvee uses Google OAuth2 for user authentication. Before configuring, create credentials in [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+
+1. Click **Create Credentials → OAuth client ID**, select **Web application**
+2. Under **Authorized redirect URIs**, add:
+   ```
+   https://www.YOUR_BASE_DOMAIN/auth/google/callback
+   ```
+3. Copy the **Client ID** and **Client Secret**
+
+**2 — Configure**
 
 ```bash
 git clone https://github.com/hoveychen/muvee.git && cd muvee
 cp .env.example .env
-# Edit .env — set BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, JWT_SECRET, ACME_EMAIL,
+# Edit .env — fill in BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, JWT_SECRET, ACME_EMAIL,
 #             ADMIN_EMAILS, REGISTRY_USER, REGISTRY_PASSWORD,
 #             AGENT_SECRET (shared secret for agent authentication)
 ```
 
-**2 — Generate registry credentials**
+**3 — Generate registry credentials**
 
 The private registry requires a htpasswd file. Run once on the control plane host:
 
@@ -80,7 +91,7 @@ docker run --entrypoint htpasswd httpd:2 -Bbn <REGISTRY_USER> <REGISTRY_PASSWORD
 
 Use the same `REGISTRY_USER` / `REGISTRY_PASSWORD` values you set in `.env`.
 
-**3 — Start the control plane**
+**4 — Start the control plane**
 
 ```bash
 docker network create muvee-net
@@ -89,9 +100,9 @@ docker compose up -d
 
 Traefik is now listening on 443. Open `https://www.BASE_DOMAIN` and sign in with Google. Admin accounts listed in `ADMIN_EMAILS` also gain access to `https://traefik.BASE_DOMAIN`.
 
-**4 — Register worker nodes**
+**5 — Register worker nodes**
 
-Both builder and deploy nodes must authenticate with the registry (builder to push images, deploy to pull them). Run the following on each worker machine (replace the internal IP, domain, and credentials):
+Run the following on each worker machine. Registry credentials and `BASE_DOMAIN` are **automatically distributed** from the control plane — agents fetch them via `/api/agent/config` on startup, so you don't need to configure them per node.
 
 > `CONTROL_PLANE_URL` must be the **internal network address** of the control plane (e.g. `http://10.0.0.1:8080`), not the public domain. The agent uses this to detect the correct network interface for Traefik routing.
 
@@ -101,9 +112,6 @@ docker run -d --name muvee-agent --restart unless-stopped \
   -e NODE_ROLE=builder \
   -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
   -e AGENT_SECRET=<your-agent-secret> \
-  -e REGISTRY_ADDR=registry.example.com \
-  -e REGISTRY_USER=<your-registry-user> \
-  -e REGISTRY_PASSWORD=<your-registry-password> \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/hoveychen/muvee:latest agent
 
@@ -112,10 +120,6 @@ docker run -d --name muvee-agent --restart unless-stopped \
   -e NODE_ROLE=deploy \
   -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
   -e AGENT_SECRET=<your-agent-secret> \
-  -e REGISTRY_ADDR=registry.example.com \
-  -e REGISTRY_USER=<your-registry-user> \
-  -e REGISTRY_PASSWORD=<your-registry-password> \
-  -e BASE_DOMAIN=example.com \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /muvee/data:/muvee/data \
   -v /nfs/warehouse:/nfs/warehouse \
@@ -142,7 +146,7 @@ Worker Nodes (any number, any mix)
 
 ### Release Binaries
 
-Pre-built for Linux and macOS (amd64 + arm64):
+**Server / Agent** — pre-built for Linux and macOS (amd64 + arm64):
 
 ```bash
 curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_amd64.tar.gz | tar xz
@@ -150,6 +154,26 @@ curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_
 ./muvee_linux_amd64 agent       # worker node (set NODE_ROLE=builder or deploy)
 ./muvee_linux_amd64 authservice # Traefik ForwardAuth sidecar
 ```
+
+**muveectl** — CLI client for Linux, macOS, and Windows:
+
+```bash
+# macOS (Apple Silicon)
+curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_arm64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+
+# Linux (amd64)
+curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_amd64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+```
+
+```bash
+muveectl login --server https://www.example.com  # first-time setup
+muveectl projects list
+muveectl projects deploy PROJECT_ID
+```
+
+See the [muveectl CLI reference](https://hoveychen.github.io/muvee/docs/muveectl) for full command documentation.
 
 ### Prerequisites
 
@@ -170,6 +194,7 @@ curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_
 - [Scheduler & Affinity](https://hoveychen.github.io/muvee/docs/scheduler)
 - [Dataset Monitor](https://hoveychen.github.io/muvee/docs/dataset-monitor)
 - [ForwardAuth & Access Control](https://hoveychen.github.io/muvee/docs/forward-auth)
+- [muveectl CLI](https://hoveychen.github.io/muvee/docs/muveectl)
 
 ---
 
@@ -202,7 +227,18 @@ A     *.example.com        <你的 VPS IP>   （覆盖所有 project 子域名�
 
 确保 VPS 防火墙放行 **80** 和 **443** 端口。Traefik 会自动向 Let's Encrypt 申请 HTTPS 证书。
 
-**第 1 步 — 配置**
+**第 1 步 — 创建 Google OAuth2 凭证**
+
+muvee 使用 Google OAuth2 进行用户认证。启动前先在 [Google Cloud Console](https://console.cloud.google.com/apis/credentials) 创建凭证：
+
+1. 点击**创建凭证 → OAuth 客户端 ID**，应用类型选**网页应用**
+2. 在**已授权的重定向 URI** 中添加：
+   ```
+   https://www.你的域名/auth/google/callback
+   ```
+3. 复制生成的 **Client ID** 和 **Client Secret**
+
+**第 2 步 — 配置**
 
 ```bash
 git clone https://github.com/hoveychen/muvee.git && cd muvee
@@ -212,7 +248,7 @@ cp .env.example .env
 #             AGENT_SECRET（agent 认证共享密钥，所有 agent 节点需相同）
 ```
 
-**第 2 步 — 生成 Registry 凭证**
+**第 3 步 — 生成 Registry 凭证**
 
 私有镜像仓库需要 htpasswd 文件做基础认证，在控制平面主机上执行一次：
 
@@ -222,7 +258,7 @@ docker run --entrypoint htpasswd httpd:2 -Bbn <REGISTRY_USER> <REGISTRY_PASSWORD
 
 `REGISTRY_USER` / `REGISTRY_PASSWORD` 与 `.env` 中的配置保持一致。
 
-**第 3 步 — 启动控制平面**
+**第 4 步 — 启动控制平面**
 
 ```bash
 docker network create muvee-net
@@ -231,9 +267,9 @@ docker compose up -d
 
 Traefik 开始监听 443 端口。在浏览器中打开 `https://www.BASE_DOMAIN`，使用 Google 账号登录。`ADMIN_EMAILS` 中配置的管理员账号还可访问 `https://traefik.BASE_DOMAIN` Traefik 控制面板。
 
-**第 4 步 — 注册工作节点**
+**第 5 步 — 注册工作节点**
 
-Builder 和 Deploy 节点都需要 Registry 凭证（builder 用于 push 镜像，deploy 用于 pull 镜像启动容器）。在每台工作机器上执行（替换内网 IP、域名和凭证）：
+在每台工作机器上执行。Registry 凭证和 `BASE_DOMAIN` 由控制平面**自动下发** —— Agent 启动后会通过 `/api/agent/config` 接口拉取，无需在每个节点手动配置。
 
 > `CONTROL_PLANE_URL` 必须填写控制平面的**内网地址**（如 `http://10.0.0.1:8080`），不要使用公网域名。Agent 通过该地址自动探测正确的出网接口，确保 Traefik 能路由到已部署的容器。
 
@@ -243,9 +279,6 @@ docker run -d --name muvee-agent --restart unless-stopped \
   -e NODE_ROLE=builder \
   -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
   -e AGENT_SECRET=<your-agent-secret> \
-  -e REGISTRY_ADDR=registry.example.com \
-  -e REGISTRY_USER=<your-registry-user> \
-  -e REGISTRY_PASSWORD=<your-registry-password> \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/hoveychen/muvee:latest agent
 
@@ -254,10 +287,6 @@ docker run -d --name muvee-agent --restart unless-stopped \
   -e NODE_ROLE=deploy \
   -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
   -e AGENT_SECRET=<your-agent-secret> \
-  -e REGISTRY_ADDR=registry.example.com \
-  -e REGISTRY_USER=<your-registry-user> \
-  -e REGISTRY_PASSWORD=<your-registry-password> \
-  -e BASE_DOMAIN=example.com \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /muvee/data:/muvee/data \
   -v /nfs/warehouse:/nfs/warehouse \
@@ -282,7 +311,7 @@ docker run -d --name muvee-agent --restart unless-stopped \
 
 ### 下载预编译二进制
 
-支持 Linux / macOS（amd64 + arm64）：
+**服务端 / Agent** — 支持 Linux / macOS（amd64 + arm64）：
 
 ```bash
 curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_amd64.tar.gz | tar xz
@@ -290,6 +319,26 @@ curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_
 ./muvee_linux_amd64 agent       # 工作节点（设置 NODE_ROLE=builder 或 deploy）
 ./muvee_linux_amd64 authservice # Traefik ForwardAuth 认证服务
 ```
+
+**muveectl** — 命令行客户端，支持 Linux / macOS / Windows：
+
+```bash
+# macOS (Apple Silicon)
+curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_arm64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+
+# Linux (amd64)
+curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_amd64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+```
+
+```bash
+muveectl login --server https://www.example.com  # 首次配置
+muveectl projects list
+muveectl projects deploy PROJECT_ID
+```
+
+完整命令参考见 [muveectl CLI 文档](https://hoveychen.github.io/muvee/docs/muveectl)。
 
 ### 环境要求
 
@@ -303,7 +352,14 @@ curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_
 
 ### 详细文档
 
-请访问 **[hoveychen.github.io/muvee](https://hoveychen.github.io/muvee)**
+- [快速开始](https://hoveychen.github.io/muvee/docs/getting-started)
+- [安装](https://hoveychen.github.io/muvee/docs/installation)
+- [配置参考](https://hoveychen.github.io/muvee/docs/configuration)
+- [整体架构](https://hoveychen.github.io/muvee/docs/architecture)
+- [调度器与亲和性](https://hoveychen.github.io/muvee/docs/scheduler)
+- [数据集监控](https://hoveychen.github.io/muvee/docs/dataset-monitor)
+- [ForwardAuth 与访问控制](https://hoveychen.github.io/muvee/docs/forward-auth)
+- [muveectl CLI](https://hoveychen.github.io/muvee/docs/muveectl)
 
 ---
 

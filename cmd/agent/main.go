@@ -225,6 +225,9 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn 
 		DeploymentID:   str(p, "deployment_id"),
 		ProjectID:      str(p, "project_id"),
 		RegistryAddr:   registryAddr,
+		SSHKey:         str(p, "git_ssh_key"),
+		GitUsername:    str(p, "git_username"),
+		GitToken:       str(p, "git_token"),
 	}
 	imageTag, err := builder.Build(ctx, cfg, logFn)
 	if err != nil {
@@ -252,6 +255,15 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 			})
 		}
 	}
+	// Extract env vars from payload (map[string]interface{} decoded from JSON).
+	envVars := make(map[string]string)
+	if ev, ok := p["env_vars"].(map[string]interface{}); ok {
+		for k, v := range ev {
+			if s, ok := v.(string); ok {
+				envVars[k] = s
+			}
+		}
+	}
 	cfg := deployer.Config{
 		DeploymentID:  str(p, "deployment_id"),
 		ProjectID:     str(p, "project_id"),
@@ -262,6 +274,7 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 		AuthDomains:   str(p, "auth_domains"),
 		Datasets:      datasets,
 		BaseDomain:    baseDomain,
+		EnvVars:       envVars,
 	}
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }

@@ -23,6 +23,8 @@ type Config struct {
 	Datasets      []DatasetSpec
 	BaseDomain    string
 	RegistryAddr  string
+	// EnvVars are injected into the container as environment variables.
+	EnvVars map[string]string
 }
 
 type DatasetSpec struct {
@@ -87,6 +89,10 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 
 	for _, m := range allMounts {
 		dockerArgs = append(dockerArgs, "-v", m)
+	}
+
+	for k, v := range cfg.EnvVars {
+		dockerArgs = append(dockerArgs, "-e", k+"="+v)
 	}
 
 	dockerArgs = append(dockerArgs, cfg.ImageTag)

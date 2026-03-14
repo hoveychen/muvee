@@ -75,7 +75,7 @@ This starts:
 
 ### 4. Connect agent nodes
 
-Both builder and deploy nodes need registry credentials — builder to push images, deploy to pull them before running containers.
+Registry credentials (`REGISTRY_ADDR`, `REGISTRY_USER`, `REGISTRY_PASSWORD`) and `BASE_DOMAIN` are **automatically distributed** from the control plane. Agents call `GET /api/agent/config` on startup and run `docker login` using the values returned — no per-node credential configuration needed.
 
 > **Important:** `CONTROL_PLANE_URL` must be the **internal network address** of the control plane (not the public domain). The agent uses this address to auto-detect which network interface — and IP — Traefik should use to reach deployed containers.
 
@@ -85,9 +85,6 @@ docker run -d --name muvee-agent \
   -e NODE_ROLE=builder \
   -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
   -e AGENT_SECRET=your-agent-secret \
-  -e REGISTRY_ADDR=registry.example.com \
-  -e REGISTRY_USER=registry-user \
-  -e REGISTRY_PASSWORD=a-strong-password \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/hoveychen/muvee:latest agent
 
@@ -96,18 +93,11 @@ docker run -d --name muvee-agent \
   -e NODE_ROLE=deploy \
   -e CONTROL_PLANE_URL=http://10.0.0.1:8080 \
   -e AGENT_SECRET=your-agent-secret \
-  -e REGISTRY_ADDR=registry.example.com \
-  -e REGISTRY_USER=registry-user \
-  -e REGISTRY_PASSWORD=a-strong-password \
-  -e DATA_DIR=/muvee/data \
-  -e BASE_DOMAIN=example.com \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /muvee/data:/muvee/data \
   -v /nfs/warehouse:/nfs/warehouse \
   ghcr.io/hoveychen/muvee:latest agent
 ```
-
-The agent runs `docker login <REGISTRY_ADDR>` on startup using the provided credentials.
 
 ### 5. Create your first project
 

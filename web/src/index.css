@@ -3,14 +3,16 @@
 @tailwind utilities;
 
 :root {
-  --bg-base: #0f0f0f;
-  --bg-card: #1a1a1a;
-  --bg-hover: #242424;
-  --fg-primary: #e8e4dc;
-  --fg-muted: #7a7570;
-  --accent: #c8f03c;
-  --danger: #e05a4e;
-  --border: #2e2e2e;
+  --bg-base: #0d1117;
+  --bg-card: #161b22;
+  --bg-hover: #21262d;
+  --fg-primary: #e6edf3;
+  --fg-muted: #7d8590;
+  --accent: #58a6ff;
+  --danger: #f85149;
+  --border: #30363d;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 * {
@@ -20,7 +22,7 @@
 body {
   background-color: var(--bg-base);
   color: var(--fg-primary);
-  font-family: 'Lora', serif;
+  font-family: var(--font-sans);
   margin: 0;
   padding: 0;
 }

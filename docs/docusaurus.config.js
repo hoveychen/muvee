@@ -15,30 +15,7 @@ const config = {
   onBrokenMarkdownLinks: 'warn',
 
   // Force dark mode — matches the frontend's pure-dark aesthetic
-  headTags: [
-    {
-      tagName: 'link',
-      attributes: {
-        rel: 'preconnect',
-        href: 'https://fonts.googleapis.com',
-      },
-    },
-    {
-      tagName: 'link',
-      attributes: {
-        rel: 'preconnect',
-        href: 'https://fonts.gstatic.com',
-        crossorigin: 'anonymous',
-      },
-    },
-    {
-      tagName: 'link',
-      attributes: {
-        rel: 'stylesheet',
-        href: 'https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Lora:ital,wght@0,400;0,600;0,700;1,400;1,600&display=swap',
-      },
-    },
-  ],
+  headTags: [],
 
   i18n: {
     defaultLocale: 'en',
@@ -120,8 +97,8 @@ const config = {
         copyright: `Copyright © ${new Date().getFullYear()} The muvee Authors. Licensed under Apache 2.0.`,
       },
       prism: {
-        theme: { plain: { color: '#e8e4dc', backgroundColor: '#161616' }, styles: [] },
-        darkTheme: { plain: { color: '#e8e4dc', backgroundColor: '#161616' }, styles: [] },
+        theme: { plain: { color: '#e6edf3', backgroundColor: '#161b22' }, styles: [] },
+        darkTheme: { plain: { color: '#e6edf3', backgroundColor: '#161b22' }, styles: [] },
         additionalLanguages: ['bash', 'yaml', 'docker', 'sql'],
       },
     }),

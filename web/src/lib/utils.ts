@@ -32,11 +32,11 @@ export function isValidDomainPrefix(s: string): boolean {
 
 export function statusColor(status: string): string {
   switch (status) {
-    case 'running': return '#c8f03c'
-    case 'building': return '#f0a03c'
-    case 'deploying': return '#3cb8f0'
-    case 'failed': return '#e05a4e'
-    case 'stopped': return '#7a7570'
-    default: return '#7a7570'
+    case 'running': return '#3fb950'
+    case 'building': return '#d29922'
+    case 'deploying': return '#58a6ff'
+    case 'failed': return '#f85149'
+    case 'stopped': return '#7d8590'
+    default: return '#7d8590'
   }
 }

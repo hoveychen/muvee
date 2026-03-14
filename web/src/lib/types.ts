@@ -83,6 +83,25 @@ export interface CreatedApiToken {
   token: string
 }
 
+export interface Secret {
+  id: string
+  name: string
+  type: 'password' | 'ssh_key'
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectSecretBinding {
+  secret_id: string
+  secret_name: string
+  secret_type: 'password' | 'ssh_key'
+  env_var_name: string
+  use_for_git: boolean
+  // git_username is used with password-type secrets for HTTPS git authentication.
+  // e.g. "x-access-token" for GitHub fine-grained PATs.
+  git_username: string
+}
+
 export interface FileHistory {
   id: string
   dataset_id: string

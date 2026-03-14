@@ -5,13 +5,15 @@ import { api } from '../lib/api'
 import type { Project, ApiToken, CreatedApiToken } from '../lib/types'
 import { timeAgo, statusColor } from '../lib/utils'
 
+const MONO = 'var(--font-mono)'
+
 const STATUS_LABELS: Record<string, string> = {
-  running: 'RUNNING',
-  building: 'BUILDING',
-  deploying: 'DEPLOYING',
-  failed: 'FAILED',
-  stopped: 'STOPPED',
-  pending: 'IDLE',
+  running: 'running',
+  building: 'building',
+  deploying: 'deploying',
+  failed: 'failed',
+  stopped: 'stopped',
+  pending: 'idle',
 }
 
 export default function Projects() {
@@ -24,22 +26,21 @@ export default function Projects() {
 
   return (
     <div className="page-enter">
-      <div className="flex items-end justify-between mb-10">
+      <div className="flex items-end justify-between mb-8">
         <div>
-          <p style={{ fontFamily: 'DM Mono', color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.15em' }}>
+          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
             PROJECTS
           </p>
-          <h1 style={{ fontFamily: 'Bebas Neue', fontSize: '3rem', color: 'var(--fg-primary)', lineHeight: 1 }}>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>
             All Projects
           </h1>
         </div>
         <Link
           to="/projects/new"
-          className="flex items-center gap-2 px-4 py-2 rounded-sm text-sm transition-all duration-150"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-150"
           style={{
             background: 'var(--accent)',
-            color: '#0f0f0f',
-            fontFamily: 'DM Mono',
+            color: '#ffffff',
             fontWeight: 500,
             textDecoration: 'none',
           }}
@@ -50,13 +51,13 @@ export default function Projects() {
       </div>
 
       {loading ? (
-        <div style={{ fontFamily: 'DM Mono', color: 'var(--fg-muted)', fontSize: '0.8rem' }}>Loading...</div>
+        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>Loading...</div>
       ) : projects.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="grid gap-px" style={{ background: 'var(--border)' }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
           {projects.map((p, i) => (
-            <ProjectRow key={p.id} project={p} index={i} />
+            <ProjectRow key={p.id} project={p} index={i} total={projects.length} />
           ))}
         </div>
       )}
@@ -66,7 +67,7 @@ export default function Projects() {
   )
 }
 
-function ProjectRow({ project, index }: { project: Project; index: number }) {
+function ProjectRow({ project, index, total }: { project: Project; index: number; total: number }) {
   const [latestDeploy, setLatestDeploy] = useState<import('../lib/types').Deployment | null>(null)
 
   useEffect(() => {
@@ -81,12 +82,11 @@ function ProjectRow({ project, index }: { project: Project; index: number }) {
   return (
     <Link
       to={`/projects/${project.id}`}
-      className="flex items-center gap-6 px-6 py-5 transition-all duration-150"
+      className="flex items-center gap-5 px-5 py-4 transition-all duration-150"
       style={{
         background: 'var(--bg-card)',
         textDecoration: 'none',
-        borderLeft: `3px solid ${index % 2 === 0 ? color : 'var(--border)'}`,
-        animationDelay: `${index * 30}ms`,
+        borderBottom: index < total - 1 ? '1px solid var(--border)' : 'none',
       }}
       onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-hover)' }}
       onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-card)' }}
@@ -103,43 +103,43 @@ function ProjectRow({ project, index }: { project: Project; index: number }) {
 
       {/* Name */}
       <div className="flex-1 min-w-0">
-        <div style={{ fontFamily: 'Bebas Neue', fontSize: '1.4rem', color: 'var(--fg-primary)', lineHeight: 1 }}>
+        <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.3 }}>
           {project.name}
         </div>
-        <div className="flex items-center gap-3 mt-1">
-          <span style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)' }}>
+        <div className="flex items-center gap-2 mt-1">
+          <span style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
             <GitBranch size={10} className="inline mr-1" />
             {project.git_branch}
           </span>
           <span style={{ color: 'var(--border)' }}>·</span>
-          <span style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>
+          <span style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>
             {project.git_url.replace(/^https?:\/\//, '')}
           </span>
         </div>
       </div>
 
       {/* Domain */}
-      <div className="hidden md:flex items-center gap-1 flex-shrink-0" style={{ fontFamily: 'DM Mono', fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+      <div className="hidden md:flex items-center gap-1 flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
         <Globe size={11} />
         {project.domain_prefix}.domain
       </div>
 
       {/* Status badge */}
       <div
-        className="flex-shrink-0 px-2 py-0.5 rounded-sm"
+        className="flex-shrink-0 px-2 py-0.5 rounded-full"
         style={{
-          fontFamily: 'DM Mono',
-          fontSize: '0.65rem',
+          fontFamily: MONO,
+          fontSize: '0.68rem',
           color: color,
-          border: `1px solid ${color}22`,
-          background: `${color}11`,
+          border: `1px solid ${color}44`,
+          background: `${color}18`,
         }}
       >
         {STATUS_LABELS[status]}
       </div>
 
       {/* Time */}
-      <div className="hidden lg:block flex-shrink-0" style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)', minWidth: '60px', textAlign: 'right' }}>
+      <div className="hidden lg:block flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', minWidth: '60px', textAlign: 'right' }}>
         {latestDeploy ? timeAgo(latestDeploy.updated_at) : '—'}
       </div>
     </Link>
@@ -148,11 +148,11 @@ function ProjectRow({ project, index }: { project: Project; index: number }) {
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center py-24 gap-4">
-      <div style={{ fontFamily: 'Bebas Neue', fontSize: '4rem', color: 'var(--border)' }}>
-        NO PROJECTS
+    <div className="flex flex-col items-center justify-center py-20 gap-3">
+      <div style={{ fontSize: '2.5rem', fontWeight: 700, color: 'var(--border)' }}>
+        No projects
       </div>
-      <p style={{ fontFamily: 'DM Mono', color: 'var(--fg-muted)', fontSize: '0.8rem' }}>
+      <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>
         Create your first project to get started
       </p>
     </div>
@@ -172,13 +172,13 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   return (
     <button
       onClick={copy}
-      className="flex items-center gap-1.5 px-2 py-1 rounded-sm transition-all duration-150"
+      className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all duration-150"
       style={{
-        fontFamily: 'DM Mono',
-        fontSize: '0.7rem',
-        background: copied ? 'var(--accent)11' : 'var(--bg-hover)',
+        fontFamily: MONO,
+        fontSize: '0.72rem',
+        background: copied ? 'rgba(88,166,255,0.1)' : 'var(--bg-hover)',
         color: copied ? 'var(--accent)' : 'var(--fg-muted)',
-        border: `1px solid ${copied ? 'var(--accent)44' : 'var(--border)'}`,
+        border: `1px solid ${copied ? 'rgba(88,166,255,0.4)' : 'var(--border)'}`,
         cursor: 'pointer',
       }}
       title={`Copy ${label ?? text}`}
@@ -226,25 +226,25 @@ function CLIAccessCard() {
   }
 
   return (
-    <div className="mt-10" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+    <div className="mt-8" style={{ border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--bg-card)', overflow: 'hidden' }}>
       {/* Header toggle */}
       <button
-        className="w-full flex items-center gap-3 px-6 py-4 text-left transition-all duration-150"
+        className="w-full flex items-center gap-3 px-5 py-4 text-left transition-all duration-150"
         style={{ background: 'none', border: 'none', cursor: 'pointer' }}
         onClick={() => setOpen(o => !o)}
         onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
         onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
       >
-        <Terminal size={16} style={{ color: 'var(--accent)' }} />
+        <Terminal size={15} style={{ color: 'var(--accent)' }} />
         <div className="flex-1">
-          <p style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)', letterSpacing: '0.1em' }}>
+          <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em' }}>
             DEVELOPER ACCESS
           </p>
-          <p style={{ fontFamily: 'Bebas Neue', fontSize: '1.2rem', color: 'var(--fg-primary)', lineHeight: 1 }}>
+          <p style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '2px' }}>
             CLI &amp; API Tokens
           </p>
         </div>
-        <span style={{ fontFamily: 'DM Mono', fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+        <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
           {open ? '▲' : '▼'}
         </span>
       </button>
@@ -253,17 +253,17 @@ function CLIAccessCard() {
         <div style={{ borderTop: '1px solid var(--border)', padding: '1.5rem' }}>
           {/* Skill URL */}
           <div className="mb-6">
-            <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.12em', marginBottom: '0.5rem' }}>
+            <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
               CLAUDE SKILL URL
             </p>
-            <p style={{ fontFamily: 'DM Mono', fontSize: '0.7rem', color: 'var(--fg-muted)', marginBottom: '0.75rem' }}>
+            <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.6 }}>
               Share this URL with Claude to teach it how to use the muveectl CLI on your behalf.
             </p>
             <div className="flex items-center gap-2">
               <div
-                className="flex-1 px-3 py-2 rounded-sm"
+                className="flex-1 px-3 py-2 rounded-md"
                 style={{
-                  fontFamily: 'DM Mono',
+                  fontFamily: MONO,
                   fontSize: '0.75rem',
                   color: 'var(--accent)',
                   background: 'var(--bg-hover)',
@@ -280,10 +280,10 @@ function CLIAccessCard() {
                 href={skillURL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-2 py-1 rounded-sm transition-all duration-150"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all duration-150"
                 style={{
-                  fontFamily: 'DM Mono',
-                  fontSize: '0.7rem',
+                  fontFamily: MONO,
+                  fontSize: '0.72rem',
                   background: 'var(--bg-hover)',
                   color: 'var(--fg-muted)',
                   border: '1px solid var(--border)',
@@ -298,7 +298,7 @@ function CLIAccessCard() {
 
           {/* Quick start */}
           <div className="mb-6">
-            <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.12em', marginBottom: '0.5rem' }}>
+            <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
               QUICK START
             </p>
             <div className="flex flex-col gap-2">
@@ -309,16 +309,16 @@ function CLIAccessCard() {
               ].map(({ label, cmd }) => (
                 <div key={label} className="flex items-center gap-2">
                   <div
-                    className="flex-1 px-3 py-1.5 rounded-sm"
+                    className="flex-1 px-3 py-1.5 rounded-md"
                     style={{
-                      fontFamily: 'DM Mono',
-                      fontSize: '0.72rem',
+                      fontFamily: MONO,
+                      fontSize: '0.75rem',
                       color: 'var(--fg-primary)',
-                      background: '#0a0a0a',
+                      background: 'var(--bg-base)',
                       border: '1px solid var(--border)',
                     }}
                   >
-                    <span style={{ color: 'var(--accent)', marginRight: '0.5rem' }}>$</span>
+                    <span style={{ color: 'var(--fg-muted)', marginRight: '0.5rem' }}>$</span>
                     {cmd}
                   </div>
                   <CopyButton text={cmd} label={label} />
@@ -330,7 +330,7 @@ function CLIAccessCard() {
           {/* API Tokens */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.12em' }}>
+              <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
                 API TOKENS
               </p>
               <div className="flex items-center gap-2">
@@ -339,13 +339,13 @@ function CLIAccessCard() {
                   onChange={e => setTokenName(e.target.value)}
                   placeholder="Token name"
                   style={{
-                    fontFamily: 'DM Mono',
-                    fontSize: '0.72rem',
+                    fontFamily: MONO,
+                    fontSize: '0.8rem',
                     padding: '0.25rem 0.6rem',
                     background: 'var(--bg-hover)',
                     border: '1px solid var(--border)',
                     color: 'var(--fg-primary)',
-                    borderRadius: '2px',
+                    borderRadius: '6px',
                     outline: 'none',
                     width: '140px',
                   }}
@@ -353,15 +353,16 @@ function CLIAccessCard() {
                 <button
                   onClick={handleCreate}
                   disabled={creating}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-sm transition-all duration-150"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all duration-150"
                   style={{
-                    fontFamily: 'DM Mono',
-                    fontSize: '0.7rem',
+                    fontFamily: MONO,
+                    fontSize: '0.75rem',
                     background: 'var(--accent)',
-                    color: '#0f0f0f',
+                    color: '#ffffff',
                     border: 'none',
                     cursor: creating ? 'not-allowed' : 'pointer',
                     opacity: creating ? 0.6 : 1,
+                    fontWeight: 500,
                   }}
                 >
                   <Plus size={11} />
@@ -373,21 +374,21 @@ function CLIAccessCard() {
             {/* Newly created token banner */}
             {newToken && (
               <div
-                className="mb-3 px-4 py-3 rounded-sm"
-                style={{ background: 'var(--accent)11', border: '1px solid var(--accent)44' }}
+                className="mb-3 px-4 py-3 rounded-md"
+                style={{ background: 'rgba(88,166,255,0.1)', border: '1px solid rgba(88,166,255,0.3)' }}
               >
-                <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', color: 'var(--accent)', marginBottom: '0.4rem', letterSpacing: '0.1em' }}>
+                <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--accent)', marginBottom: '0.4rem', letterSpacing: '0.05em' }}>
                   NEW TOKEN — COPY NOW, IT WON'T BE SHOWN AGAIN
                 </p>
                 <div className="flex items-center gap-2">
                   <div
-                    className="flex-1 px-3 py-1.5 rounded-sm"
+                    className="flex-1 px-3 py-1.5 rounded-md"
                     style={{
-                      fontFamily: 'DM Mono',
-                      fontSize: '0.72rem',
+                      fontFamily: MONO,
+                      fontSize: '0.75rem',
                       color: 'var(--accent)',
-                      background: '#0a0a0a',
-                      border: '1px solid var(--accent)44',
+                      background: 'var(--bg-base)',
+                      border: '1px solid rgba(88,166,255,0.3)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
@@ -402,32 +403,32 @@ function CLIAccessCard() {
 
             {/* Token list */}
             {tokens.length === 0 ? (
-              <p style={{ fontFamily: 'DM Mono', fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+              <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>
                 No tokens yet. Create one to use the CLI.
               </p>
             ) : (
-              <div className="grid gap-px" style={{ background: 'var(--border)' }}>
-                {tokens.map(t => (
+              <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+                {tokens.map((t, i) => (
                   <div
                     key={t.id}
                     className="flex items-center gap-4 px-4 py-2.5"
-                    style={{ background: 'var(--bg-card)' }}
+                    style={{ background: 'var(--bg-card)', borderBottom: i < tokens.length - 1 ? '1px solid var(--border)' : 'none' }}
                   >
                     <div className="flex-1 min-w-0">
-                      <p style={{ fontFamily: 'DM Mono', fontSize: '0.8rem', color: 'var(--fg-primary)' }}>{t.name}</p>
-                      <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                      <p style={{ fontFamily: MONO, fontSize: '0.82rem', color: 'var(--fg-primary)' }}>{t.name}</p>
+                      <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>
                         Created {timeAgo(t.created_at)}
                         {t.last_used_at ? ` · Last used ${timeAgo(t.last_used_at)}` : ' · Never used'}
                       </p>
                     </div>
-                    <p style={{ fontFamily: 'DM Mono', fontSize: '0.65rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
+                    <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
                       {t.id.slice(0, 8)}…
                     </p>
                     <button
                       onClick={() => handleDelete(t.id)}
-                      className="p-1 rounded-sm transition-all duration-150"
+                      className="p-1 rounded-md transition-all duration-150"
                       style={{ background: 'none', border: 'none', color: 'var(--fg-muted)', cursor: 'pointer' }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--danger)' }}
                       onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)' }}
                       title="Revoke token"
                     >

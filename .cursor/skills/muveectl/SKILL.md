@@ -103,6 +103,108 @@ muveectl tokens create [--name NAME]   # token value shown once on creation
 muveectl tokens delete TOKEN_ID
 ```
 
+## Secrets
+
+Secrets store passwords, API tokens, and SSH private keys — encrypted at rest (AES-256-GCM). Values are **write-only** and never returned after creation.
+
+```bash
+# List secrets (names and types only)
+muveectl secrets list
+
+# Create a password/token secret
+muveectl secrets create --name GITHUB_TOKEN --type password --value ghp_xxxxx
+
+# Create an SSH key secret from a file (for private git repos)
+muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_ed25519
+
+# Delete a secret
+muveectl secrets delete SECRET_ID
+```
+
+### Binding Secrets to Projects
+
+Secrets are injected as environment variables into the container at runtime. They can also be used for git authentication during build (`--use-for-git`).
+
+```bash
+# List secrets bound to a project
+muveectl projects secrets PROJECT_ID
+
+# Bind a secret as an environment variable
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --env-var GITHUB_TOKEN
+
+# Bind a password secret for HTTPS git auth (GitHub fine-grained PAT)
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id TOKEN_SECRET_ID \
+  --use-for-git \
+  --git-username x-access-token   # default; for GitLab use "oauth2"
+
+# Bind an SSH key for git clone
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SSH_KEY_SECRET_ID \
+  --use-for-git
+
+# Bind a secret for BOTH git auth AND as runtime env var
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id TOKEN_SECRET_ID \
+  --env-var GITHUB_TOKEN \
+  --use-for-git \
+  --git-username x-access-token
+
+# Remove a secret binding
+muveectl projects unbind-secret PROJECT_ID SECRET_ID
+```
+
+### Private Git Repository — GitHub Fine-Grained PAT (Recommended)
+
+GitHub recommends fine-grained PATs over SSH deploy keys. Use a `password` secret with HTTPS git auth:
+
+```bash
+# 1. Create a password secret with the GitHub PAT value
+muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
+
+# 2. Bind to project — use x-access-token as the HTTPS username (GitHub convention)
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-git \
+  --git-username x-access-token
+
+# Optionally also inject as env var for runtime use:
+# muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID \
+#   --use-for-git --git-username x-access-token --env-var GITHUB_TOKEN
+
+# 3. Deploy
+muveectl projects deploy PROJECT_ID
+```
+
+The builder rewrites the git URL to `https://x-access-token:TOKEN@github.com/...` before cloning.
+
+| Provider | `--git-username` |
+|---|---|
+| GitHub | `x-access-token` (default) |
+| GitLab | `oauth2` |
+| Bitbucket | your Bitbucket username |
+
+### Private Git Repository — SSH Deploy Key
+
+For SSH-based authentication or providers that require it:
+
+```bash
+# 1. Generate key pair
+ssh-keygen -t ed25519 -f deploy_key -N ""
+# Add deploy_key.pub as a Deploy Key in your repository settings
+
+# 2. Create SSH key secret
+muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file deploy_key
+
+# 3. Bind to project
+muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID --use-for-git
+
+# 4. Deploy
+muveectl projects deploy PROJECT_ID
+```
+
 ## Global Flags
 
 | Flag | Description |
@@ -115,7 +217,7 @@ muveectl tokens delete TOKEN_ID
 For a project to deploy successfully the repository must satisfy:
 
 ### Build
-- Accessible via `git clone --depth=1` over HTTPS (public) or SSH (builder node must have the key)
+- Accessible via `git clone --depth=1` over HTTPS (public or with PAT via Secrets) or SSH (SSH key via Secrets)
 - The configured branch must exist (default: `main`)
 - A `Dockerfile` must exist at the configured path (default: `Dockerfile` in repo root)
 - Image must build for **`linux/amd64`** (`docker buildx build --platform linux/amd64`)

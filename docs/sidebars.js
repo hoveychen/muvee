@@ -26,7 +26,9 @@ const sidebars = {
       items: [
         'agents',
         'traefik',
+        'secrets',
         'upgrade',
+        'muveectl',
       ],
     },
   ],

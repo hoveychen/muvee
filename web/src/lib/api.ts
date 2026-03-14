@@ -31,6 +31,9 @@ export const api = {
     delete: (id: string) => request(`/api/projects/${id}`, { method: 'DELETE' }),
     datasets: (id: string) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`),
     setDatasets: (id: string, data: import('./types').ProjectDataset[]) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`, { method: 'PUT', body: JSON.stringify(data) }),
+    secrets: (id: string) => request<import('./types').ProjectSecretBinding[]>(`/api/projects/${id}/secrets`),
+    setSecrets: (id: string, data: Omit<import('./types').ProjectSecretBinding, 'secret_name' | 'secret_type'>[]) =>
+      request(`/api/projects/${id}/secrets`, { method: 'PUT', body: JSON.stringify(data) }),
     deploy: (id: string) => request<import('./types').Deployment>(`/api/projects/${id}/deploy`, { method: 'POST' }),
     deployments: (id: string) => request<import('./types').Deployment[]>(`/api/projects/${id}/deployments`),
   },
@@ -50,6 +53,13 @@ export const api = {
     list: () => request<import('./types').ApiToken[]>('/api/tokens'),
     create: (name: string) => request<import('./types').CreatedApiToken>('/api/tokens', { method: 'POST', body: JSON.stringify({ name }) }),
     delete: (id: string) => request(`/api/tokens/${id}`, { method: 'DELETE' }),
+  },
+
+  secrets: {
+    list: () => request<import('./types').Secret[]>('/api/secrets'),
+    create: (data: { name: string; type: 'password' | 'ssh_key'; value: string }) =>
+      request<import('./types').Secret>('/api/secrets', { method: 'POST', body: JSON.stringify(data) }),
+    delete: (id: string) => request(`/api/secrets/${id}`, { method: 'DELETE' }),
   },
 
   nodes: {

@@ -587,6 +587,194 @@ func cmdTokensDelete(id string, c *client) error {
 	return nil
 }
 
+// ─── Secrets ──────────────────────────────────────────────────────────────────
+
+func cmdSecretsList(c *client, jsonMode bool) error {
+	items, err := c.doArray("GET", "/api/secrets", nil)
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(items)
+		return nil
+	}
+	if len(items) == 0 {
+		fmt.Println("No secrets found.")
+		return nil
+	}
+	printTable(items, []string{"id", "name", "type", "created_at"})
+	return nil
+}
+
+func cmdSecretsCreate(args []string, c *client, jsonMode bool) error {
+	d := map[string]interface{}{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				d["name"] = args[i+1]
+				i++
+			}
+		case "--type":
+			if i+1 < len(args) {
+				d["type"] = args[i+1]
+				i++
+			}
+		case "--value":
+			if i+1 < len(args) {
+				d["value"] = args[i+1]
+				i++
+			}
+		case "--value-file":
+			if i+1 < len(args) {
+				data, err := os.ReadFile(args[i+1])
+				if err != nil {
+					return fmt.Errorf("read value file: %w", err)
+				}
+				d["value"] = string(data)
+				i++
+			}
+		}
+	}
+	if d["name"] == nil || d["type"] == nil || d["value"] == nil {
+		return fmt.Errorf("--name, --type (password|ssh_key), and --value (or --value-file) are required")
+	}
+	result, err := c.do("POST", "/api/secrets", d)
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(result)
+		return nil
+	}
+	fmt.Printf("Created secret %q (ID: %s, type: %s)\n", str(result, "name"), str(result, "id"), str(result, "type"))
+	return nil
+}
+
+func cmdSecretsDelete(id string, c *client) error {
+	_, err := c.do("DELETE", "/api/secrets/"+id, nil)
+	if err != nil {
+		return err
+	}
+	fmt.Println("Deleted secret", id)
+	return nil
+}
+
+// ─── Project Secret Bindings ──────────────────────────────────────────────────
+
+func cmdProjectSecretsList(projectID string, c *client, jsonMode bool) error {
+	items, err := c.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(items)
+		return nil
+	}
+	if len(items) == 0 {
+		fmt.Println("No secrets bound to this project.")
+		return nil
+	}
+	printTable(items, []string{"secret_id", "secret_name", "secret_type", "env_var_name", "use_for_git"})
+	return nil
+}
+
+func cmdProjectBindSecret(projectID string, args []string, c *client, jsonMode bool) error {
+	secretID := ""
+	envVar := ""
+	useForGit := false
+	gitUsername := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--secret-id":
+			if i+1 < len(args) {
+				secretID = args[i+1]
+				i++
+			}
+		case "--env-var":
+			if i+1 < len(args) {
+				envVar = args[i+1]
+				i++
+			}
+		case "--use-for-git":
+			useForGit = true
+		case "--git-username":
+			if i+1 < len(args) {
+				gitUsername = args[i+1]
+				i++
+			}
+		}
+	}
+	if secretID == "" {
+		return fmt.Errorf("--secret-id is required")
+	}
+	// Default git_username for HTTPS PAT auth when --use-for-git is set and no username provided
+	if useForGit && gitUsername == "" {
+		gitUsername = "x-access-token"
+	}
+
+	// Fetch current bindings, replace or add the target one, and PUT.
+	current, err := c.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
+	if err != nil {
+		return err
+	}
+	bindings := []map[string]interface{}{}
+	for _, item := range current {
+		m, _ := item.(map[string]interface{})
+		if m == nil || str(m, "secret_id") == secretID {
+			continue
+		}
+		bindings = append(bindings, map[string]interface{}{
+			"secret_id":    str(m, "secret_id"),
+			"env_var_name": str(m, "env_var_name"),
+			"use_for_git":  m["use_for_git"],
+			"git_username": str(m, "git_username"),
+		})
+	}
+	bindings = append(bindings, map[string]interface{}{
+		"secret_id":    secretID,
+		"env_var_name": envVar,
+		"use_for_git":  useForGit,
+		"git_username": gitUsername,
+	})
+	result, err := c.do("PUT", "/api/projects/"+projectID+"/secrets", bindings)
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(result)
+		return nil
+	}
+	fmt.Printf("Secret %s bound to project %s (env_var: %q, use_for_git: %v, git_username: %q)\n",
+		secretID, projectID, envVar, useForGit, gitUsername)
+	return nil
+}
+
+func cmdProjectUnbindSecret(projectID, secretID string, c *client) error {
+	current, err := c.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
+	if err != nil {
+		return err
+	}
+	bindings := []map[string]interface{}{}
+	for _, item := range current {
+		m, _ := item.(map[string]interface{})
+		if m == nil || str(m, "secret_id") == secretID {
+			continue
+		}
+		bindings = append(bindings, map[string]interface{}{
+			"secret_id":    str(m, "secret_id"),
+			"env_var_name": str(m, "env_var_name"),
+			"use_for_git":  m["use_for_git"],
+			"git_username": str(m, "git_username"),
+		})
+	}
+	if _, err := c.do("PUT", "/api/projects/"+projectID+"/secrets", bindings); err != nil {
+		return err
+	}
+	fmt.Printf("Secret %s unbound from project %s\n", secretID, projectID)
+	return nil
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 func usage() {
@@ -630,6 +818,26 @@ API Tokens:
   tokens list                   List API tokens
   tokens create [--name NAME]   Create a new API token
   tokens delete ID              Delete an API token
+
+Secrets:
+  secrets list                  List secrets (values are never returned)
+  secrets create [flags]        Create a secret
+    --name NAME                 Secret name (required)
+    --type TYPE                 Type: password or ssh_key (required)
+    --value VALUE               Secret value (required, or use --value-file)
+    --value-file PATH           Read secret value from file (useful for SSH keys)
+  secrets delete ID             Delete a secret
+
+Project Secret Bindings:
+  projects secrets PROJECT_ID             List secrets bound to a project
+  projects bind-secret PROJECT_ID [flags] Attach a secret to a project
+    --secret-id ID              Secret ID to bind (required)
+    --env-var NAME              Environment variable name to inject (e.g. GITHUB_TOKEN)
+    --use-for-git               Use this secret for git clone during build
+    --git-username NAME         HTTPS git username (default: x-access-token for GitHub PATs)
+                                Only relevant for password-type secrets with --use-for-git
+  projects unbind-secret PROJECT_ID SECRET_ID
+                                Detach a secret from a project
 
 Global flags (available on all commands):
   --server URL                  Override the configured server URL
@@ -744,6 +952,24 @@ func main() {
 				os.Exit(1)
 			}
 			runErr = cmdProjectsDelete(subArgs[0], c)
+		case "secrets":
+			if len(subArgs) == 0 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects secrets <PROJECT_ID>")
+				os.Exit(1)
+			}
+			runErr = cmdProjectSecretsList(subArgs[0], c, jsonMode)
+		case "bind-secret":
+			if len(subArgs) == 0 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects bind-secret <PROJECT_ID> --secret-id ID [--env-var NAME] [--use-for-git]")
+				os.Exit(1)
+			}
+			runErr = cmdProjectBindSecret(subArgs[0], subArgs[1:], c, jsonMode)
+		case "unbind-secret":
+			if len(subArgs) < 2 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects unbind-secret <PROJECT_ID> <SECRET_ID>")
+				os.Exit(1)
+			}
+			runErr = cmdProjectUnbindSecret(subArgs[0], subArgs[1], c)
 		default:
 			fmt.Fprintln(os.Stderr, "Unknown projects subcommand:", sub)
 			os.Exit(1)
@@ -804,6 +1030,29 @@ func main() {
 			runErr = cmdTokensDelete(subArgs[0], c)
 		default:
 			fmt.Fprintln(os.Stderr, "Unknown tokens subcommand:", sub)
+			os.Exit(1)
+		}
+
+	case "secrets":
+		if len(rest) == 0 {
+			usage()
+			os.Exit(1)
+		}
+		sub := rest[0]
+		subArgs := rest[1:]
+		switch sub {
+		case "list":
+			runErr = cmdSecretsList(c, jsonMode)
+		case "create":
+			runErr = cmdSecretsCreate(subArgs, c, jsonMode)
+		case "delete":
+			if len(subArgs) == 0 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl secrets delete <ID>")
+				os.Exit(1)
+			}
+			runErr = cmdSecretsDelete(subArgs[0], c)
+		default:
+			fmt.Fprintln(os.Stderr, "Unknown secrets subcommand:", sub)
 			os.Exit(1)
 		}
 
