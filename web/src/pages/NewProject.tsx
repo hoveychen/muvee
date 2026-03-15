@@ -522,6 +522,22 @@ export default function NewProject() {
             </p>
           </div>
 
+          {/* Persistent storage path */}
+          <div>
+            {fieldLabel(t('newProject.fields.volumeMountPath'), false)}
+            <input
+              value={form.volume_mount_path ?? ''}
+              onChange={e => setForm({ ...form, volume_mount_path: e.target.value })}
+              placeholder="/workspace"
+              style={inputStyle}
+              onFocus={focusAccent}
+              onBlur={blurBorder}
+            />
+            <p style={{ fontFamily: MONO, fontSize: '0.63rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+              {t('newProject.fields.volumeMountPathHint')}
+            </p>
+          </div>
+
           {error && (
             <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--danger)' }}>{error}</p>
           )}

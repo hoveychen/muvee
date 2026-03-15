@@ -59,6 +59,8 @@ muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch 分支] [--auth-required] [--no-auth] [--auth-domains 域名]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
+muveectl projects metrics PROJECT_ID [--limit N]
+muveectl projects workspace PROJECT_ID <ls|pull|push|rm> [参数...]
 muveectl projects delete PROJECT_ID
 ```
 
@@ -88,6 +90,54 @@ userEmail := r.Header.Get("X-Forwarded-User")
 // Node.js / Express
 const userEmail = req.headers["x-forwarded-user"]
 ```
+
+### 容器资源指标
+
+部署 Agent 每隔约 15 秒通过 `docker stats` 采集容器的资源用量并上报给控制平面。使用 `projects metrics` 查看正在运行的容器状态：
+
+```bash
+# 显示最新一条采样及历史表格（默认：最近 60 条）
+muveectl projects metrics PROJECT_ID
+
+# 获取最多 120 条采样（约 30 分钟历史）
+muveectl projects metrics PROJECT_ID --limit 120
+```
+
+每条采样包含：`cpu_percent`、`mem_usage_bytes`、`mem_limit_bytes`、`net_rx_bytes`、`net_tx_bytes`、`block_read_bytes`、`block_write_bytes` 以及 `collected_at`（Unix 时间戳）。
+
+单次查询最多返回 1440 条历史（以 15 秒间隔计算约 6 小时）。
+
+### 项目工作区
+
+每个项目可以挂载一个持久化**工作区卷**——一个以 NFS 为后端的目录，会以 bind mount 的形式挂载到容器内。容器内的挂载路径通过 Web 界面的 `volume_mount_path` 字段配置（如 `/workspace`）。
+
+控制平面提供文件管理 API，无需重新部署即可查看和传输工作区文件：
+
+```bash
+# 列出工作区根目录（或子目录）的文件
+muveectl projects workspace PROJECT_ID ls
+muveectl projects workspace PROJECT_ID ls some/subdir
+
+# 将工作区中的文件下载到当前目录
+muveectl projects workspace PROJECT_ID pull data/output.csv
+
+# 下载并指定本地保存路径
+muveectl projects workspace PROJECT_ID pull data/output.csv ./local_copy.csv
+
+# 将本地文件上传到工作区根目录
+muveectl projects workspace PROJECT_ID push ./model.bin
+
+# 上传到指定子目录（目录不存在时自动创建）
+muveectl projects workspace PROJECT_ID push ./model.bin --remote-path models/
+
+# 删除文件或目录（递归删除）
+muveectl projects workspace PROJECT_ID rm data/old_output.csv
+muveectl projects workspace PROJECT_ID rm tmp/
+```
+
+:::info 前提条件
+工作区功能需要在控制平面上配置 `VOLUME_NFS_BASE_PATH`，并在项目中设置 `volume_mount_path`。详见[配置参考](./configuration)。
+:::
 
 ## 数据集管理
 
@@ -149,4 +199,10 @@ muveectl projects deploy PROJECT_ID
 
 # 3. 监控部署进度
 muveectl projects deployments PROJECT_ID
+
+# 4. 查看容器资源用量
+muveectl projects metrics PROJECT_ID
+
+# 5. 下载容器产生的文件
+muveectl projects workspace PROJECT_ID pull output/result.json
 ```

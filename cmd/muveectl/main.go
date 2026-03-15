@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -456,6 +457,224 @@ func cmdProjectsDeployments(id string, c *client, jsonMode bool) error {
 	return nil
 }
 
+func cmdProjectsMetrics(id string, args []string, c *client, jsonMode bool) error {
+	limit := "60"
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--limit" && i+1 < len(args) {
+			limit = args[i+1]
+			i++
+		}
+	}
+	items, err := c.doArray("GET", "/api/projects/"+id+"/metrics?limit="+limit, nil)
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(items)
+		return nil
+	}
+	if len(items) == 0 {
+		fmt.Println("No metrics available. The container may not be running or metrics have not been collected yet.")
+		return nil
+	}
+	// Pretty-print the latest sample at the top, then a compact table.
+	latest, _ := items[0].(map[string]interface{})
+	if latest != nil {
+		fmt.Printf("Latest sample (collected_at: %s)\n", str(latest, "collected_at"))
+		fmt.Printf("  CPU:        %s%%\n", str(latest, "cpu_percent"))
+		memUsage := floatStr(latest, "mem_usage_bytes")
+		memLimit := floatStr(latest, "mem_limit_bytes")
+		fmt.Printf("  Memory:     %s / %s bytes\n", memUsage, memLimit)
+		fmt.Printf("  Net Rx:     %s bytes  Tx: %s bytes\n",
+			str(latest, "net_rx_bytes"), str(latest, "net_tx_bytes"))
+		fmt.Printf("  Disk Read:  %s bytes  Write: %s bytes\n",
+			str(latest, "block_read_bytes"), str(latest, "block_write_bytes"))
+		fmt.Println()
+	}
+	if len(items) > 1 {
+		fmt.Printf("History (%d samples):\n", len(items))
+		printTable(items, []string{"collected_at", "cpu_percent", "mem_usage_bytes", "net_rx_bytes", "net_tx_bytes"})
+	}
+	return nil
+}
+
+func floatStr(m map[string]interface{}, key string) string {
+	switch v := m[key].(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", v)
+	case string:
+		return v
+	}
+	return ""
+}
+
+// ─── Workspace ────────────────────────────────────────────────────────────────
+
+func cmdWorkspaceList(projectID string, args []string, c *client, jsonMode bool) error {
+	path := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--path" && i+1 < len(args) {
+			path = args[i+1]
+			i++
+		} else if !strings.HasPrefix(args[i], "--") {
+			path = args[i]
+		}
+	}
+	url := "/api/projects/" + projectID + "/workspace"
+	if path != "" {
+		url += "?path=" + urlEscape(path)
+	}
+	items, err := c.doArray("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(items)
+		return nil
+	}
+	if len(items) == 0 {
+		fmt.Println("(empty)")
+		return nil
+	}
+	for _, item := range items {
+		m, _ := item.(map[string]interface{})
+		if m == nil {
+			continue
+		}
+		isDir, _ := m["is_dir"].(bool)
+		name := str(m, "name")
+		if isDir {
+			name += "/"
+		}
+		size := str(m, "size")
+		if isDir {
+			size = "-"
+		}
+		fmt.Printf("%-40s %10s\n", name, size)
+	}
+	return nil
+}
+
+func cmdWorkspacePull(projectID string, args []string, c *client) error {
+	remotePath := args[0]
+	localPath := filepath.Base(remotePath)
+	if len(args) >= 2 {
+		localPath = args[1]
+	}
+	url := c.server + "/api/projects/" + projectID + "/workspace/download?path=" + urlEscape(remotePath)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	if c.cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server error %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	out, err := os.Create(localPath)
+	if err != nil {
+		return fmt.Errorf("create local file: %w", err)
+	}
+	defer out.Close()
+	n, err := io.Copy(out, resp.Body)
+	if err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	fmt.Printf("Downloaded %s → %s (%d bytes)\n", remotePath, localPath, n)
+	return nil
+}
+
+func cmdWorkspacePush(projectID string, args []string, c *client) error {
+	localFile := args[0]
+	remotePath := ""
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--remote-path" && i+1 < len(args) {
+			remotePath = args[i+1]
+			i++
+		}
+	}
+	f, err := os.Open(localFile)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	// Build multipart body
+	pr, pw := io.Pipe()
+	mw := multipartWriter(pw)
+	go func() {
+		fw, werr := mw.CreateFormFile("file", info.Name())
+		if werr == nil {
+			_, _ = io.Copy(fw, f)
+		}
+		_ = mw.Close()
+		_ = pw.Close()
+	}()
+
+	url := c.server + "/api/projects/" + projectID + "/workspace/upload"
+	if remotePath != "" {
+		url += "?path=" + urlEscape(remotePath)
+	}
+	req, err := http.NewRequest("POST", url, pr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if c.cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server error %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	fmt.Printf("Uploaded %s → workspace:%s\n", localFile, remotePath)
+	return nil
+}
+
+func cmdWorkspaceDelete(projectID, remotePath string, c *client) error {
+	url := "/api/projects/" + projectID + "/workspace?path=" + urlEscape(remotePath)
+	_, err := c.do("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Deleted workspace:%s\n", remotePath)
+	return nil
+}
+
+func multipartWriter(w io.Writer) *multipart.Writer {
+	return multipart.NewWriter(w)
+}
+
+func urlEscape(s string) string {
+	var buf strings.Builder
+	for _, b := range []byte(s) {
+		switch {
+		case b >= 'A' && b <= 'Z', b >= 'a' && b <= 'z', b >= '0' && b <= '9',
+			b == '-', b == '_', b == '.', b == '~', b == '/':
+			buf.WriteByte(b)
+		default:
+			fmt.Fprintf(&buf, "%%%02X", b)
+		}
+	}
+	return buf.String()
+}
+
 // ─── Datasets ─────────────────────────────────────────────────────────────────
 
 func cmdDatasetsList(c *client, jsonMode bool) error {
@@ -803,6 +1022,8 @@ Projects:
     (same flags as create)
   projects deploy ID            Trigger a deployment
   projects deployments ID       List deployment history
+  projects metrics ID [--limit N]
+                                Show container resource metrics (CPU, mem, net, disk)
   projects delete ID            Delete a project
 
 Datasets:
@@ -946,6 +1167,12 @@ func main() {
 				os.Exit(1)
 			}
 			runErr = cmdProjectsDeployments(subArgs[0], c, jsonMode)
+		case "metrics":
+			if len(subArgs) == 0 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects metrics <ID> [--limit N]")
+				os.Exit(1)
+			}
+			runErr = cmdProjectsMetrics(subArgs[0], subArgs[1:], c, jsonMode)
 		case "delete":
 			if len(subArgs) == 0 {
 				fmt.Fprintln(os.Stderr, "Usage: muveectl projects delete <ID>")
@@ -970,6 +1197,39 @@ func main() {
 				os.Exit(1)
 			}
 			runErr = cmdProjectUnbindSecret(subArgs[0], subArgs[1], c)
+		case "workspace":
+			if len(subArgs) < 2 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects workspace <PROJECT_ID> <ls|pull|push|rm> [args...]")
+				os.Exit(1)
+			}
+			projectID := subArgs[0]
+			wsCmd := subArgs[1]
+			wsArgs := subArgs[2:]
+			switch wsCmd {
+			case "ls":
+				runErr = cmdWorkspaceList(projectID, wsArgs, c, jsonMode)
+			case "pull":
+				if len(wsArgs) == 0 {
+					fmt.Fprintln(os.Stderr, "Usage: muveectl projects workspace <PROJECT_ID> pull <REMOTE_PATH> [LOCAL_PATH]")
+					os.Exit(1)
+				}
+				runErr = cmdWorkspacePull(projectID, wsArgs, c)
+			case "push":
+				if len(wsArgs) == 0 {
+					fmt.Fprintln(os.Stderr, "Usage: muveectl projects workspace <PROJECT_ID> push <LOCAL_FILE> [--remote-path PATH]")
+					os.Exit(1)
+				}
+				runErr = cmdWorkspacePush(projectID, wsArgs, c)
+			case "rm":
+				if len(wsArgs) == 0 {
+					fmt.Fprintln(os.Stderr, "Usage: muveectl projects workspace <PROJECT_ID> rm <REMOTE_PATH>")
+					os.Exit(1)
+				}
+				runErr = cmdWorkspaceDelete(projectID, wsArgs[0], c)
+			default:
+				fmt.Fprintln(os.Stderr, "Unknown workspace subcommand:", wsCmd)
+				os.Exit(1)
+			}
 		default:
 			fmt.Fprintln(os.Stderr, "Unknown projects subcommand:", sub)
 			os.Exit(1)

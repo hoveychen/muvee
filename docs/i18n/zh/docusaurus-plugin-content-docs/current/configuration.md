@@ -28,6 +28,7 @@ sidebar_position: 3
 | `REGISTRY_USER` | — | 镜像仓库基础认证用户名。下发给 Agent——Agent 启动时自动执行 `docker login`。 |
 | `REGISTRY_PASSWORD` | — | 镜像仓库基础认证密码。下发给 Agent。 |
 | `SECRET_ENCRYPTION_KEY` | — | 64 字符十六进制字符串（32 字节），用于以 AES-256-GCM 加密静态密钥。启用 Secrets 功能时必填。使用 `openssl rand -hex 32` 生成。 |
+| `VOLUME_NFS_BASE_PATH` | — | 控制平面主机上用于项目工作区卷的 NFS 基础目录（如 `/mnt/nfs/volumes`）。每个项目的子目录会在该路径下自动创建。同时通过 `/api/agent/config` 下发给部署 Agent，Agent 使用该路径将卷 bind mount 到容器中。未设置时工作区功能不可用。 |
 
 ## ForwardAuth 服务（`muvee-authservice`）
 

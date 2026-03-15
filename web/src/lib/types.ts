@@ -18,8 +18,16 @@ export interface Project {
   auth_required: boolean
   auth_allowed_domains: string
   memory_limit: string
+  volume_mount_path: string
   created_at: string
   updated_at: string
+}
+
+export interface WorkspaceEntry {
+  name: string
+  size: number
+  is_dir: boolean
+  mod_time: number
 }
 
 export interface Dataset {
@@ -103,6 +111,31 @@ export interface ProjectSecretBinding {
   // git_username is used with password-type secrets for HTTPS git authentication.
   // e.g. "x-access-token" for GitHub fine-grained PATs.
   git_username: string
+}
+
+export interface NodeMetric {
+  node_id: string
+  collected_at: number // epoch seconds
+  cpu_percent: number
+  mem_total_bytes: number
+  mem_used_bytes: number
+  disk_total_bytes: number
+  disk_used_bytes: number
+  load1: number
+  load5: number
+  load15: number
+}
+
+export interface ContainerMetric {
+  deployment_id: string
+  collected_at: number // epoch seconds
+  cpu_percent: number
+  mem_usage_bytes: number
+  mem_limit_bytes: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  block_read_bytes: number
+  block_write_bytes: number
 }
 
 export interface FileHistory {

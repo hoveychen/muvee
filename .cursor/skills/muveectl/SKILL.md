@@ -57,6 +57,7 @@ muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
+muveectl projects metrics PROJECT_ID [--limit N]
 muveectl projects delete PROJECT_ID
 ```
 
@@ -83,6 +84,39 @@ userEmail := r.Header.Get("X-Forwarded-User")
 ```typescript
 // Node.js / Express example
 const userEmail = req.headers["x-forwarded-user"]
+```
+
+### Container Metrics
+
+```bash
+# Show the latest resource sample and historical table
+muveectl projects metrics PROJECT_ID
+
+# Fetch more history (default: 60 samples)
+muveectl projects metrics PROJECT_ID --limit 120
+```
+
+Fields returned per sample: `collected_at`, `cpu_percent`, `mem_usage_bytes`, `mem_limit_bytes`, `net_rx_bytes`, `net_tx_bytes`, `block_read_bytes`, `block_write_bytes`.
+
+### Workspace
+
+The workspace is persistent storage attached to the running container, accessible at `/workspace` inside the container. Use these commands to inspect and transfer files without redeploying.
+
+```bash
+# List files in the workspace root (or a subdirectory)
+muveectl projects workspace PROJECT_ID ls
+muveectl projects workspace PROJECT_ID ls some/subdir
+
+# Download a file from the workspace
+muveectl projects workspace PROJECT_ID pull remote/path/file.txt
+muveectl projects workspace PROJECT_ID pull remote/path/file.txt local_copy.txt
+
+# Upload a local file to the workspace
+muveectl projects workspace PROJECT_ID push local_file.bin
+muveectl projects workspace PROJECT_ID push local_file.bin --remote-path uploads/file.bin
+
+# Delete a file from the workspace
+muveectl projects workspace PROJECT_ID rm remote/path/file.txt
 ```
 
 ## Datasets

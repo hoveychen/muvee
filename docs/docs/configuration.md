@@ -28,6 +28,7 @@ All configuration is via environment variables.
 | `REGISTRY_USER` | — | Registry Basic Auth username. Distributed to agents — they run `docker login` automatically on startup. |
 | `REGISTRY_PASSWORD` | — | Registry Basic Auth password. Distributed to agents. |
 | `SECRET_ENCRYPTION_KEY` | — | 64-character hex string (32 bytes) used to encrypt secrets at rest with AES-256-GCM. Required to enable the Secrets feature. Generate with `openssl rand -hex 32`. |
+| `VOLUME_NFS_BASE_PATH` | — | Base NFS directory on the control plane host used for project workspace volumes (e.g. `/mnt/nfs/volumes`). A per-project subdirectory is created automatically under this path. Also distributed to deploy agents via `/api/agent/config` so they can bind-mount the volume into containers. If unset, the workspace feature is disabled. |
 
 ## ForwardAuth Service (`muvee-authservice`)
 

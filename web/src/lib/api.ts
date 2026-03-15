@@ -36,6 +36,26 @@ export const api = {
       request(`/api/projects/${id}/secrets`, { method: 'PUT', body: JSON.stringify(data) }),
     deploy: (id: string) => request<import('./types').Deployment>(`/api/projects/${id}/deploy`, { method: 'POST' }),
     deployments: (id: string) => request<import('./types').Deployment[]>(`/api/projects/${id}/deployments`),
+    metrics: (id: string, limit = 60) => request<import('./types').ContainerMetric[]>(`/api/projects/${id}/metrics?limit=${limit}`),
+    workspaceList: (id: string, path?: string) =>
+      request<import('./types').WorkspaceEntry[]>(`/api/projects/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+    workspaceDownloadUrl: (id: string, path: string) =>
+      `/api/projects/${id}/workspace/download?path=${encodeURIComponent(path)}`,
+    workspaceUpload: async (id: string, path: string, file: File): Promise<void> => {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`/api/projects/${id}/workspace/upload?path=${encodeURIComponent(path)}`, {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }))
+        throw new Error(err.error || res.statusText)
+      }
+    },
+    workspaceDelete: (id: string, path: string) =>
+      request(`/api/projects/${id}/workspace?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   },
 
   datasets: {
@@ -64,6 +84,7 @@ export const api = {
 
   nodes: {
     list: () => request<import('./types').Node[]>('/api/nodes'),
+    metrics: (id: string) => request<import('./types').NodeMetric | null>(`/api/nodes/${id}/metrics`),
   },
 
   users: {

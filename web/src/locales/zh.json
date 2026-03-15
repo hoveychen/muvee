@@ -56,7 +56,8 @@
       "deployments": "部署记录",
       "config": "配置",
       "datasets": "数据集",
-      "secrets": "密钥"
+      "secrets": "密钥",
+      "workspace": "工作区"
     },
     "noDeployments": "暂无部署记录，点击「部署」按钮开始。",
     "config": {
@@ -67,6 +68,8 @@
       "dockerfilePath": "Dockerfile 路径",
       "memoryLimit": "内存限制",
       "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g",
+      "volumeMountPath": "持久化存储路径",
+      "volumeMountPathHint": "容器内挂载路径（如 /workspace），留空不挂载。需服务端配置 VOLUME_NFS_BASE_PATH。",
       "requireGoogleAuth": "启用 Google 身份验证",
       "enabled": "已启用",
       "disabled": "已禁用",
@@ -81,6 +84,36 @@
     "datasets": {
       "hint": "选择要挂载到容器中的数据集。<accent>dependency</accent> = rsync 复制（LRU 缓存）。<blue>readwrite</blue> = 直接 NFS 挂载。",
       "empty": "暂无可用数据集，请先在数据集页面创建。"
+    },
+    "workspace": {
+      "noVolume": "此项目未配置持久化存储路径，请在「配置」页设置「持久化存储路径」后重新部署。",
+      "notConfigured": "服务端未配置 VOLUME_NFS_BASE_PATH，请联系管理员。",
+      "loading": "加载中...",
+      "empty": "工作区为空",
+      "upload": "上传文件",
+      "uploading": "上传中...",
+      "name": "名称",
+      "size": "大小",
+      "modified": "修改时间",
+      "actions": "操作",
+      "download": "下载",
+      "delete": "删除",
+      "deleteConfirm": "确认删除「{{name}}」？",
+      "root": "根目录",
+      "errorList": "加载文件列表失败",
+      "errorDelete": "删除失败",
+      "errorUpload": "上传失败"
+    },
+    "metrics": {
+      "title": "容器监控（当前运行中）",
+      "updated": "更新于 {{time}}",
+      "cpu": "CPU",
+      "memory": "内存",
+      "netRx": "网络接收",
+      "netTx": "网络发送",
+      "diskRead": "磁盘读取",
+      "diskWrite": "磁盘写入",
+      "total": "累计"
     },
     "secrets": {
       "hint": "绑定密钥，在下次部署时注入为环境变量。",
@@ -134,7 +167,9 @@
       "domainPrefix": "域名前缀",
       "dockerfilePath": "Dockerfile 路径",
       "memoryLimit": "内存限制",
-      "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g"
+      "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g",
+      "volumeMountPath": "持久化存储路径",
+      "volumeMountPathHint": "挂载到容器内的路径（例如 /workspace），留空则不挂载。"
     },
     "domainOptional": "可选 — 留空时默认使用 \"{{name}}\"",
     "domainRequired": "必填 — 项目名称不能用作子域名",
@@ -227,7 +262,12 @@
     "heading": "节点",
     "online": "在线",
     "offline": "离线",
-    "empty": "暂无已注册节点，启动 Agent 以连接节点。"
+    "empty": "暂无已注册节点，启动 Agent 以连接节点。",
+    "cpu": "CPU",
+    "mem": "内存",
+    "disk": "磁盘",
+    "load": "负载",
+    "updated": "更新于"
   },
   "users": {
     "sectionLabel": "访问控制",

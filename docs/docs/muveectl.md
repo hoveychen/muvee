@@ -59,6 +59,8 @@ muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
+muveectl projects metrics PROJECT_ID [--limit N]
+muveectl projects workspace PROJECT_ID <ls|pull|push|rm> [args...]
 muveectl projects delete PROJECT_ID
 ```
 
@@ -88,6 +90,54 @@ userEmail := r.Header.Get("X-Forwarded-User")
 // Node.js / Express
 const userEmail = req.headers["x-forwarded-user"]
 ```
+
+### Container Metrics
+
+The deploy agent collects resource usage from `docker stats` every ~15 seconds and reports it to the control plane. Use `projects metrics` to inspect a project's running container:
+
+```bash
+# Show the latest sample plus a history table (default: last 60 samples)
+muveectl projects metrics PROJECT_ID
+
+# Fetch up to 120 samples (~30 minutes of history)
+muveectl projects metrics PROJECT_ID --limit 120
+```
+
+Each sample contains: `cpu_percent`, `mem_usage_bytes`, `mem_limit_bytes`, `net_rx_bytes`, `net_tx_bytes`, `block_read_bytes`, `block_write_bytes`, and `collected_at` (Unix epoch).
+
+The maximum history retained per query is 1440 samples (~6 hours at 15-second intervals).
+
+### Project Workspace
+
+Each project can have a persistent **workspace volume** — an NFS-backed directory bind-mounted into the container. The mount path inside the container is configured per-project via the web UI (`volume_mount_path`, e.g. `/workspace`).
+
+The control plane exposes a file management API so you can inspect and transfer workspace files without redeploying:
+
+```bash
+# List files in the workspace root (or a subdirectory)
+muveectl projects workspace PROJECT_ID ls
+muveectl projects workspace PROJECT_ID ls some/subdir
+
+# Download a file from the workspace to the current directory
+muveectl projects workspace PROJECT_ID pull data/output.csv
+
+# Download and save with a specific local name
+muveectl projects workspace PROJECT_ID pull data/output.csv ./local_copy.csv
+
+# Upload a local file to the workspace root
+muveectl projects workspace PROJECT_ID push ./model.bin
+
+# Upload to a specific subdirectory (directory is created if it does not exist)
+muveectl projects workspace PROJECT_ID push ./model.bin --remote-path models/
+
+# Delete a file or directory (recursive)
+muveectl projects workspace PROJECT_ID rm data/old_output.csv
+muveectl projects workspace PROJECT_ID rm tmp/
+```
+
+:::info Prerequisite
+The workspace feature requires `VOLUME_NFS_BASE_PATH` to be set on the control plane and the project's `volume_mount_path` to be configured. See [Configuration Reference](./configuration) for details.
+:::
 
 ## Datasets
 
@@ -149,4 +199,10 @@ muveectl projects deploy PROJECT_ID
 
 # 3. Monitor deployment progress
 muveectl projects deployments PROJECT_ID
+
+# 4. Check container resource usage
+muveectl projects metrics PROJECT_ID
+
+# 5. Download a file produced by the container
+muveectl projects workspace PROJECT_ID pull output/result.json
 ```

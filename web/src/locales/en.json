@@ -56,7 +56,8 @@
       "deployments": "Deployments",
       "config": "Config",
       "datasets": "Datasets",
-      "secrets": "Secrets"
+      "secrets": "Secrets",
+      "workspace": "Workspace"
     },
     "noDeployments": "No deployments yet. Click Deploy to start.",
     "config": {
@@ -67,6 +68,8 @@
       "dockerfilePath": "Dockerfile Path",
       "memoryLimit": "Memory Limit",
       "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g",
+      "volumeMountPath": "Persistent Storage Path",
+      "volumeMountPathHint": "Container-internal mount path (e.g. /workspace). Leave empty to disable persistent storage. Requires VOLUME_NFS_BASE_PATH on the server.",
       "requireGoogleAuth": "REQUIRE GOOGLE AUTH",
       "enabled": "Enabled",
       "disabled": "Disabled",
@@ -81,6 +84,36 @@
     "datasets": {
       "hint": "Select datasets to mount into the container. <accent>dependency</accent> = rsync copy (LRU cached). <blue>readwrite</blue> = direct NFS mount.",
       "empty": "No datasets available. Create one in the Datasets section."
+    },
+    "workspace": {
+      "noVolume": "No persistent storage path configured. Set a volume mount path in the Config tab and redeploy.",
+      "notConfigured": "VOLUME_NFS_BASE_PATH is not configured on the server. Contact your administrator.",
+      "loading": "Loading...",
+      "empty": "Workspace is empty",
+      "upload": "Upload File",
+      "uploading": "Uploading...",
+      "name": "Name",
+      "size": "Size",
+      "modified": "Modified",
+      "actions": "Actions",
+      "download": "Download",
+      "delete": "Delete",
+      "deleteConfirm": "Delete \"{{name}}\"?",
+      "root": "root",
+      "errorList": "Failed to load workspace",
+      "errorDelete": "Delete failed",
+      "errorUpload": "Upload failed"
+    },
+    "metrics": {
+      "title": "Container Metrics (running)",
+      "updated": "Updated at {{time}}",
+      "cpu": "CPU",
+      "memory": "Memory",
+      "netRx": "Net Rx",
+      "netTx": "Net Tx",
+      "diskRead": "Disk Read",
+      "diskWrite": "Disk Write",
+      "total": "total"
     },
     "secrets": {
       "hint": "Attach secrets to inject as environment variables on next deploy.",
@@ -134,7 +167,9 @@
       "domainPrefix": "DOMAIN PREFIX",
       "dockerfilePath": "Dockerfile Path",
       "memoryLimit": "Memory Limit",
-      "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g"
+      "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g",
+      "volumeMountPath": "Persistent Storage Path",
+      "volumeMountPathHint": "Container-internal mount path (e.g. /workspace). Leave empty to disable."
     },
     "domainOptional": "Optional — defaults to \"{{name}}\" if left blank",
     "domainRequired": "Required — project name cannot be used as a subdomain",
@@ -227,7 +262,12 @@
     "heading": "Nodes",
     "online": "online",
     "offline": "offline",
-    "empty": "No nodes registered yet. Start an Agent to connect nodes."
+    "empty": "No nodes registered yet. Start an Agent to connect nodes.",
+    "cpu": "CPU",
+    "mem": "MEM",
+    "disk": "DISK",
+    "load": "Load",
+    "updated": "updated"
   },
   "users": {
     "sectionLabel": "ACCESS CONTROL",

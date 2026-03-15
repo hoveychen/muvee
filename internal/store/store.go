@@ -91,9 +91,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 		p.MemoryLimit = "4g"
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO projects (id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-	`, p.ID, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.CreatedAt, p.UpdatedAt)
+		INSERT INTO projects (id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`, p.ID, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -104,9 +104,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 func (s *Store) GetProject(ctx context.Context, id uuid.UUID) (*Project, error) {
 	var p Project
 	err := s.db.QueryRow(ctx, `
-		SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, created_at, updated_at
+		SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at
 		FROM projects WHERE id = $1
-	`, id).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.CreatedAt, &p.UpdatedAt)
+	`, id).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -117,9 +117,9 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	var query string
 	var args []interface{}
 	if isAdmin {
-		query = `SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, created_at, updated_at FROM projects ORDER BY created_at DESC`
+		query = `SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at FROM projects ORDER BY created_at DESC`
 	} else {
-		query = `SELECT p.id, p.name, p.git_url, p.git_branch, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.container_port, p.memory_limit, p.created_at, p.updated_at
+		query = `SELECT p.id, p.name, p.git_url, p.git_branch, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.container_port, p.memory_limit, p.volume_mount_path, p.created_at, p.updated_at
 			FROM projects p JOIN project_members pm ON p.id = pm.project_id WHERE pm.user_id = $1 ORDER BY p.created_at DESC`
 		args = []interface{}{userID}
 	}
@@ -131,7 +131,7 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	projects := make([]*Project, 0)
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, &p)
@@ -145,8 +145,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		p.ContainerPort = 8080
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, domain_prefix=$4, dockerfile_path=$5, auth_required=$6, auth_allowed_domains=$7, container_port=$8, memory_limit=$9, updated_at=$10 WHERE id=$11
-	`, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.UpdatedAt, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, domain_prefix=$4, dockerfile_path=$5, auth_required=$6, auth_allowed_domains=$7, container_port=$8, memory_limit=$9, volume_mount_path=$10, updated_at=$11 WHERE id=$12
+	`, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.UpdatedAt, p.ID)
 	return err
 }
 
@@ -697,6 +697,130 @@ func (s *Store) ListFileHistory(ctx context.Context, datasetID uuid.UUID, filePa
 func (s *Store) PruneFileHistory(ctx context.Context, datasetID uuid.UUID, before time.Time) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM dataset_file_history WHERE dataset_id=$1 AND occurred_at < $2`, datasetID, before)
 	return err
+}
+
+// ─── Node Metrics ─────────────────────────────────────────────────────────────
+
+// InsertNodeMetric inserts a host-level resource sample for the given node.
+// Rows older than 24 hours for the same node are pruned on insert.
+func (s *Store) InsertNodeMetric(ctx context.Context, m *NodeMetric) error {
+	m.ID = uuid.New()
+	m.CollectedAt = time.Now()
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO node_metrics
+		  (id, node_id, collected_at, cpu_percent,
+		   mem_total_bytes, mem_used_bytes,
+		   disk_total_bytes, disk_used_bytes,
+		   load1, load5, load15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, m.ID, m.NodeID, m.CollectedAt,
+		m.CPUPercent,
+		m.MemTotalBytes, m.MemUsedBytes,
+		m.DiskTotalBytes, m.DiskUsedBytes,
+		m.Load1, m.Load5, m.Load15)
+	if err != nil {
+		return err
+	}
+	_, _ = s.db.Exec(ctx,
+		`DELETE FROM node_metrics WHERE node_id=$1 AND collected_at < NOW() - INTERVAL '24 hours'`,
+		m.NodeID)
+	return nil
+}
+
+// GetLatestNodeMetricByNodeID returns the most recent metric sample for the given node,
+// or nil if no samples exist.
+func (s *Store) GetLatestNodeMetricByNodeID(ctx context.Context, nodeID uuid.UUID) (*NodeMetric, error) {
+	var m NodeMetric
+	err := s.db.QueryRow(ctx, `
+		SELECT id, node_id, collected_at, cpu_percent,
+		       mem_total_bytes, mem_used_bytes,
+		       disk_total_bytes, disk_used_bytes,
+		       load1, load5, load15
+		FROM node_metrics
+		WHERE node_id = $1
+		ORDER BY collected_at DESC
+		LIMIT 1
+	`, nodeID).Scan(
+		&m.ID, &m.NodeID, &m.CollectedAt, &m.CPUPercent,
+		&m.MemTotalBytes, &m.MemUsedBytes,
+		&m.DiskTotalBytes, &m.DiskUsedBytes,
+		&m.Load1, &m.Load5, &m.Load15,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return &m, err
+}
+
+// ─── Container Metrics ────────────────────────────────────────────────────────
+
+// InsertContainerMetricByDomainPrefix inserts a container metric sample for the
+// currently running deployment identified by the project's domain prefix.
+// Rows older than 24 hours for the same deployment are pruned on insert.
+func (s *Store) InsertContainerMetricByDomainPrefix(ctx context.Context, domainPrefix string, m *ContainerMetric) error {
+	// Resolve the running deployment id from domain_prefix.
+	var deploymentID uuid.UUID
+	err := s.db.QueryRow(ctx, `
+		SELECT d.id FROM deployments d
+		JOIN projects p ON d.project_id = p.id
+		WHERE p.domain_prefix = $1 AND d.status = 'running'
+		LIMIT 1
+	`, domainPrefix).Scan(&deploymentID)
+	if err != nil {
+		return err // no running deployment — skip silently upstream
+	}
+	m.ID = uuid.New()
+	m.DeploymentID = deploymentID
+	m.CollectedAt = time.Now()
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO container_metrics
+		  (id, deployment_id, collected_at, cpu_percent, mem_usage_bytes, mem_limit_bytes,
+		   net_rx_bytes, net_tx_bytes, block_read_bytes, block_write_bytes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, m.ID, m.DeploymentID, m.CollectedAt,
+		m.CPUPercent, m.MemUsageBytes, m.MemLimitBytes,
+		m.NetRxBytes, m.NetTxBytes, m.BlockReadBytes, m.BlockWriteBytes)
+	if err != nil {
+		return err
+	}
+	// Prune samples older than 24 h for this deployment to bound table growth.
+	_, _ = s.db.Exec(ctx,
+		`DELETE FROM container_metrics WHERE deployment_id=$1 AND collected_at < NOW() - INTERVAL '24 hours'`,
+		deploymentID)
+	return nil
+}
+
+// GetContainerMetricsForProject returns the latest metric samples for the
+// currently running deployment of the given project, ordered newest-first.
+func (s *Store) GetContainerMetricsForProject(ctx context.Context, projectID uuid.UUID, limit int) ([]*ContainerMetric, error) {
+	if limit <= 0 {
+		limit = 60
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT cm.id, cm.deployment_id, cm.collected_at,
+		       cm.cpu_percent, cm.mem_usage_bytes, cm.mem_limit_bytes,
+		       cm.net_rx_bytes, cm.net_tx_bytes, cm.block_read_bytes, cm.block_write_bytes
+		FROM container_metrics cm
+		JOIN deployments d ON cm.deployment_id = d.id
+		WHERE d.project_id = $1 AND d.status = 'running'
+		ORDER BY cm.collected_at DESC
+		LIMIT $2
+	`, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*ContainerMetric, 0)
+	for rows.Next() {
+		var m ContainerMetric
+		if err := rows.Scan(&m.ID, &m.DeploymentID, &m.CollectedAt,
+			&m.CPUPercent, &m.MemUsageBytes, &m.MemLimitBytes,
+			&m.NetRxBytes, &m.NetTxBytes, &m.BlockReadBytes, &m.BlockWriteBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, &m)
+	}
+	return items, nil
 }
 
 // ─── API Tokens ───────────────────────────────────────────────────────────────

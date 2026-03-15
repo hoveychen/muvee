@@ -34,6 +34,7 @@ type Project struct {
 	AuthAllowedDomains string    `db:"auth_allowed_domains" json:"auth_allowed_domains"`
 	ContainerPort      int       `db:"container_port"       json:"container_port"`
 	MemoryLimit        string    `db:"memory_limit"         json:"memory_limit"`
+	VolumeMountPath    string    `db:"volume_mount_path"    json:"volume_mount_path"`
 	CreatedAt          time.Time `db:"created_at"           json:"created_at"`
 	UpdatedAt          time.Time `db:"updated_at"           json:"updated_at"`
 }
@@ -241,4 +242,35 @@ type Task struct {
 	Result       string                 `db:"result"`
 	CreatedAt    time.Time              `db:"created_at"`
 	UpdatedAt    time.Time              `db:"updated_at"`
+}
+
+// NodeMetric is a single point-in-time sample of host-level resource usage
+// collected by the deploy/builder agent via /proc files and df.
+type NodeMetric struct {
+	ID             uuid.UUID `db:"id"              json:"id"`
+	NodeID         uuid.UUID `db:"node_id"         json:"node_id"`
+	CollectedAt    time.Time `db:"collected_at"    json:"collected_at"`
+	CPUPercent     float64   `db:"cpu_percent"     json:"cpu_percent"`
+	MemTotalBytes  int64     `db:"mem_total_bytes" json:"mem_total_bytes"`
+	MemUsedBytes   int64     `db:"mem_used_bytes"  json:"mem_used_bytes"`
+	DiskTotalBytes int64     `db:"disk_total_bytes" json:"disk_total_bytes"`
+	DiskUsedBytes  int64     `db:"disk_used_bytes" json:"disk_used_bytes"`
+	Load1          float64   `db:"load1"           json:"load1"`
+	Load5          float64   `db:"load5"           json:"load5"`
+	Load15         float64   `db:"load15"          json:"load15"`
+}
+
+// ContainerMetric is a single point-in-time sample of container resource usage
+// collected by the deploy agent via `docker stats --no-stream`.
+type ContainerMetric struct {
+	ID              uuid.UUID `db:"id"               json:"id"`
+	DeploymentID    uuid.UUID `db:"deployment_id"    json:"deployment_id"`
+	CollectedAt     time.Time `db:"collected_at"     json:"collected_at"`
+	CPUPercent      float64   `db:"cpu_percent"      json:"cpu_percent"`
+	MemUsageBytes   int64     `db:"mem_usage_bytes"  json:"mem_usage_bytes"`
+	MemLimitBytes   int64     `db:"mem_limit_bytes"  json:"mem_limit_bytes"`
+	NetRxBytes      int64     `db:"net_rx_bytes"     json:"net_rx_bytes"`
+	NetTxBytes      int64     `db:"net_tx_bytes"     json:"net_tx_bytes"`
+	BlockReadBytes  int64     `db:"block_read_bytes" json:"block_read_bytes"`
+	BlockWriteBytes int64     `db:"block_write_bytes" json:"block_write_bytes"`
 }

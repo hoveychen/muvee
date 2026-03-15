@@ -3,7 +3,9 @@ package deployer
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -28,6 +30,11 @@ type Config struct {
 	// MemoryLimit sets the Docker --memory flag (e.g. "4g", "512m").
 	// Empty string means no limit.
 	MemoryLimit string
+	// VolumeNFSBasePath is the base NFS directory on the deploy node (e.g. /mnt/nfs/volumes).
+	// If set together with VolumeMountPath, a per-project subdirectory is bind-mounted.
+	VolumeNFSBasePath string
+	// VolumeMountPath is the container-internal path where the workspace volume is mounted.
+	VolumeMountPath string
 }
 
 type DatasetSpec struct {
@@ -96,6 +103,16 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 
 	for _, m := range allMounts {
 		dockerArgs = append(dockerArgs, "-v", m)
+	}
+
+	// Workspace volume: bind-mount a per-project NFS directory into the container.
+	if cfg.VolumeNFSBasePath != "" && cfg.VolumeMountPath != "" {
+		volumeHostPath := filepath.Join(cfg.VolumeNFSBasePath, cfg.ProjectID)
+		logFn(fmt.Sprintf("Creating workspace volume directory: %s", volumeHostPath))
+		if err := os.MkdirAll(volumeHostPath, 0755); err != nil {
+			return 0, fmt.Errorf("create workspace volume dir: %w", err)
+		}
+		dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:%s:rw", volumeHostPath, cfg.VolumeMountPath))
 	}
 
 	for k, v := range cfg.EnvVars {

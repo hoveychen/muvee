@@ -4,7 +4,7 @@ import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Langu
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
 import { api } from '../lib/api'
-import type { Node } from '../lib/types'
+import type { Node, NodeMetric } from '../lib/types'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
@@ -146,10 +146,45 @@ export default function Layout({ children }: { children?: ReactNode }) {
   )
 }
 
+function fmtBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(Math.floor(Math.log2(bytes) / 10), units.length - 1)
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
+}
+
+function MetricBar({ pct, label }: { pct: number; label: string }) {
+  const color = pct > 90 ? 'var(--danger)' : pct > 70 ? '#d29922' : '#3fb950'
+  return (
+    <div style={{ minWidth: '100px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: MONO, fontSize: '0.63rem', color: 'var(--fg-muted)', marginBottom: '3px' }}>
+        <span>{label}</span>
+        <span>{Math.round(pct)}%</span>
+      </div>
+      <div style={{ height: '3px', background: 'var(--bg-hover)', borderRadius: '2px' }}>
+        <div style={{ height: '100%', borderRadius: '2px', background: color, width: `${Math.min(pct, 100)}%`, transition: 'width 300ms' }} />
+      </div>
+    </div>
+  )
+}
+
 export function NodesPage() {
   const [nodes, setNodes] = useState<Node[]>([])
+  const [metrics, setMetrics] = useState<Record<string, NodeMetric | null>>({})
   const { t } = useTranslation()
-  useEffect(() => { api.nodes.list().then(setNodes).catch(() => {}) }, [])
+
+  useEffect(() => {
+    api.nodes.list().then(ns => {
+      setNodes(ns)
+      ns.forEach(n => {
+        api.nodes.metrics(n.id).then(m => {
+          setMetrics(prev => ({ ...prev, [n.id]: m }))
+        }).catch(() => {
+          setMetrics(prev => ({ ...prev, [n.id]: null }))
+        })
+      })
+    }).catch(() => {})
+  }, [])
 
   const isOnline = (n: Node) => {
     const lastSeen = new Date(n.last_seen_at).getTime()
@@ -165,26 +200,50 @@ export function NodesPage() {
       <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
         {nodes.map((n, i) => {
           const online = isOnline(n)
-          const storageUsed = n.max_storage_bytes > 0 ? n.used_storage_bytes / n.max_storage_bytes : 0
+          const m = metrics[n.id]
+          const cpuPct = m ? m.cpu_percent : 0
+          const memPct = m && m.mem_total_bytes > 0 ? (m.mem_used_bytes / m.mem_total_bytes) * 100 : 0
+          const diskPct = m && m.disk_total_bytes > 0 ? (m.disk_used_bytes / m.disk_total_bytes) * 100 : 0
           return (
-            <div key={n.id} className="flex items-center gap-5 px-5 py-4" style={{ background: 'var(--bg-card)', borderBottom: i < nodes.length - 1 ? '1px solid var(--border)' : 'none' }}>
-              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: online ? '#3fb950' : 'var(--fg-muted)', flexShrink: 0 }} className={online ? 'status-running' : ''} />
-              <div className="flex-1">
-                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{n.hostname}</div>
-                <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '2px' }}>{n.role} · {online ? t('nodes.online') : t('nodes.offline')}</div>
-              </div>
-              {n.role === 'deploy' && n.max_storage_bytes > 0 && (
-                <div className="w-32">
-                  <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', marginBottom: '4px', textAlign: 'right' }}>
-                    {Math.round(storageUsed * 100)}%
+            <div key={n.id} style={{ background: 'var(--bg-card)', borderBottom: i < nodes.length - 1 ? '1px solid var(--border)' : 'none', padding: '1rem 1.25rem' }}>
+              <div className="flex items-center gap-4">
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: online ? '#3fb950' : 'var(--fg-muted)', flexShrink: 0 }} className={online ? 'status-running' : ''} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{n.hostname}</div>
+                  <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
+                    {n.role} · {online ? t('nodes.online') : t('nodes.offline')}
+                    {m && (
+                      <span style={{ marginLeft: '8px' }}>
+                        · {t('nodes.load')}: {m.load1.toFixed(2)} / {m.load5.toFixed(2)} / {m.load15.toFixed(2)}
+                      </span>
+                    )}
                   </div>
-                  <div style={{ height: '4px', background: 'var(--bg-hover)', borderRadius: '2px' }}>
-                    <div style={{
-                      height: '100%', borderRadius: '2px',
-                      background: storageUsed > 0.9 ? 'var(--danger)' : storageUsed > 0.7 ? '#d29922' : '#3fb950',
-                      width: `${storageUsed * 100}%`,
-                      transition: 'width 300ms',
-                    }} />
+                </div>
+                {m && (
+                  <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                    <MetricBar pct={cpuPct} label={t('nodes.cpu')} />
+                    <MetricBar pct={memPct} label={t('nodes.mem')} />
+                    <MetricBar pct={diskPct} label={t('nodes.disk')} />
+                  </div>
+                )}
+              </div>
+              {m && (
+                <div style={{ display: 'flex', gap: '24px', marginTop: '8px', paddingLeft: '20px' }}>
+                  <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                    <span style={{ color: 'var(--fg-primary)', fontWeight: 500 }}>{t('nodes.cpu')}</span>{' '}
+                    {cpuPct.toFixed(1)}%
+                  </div>
+                  <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                    <span style={{ color: 'var(--fg-primary)', fontWeight: 500 }}>{t('nodes.mem')}</span>{' '}
+                    {fmtBytes(m.mem_used_bytes)} / {fmtBytes(m.mem_total_bytes)}
+                  </div>
+                  <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                    <span style={{ color: 'var(--fg-primary)', fontWeight: 500 }}>{t('nodes.disk')}</span>{' '}
+                    {fmtBytes(m.disk_used_bytes)} / {fmtBytes(m.disk_total_bytes)}
+                  </div>
+                  <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                    <span style={{ color: 'var(--fg-primary)', fontWeight: 500 }}>{t('nodes.updated')}</span>{' '}
+                    {new Date(m.collected_at * 1000).toLocaleTimeString()}
                   </div>
                 </div>
               )}

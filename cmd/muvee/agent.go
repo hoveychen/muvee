@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +57,7 @@ func runAgent() {
 	agentCfg := fetchAgentConfig(ctx, controlPlaneURL, agentSecret)
 	registryAddr := agentCfg["registry_addr"]
 	baseDomain := agentCfg["base_domain"]
+	volumeNFSBasePath := agentCfg["volume_nfs_base_path"]
 
 	if user, pass := agentCfg["registry_user"], agentCfg["registry_password"]; user != "" && pass != "" {
 		if err := dockerLogin(registryAddr, user, pass); err != nil {
@@ -73,6 +75,7 @@ func runAgent() {
 		cache = datacache.New(nil, nodeID, baseDir)
 		go runContainerStatusReporter(ctx, controlPlaneURL, agentSecret)
 	}
+	go runNodeMetricsReporter(ctx, controlPlaneURL, agentSecret, nodeID, baseDir)
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -84,7 +87,7 @@ func runAgent() {
 		case <-ticker.C:
 			tasks := pollTasks(ctx, controlPlaneURL, agentSecret, nodeID)
 			for _, task := range tasks {
-				go handleTask(ctx, task, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, baseDir, baseDomain, cache)
+				go handleTask(ctx, task, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, baseDir, baseDomain, volumeNFSBasePath, cache)
 			}
 		}
 	}
@@ -184,7 +187,7 @@ func pollTasks(ctx context.Context, baseURL, secret string, nodeID uuid.UUID) []
 	return tasks
 }
 
-func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, baseDir, baseDomain string, cache *datacache.Cache) {
+func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, baseDir, baseDomain, volumeNFSBasePath string, cache *datacache.Cache) {
 	log.Printf("Handling task %s (type=%s)", task.ID, task.Type)
 	completeTask(ctx, baseURL, secret, task.ID, store.TaskStatusRunning, nil)
 
@@ -204,7 +207,7 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		}
 
 	case store.TaskTypeDeploy:
-		hostPort, err := runDeploy(ctx, task, cache, baseDomain, func(line string) {
+		hostPort, err := runDeploy(ctx, task, cache, baseDomain, volumeNFSBasePath, func(line string) {
 			appendLog(ctx, baseURL, secret, task.DeploymentID, line)
 		})
 		taskErr = err
@@ -241,7 +244,7 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn 
 	return map[string]interface{}{"image_tag": imageTag}, nil
 }
 
-func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, baseDomain string, logFn func(string)) (int, error) {
+func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, baseDomain, volumeNFSBasePath string, logFn func(string)) (int, error) {
 	p := task.Payload
 	var datasets []deployer.DatasetSpec
 	if dsRaw, ok := p["datasets"].([]interface{}); ok {
@@ -261,16 +264,18 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 		}
 	}
 	cfg := deployer.Config{
-		DeploymentID:  str(p, "deployment_id"),
-		ProjectID:     str(p, "project_id"),
-		DomainPrefix:  str(p, "domain_prefix"),
-		ImageTag:      str(p, "image_tag"),
-		ContainerPort: intVal(p, "container_port"),
-		AuthRequired:  boolVal(p, "auth_required"),
-		AuthDomains:   str(p, "auth_domains"),
-		MemoryLimit:   str(p, "memory_limit"),
-		Datasets:      datasets,
-		BaseDomain:    baseDomain,
+		DeploymentID:      str(p, "deployment_id"),
+		ProjectID:         str(p, "project_id"),
+		DomainPrefix:      str(p, "domain_prefix"),
+		ImageTag:          str(p, "image_tag"),
+		ContainerPort:     intVal(p, "container_port"),
+		AuthRequired:      boolVal(p, "auth_required"),
+		AuthDomains:       str(p, "auth_domains"),
+		MemoryLimit:       str(p, "memory_limit"),
+		VolumeMountPath:   str(p, "volume_mount_path"),
+		VolumeNFSBasePath: volumeNFSBasePath,
+		Datasets:          datasets,
+		BaseDomain:        baseDomain,
 	}
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }
@@ -342,7 +347,7 @@ func runCleanup(ctx context.Context, task *store.Task) error {
 }
 
 // runContainerStatusReporter periodically inspects all muvee-* containers on this node
-// and reports their restart counts and OOM-killed flags to the control plane.
+// and reports their restart counts, OOM-killed flags, and resource metrics to the control plane.
 func runContainerStatusReporter(ctx context.Context, baseURL, secret string) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -352,6 +357,7 @@ func runContainerStatusReporter(ctx context.Context, baseURL, secret string) {
 			return
 		case <-ticker.C:
 			reportContainerStatuses(ctx, baseURL, secret)
+			reportContainerMetrics(ctx, baseURL, secret)
 		}
 	}
 }
@@ -407,6 +413,307 @@ func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 	if resp != nil {
 		resp.Body.Close()
 	}
+}
+
+// ─── Container Metrics Reporter ───────────────────────────────────────────────
+
+type containerMetricReport struct {
+	DomainPrefix    string  `json:"domain_prefix"`
+	CPUPercent      float64 `json:"cpu_percent"`
+	MemUsageBytes   int64   `json:"mem_usage_bytes"`
+	MemLimitBytes   int64   `json:"mem_limit_bytes"`
+	NetRxBytes      int64   `json:"net_rx_bytes"`
+	NetTxBytes      int64   `json:"net_tx_bytes"`
+	BlockReadBytes  int64   `json:"block_read_bytes"`
+	BlockWriteBytes int64   `json:"block_write_bytes"`
+}
+
+// reportContainerMetrics collects resource stats for all muvee-* containers via
+// `docker stats --no-stream` and ships them to the control plane.
+func reportContainerMetrics(ctx context.Context, baseURL, secret string) {
+	// 1. Enumerate running muvee containers.
+	psOut, err := exec.CommandContext(ctx, "docker", "ps",
+		"--filter", "name=muvee-",
+		"--format", "{{.Names}}").Output()
+	if err != nil || len(bytes.TrimSpace(psOut)) == 0 {
+		return
+	}
+	var muveeNames []string
+	for _, name := range strings.Split(strings.TrimSpace(string(psOut)), "\n") {
+		name = strings.TrimSpace(name)
+		if strings.HasPrefix(name, "muvee-") {
+			muveeNames = append(muveeNames, name)
+		}
+	}
+	if len(muveeNames) == 0 {
+		return
+	}
+
+	// 2. Collect stats (one-shot, no streaming).
+	// docker stats --no-stream outputs one JSON object per line when using --format.
+	statsArgs := []string{
+		"stats", "--no-stream",
+		"--format",
+		`{"name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","net":"{{.NetIO}}","block":"{{.BlockIO}}"}`,
+	}
+	statsArgs = append(statsArgs, muveeNames...)
+	statsOut, err := exec.CommandContext(ctx, "docker", statsArgs...).Output()
+	if err != nil || len(bytes.TrimSpace(statsOut)) == 0 {
+		return
+	}
+
+	var reports []containerMetricReport
+	for _, line := range strings.Split(strings.TrimSpace(string(statsOut)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var raw struct {
+			Name  string `json:"name"`
+			CPU   string `json:"cpu"`
+			Mem   string `json:"mem"`
+			Net   string `json:"net"`
+			Block string `json:"block"`
+		}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			log.Printf("docker stats parse error: %v (line: %s)", err, line)
+			continue
+		}
+		if !strings.HasPrefix(raw.Name, "muvee-") {
+			continue
+		}
+		domainPrefix := strings.TrimPrefix(raw.Name, "muvee-")
+		memUsage, memLimit := parseDockerIOPair(raw.Mem)
+		netRx, netTx := parseDockerIOPair(raw.Net)
+		blockRead, blockWrite := parseDockerIOPair(raw.Block)
+		reports = append(reports, containerMetricReport{
+			DomainPrefix:    domainPrefix,
+			CPUPercent:      parseDockerPercent(raw.CPU),
+			MemUsageBytes:   memUsage,
+			MemLimitBytes:   memLimit,
+			NetRxBytes:      netRx,
+			NetTxBytes:      netTx,
+			BlockReadBytes:  blockRead,
+			BlockWriteBytes: blockWrite,
+		})
+	}
+
+	if len(reports) == 0 {
+		return
+	}
+	body, _ := json.Marshal(reports)
+	resp, _ := agentPost(baseURL+"/api/agent/container-metrics", secret, "application/json", jsonReader(body))
+	if resp != nil {
+		resp.Body.Close()
+	}
+}
+
+// parseDockerPercent converts Docker CPU percentage string (e.g. "2.34%") to float64.
+func parseDockerPercent(s string) float64 {
+	s = strings.TrimSuffix(strings.TrimSpace(s), "%")
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
+}
+
+// parseDockerIOPair splits "A / B" and returns the two parsed byte counts.
+// Docker uses both binary units (KiB, MiB, GiB) and SI units (kB, MB, GB).
+func parseDockerIOPair(s string) (int64, int64) {
+	parts := strings.SplitN(s, " / ", 2)
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	return parseDockerBytes(parts[0]), parseDockerBytes(parts[1])
+}
+
+// parseDockerBytes converts a Docker size string like "1.5GiB", "512MB", "100kB" to bytes.
+func parseDockerBytes(s string) int64 {
+	s = strings.TrimSpace(s)
+	type unit struct {
+		suffix string
+		mult   float64
+	}
+	units := []unit{
+		{"TiB", 1 << 40},
+		{"GiB", 1 << 30},
+		{"MiB", 1 << 20},
+		{"KiB", 1 << 10},
+		{"TB", 1e12},
+		{"GB", 1e9},
+		{"MB", 1e6},
+		{"kB", 1e3},
+		{"B", 1},
+	}
+	for _, u := range units {
+		if strings.HasSuffix(s, u.suffix) {
+			val, _ := strconv.ParseFloat(strings.TrimSuffix(s, u.suffix), 64)
+			return int64(val * u.mult)
+		}
+	}
+	val, _ := strconv.ParseFloat(s, 64)
+	return int64(val)
+}
+
+// ─── Node Metrics Reporter ────────────────────────────────────────────────────
+
+type nodeMetricReport struct {
+	NodeID         string  `json:"node_id"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemTotalBytes  int64   `json:"mem_total_bytes"`
+	MemUsedBytes   int64   `json:"mem_used_bytes"`
+	DiskTotalBytes int64   `json:"disk_total_bytes"`
+	DiskUsedBytes  int64   `json:"disk_used_bytes"`
+	Load1          float64 `json:"load1"`
+	Load5          float64 `json:"load5"`
+	Load15         float64 `json:"load15"`
+}
+
+// runNodeMetricsReporter periodically collects host-level resource metrics and
+// ships them to the control plane.
+func runNodeMetricsReporter(ctx context.Context, baseURL, secret string, nodeID uuid.UUID, dataDir string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reportNodeMetrics(ctx, baseURL, secret, nodeID, dataDir)
+		}
+	}
+}
+
+func reportNodeMetrics(ctx context.Context, baseURL, secret string, nodeID uuid.UUID, dataDir string) {
+	cpuPct := collectCPUPercent()
+	memTotal, memUsed := collectMemory()
+	diskTotal, diskUsed := collectDisk(dataDir)
+	load1, load5, load15 := collectLoadAvg()
+
+	report := nodeMetricReport{
+		NodeID:         nodeID.String(),
+		CPUPercent:     cpuPct,
+		MemTotalBytes:  memTotal,
+		MemUsedBytes:   memUsed,
+		DiskTotalBytes: diskTotal,
+		DiskUsedBytes:  diskUsed,
+		Load1:          load1,
+		Load5:          load5,
+		Load15:         load15,
+	}
+	body, _ := json.Marshal(report)
+	resp, _ := agentPost(baseURL+"/api/agent/node-metrics", secret, "application/json", jsonReader(body))
+	if resp != nil {
+		resp.Body.Close()
+	}
+}
+
+// collectCPUPercent returns overall CPU usage percentage by reading /proc/stat twice
+// with a 500 ms gap and computing the idle-time delta.
+func collectCPUPercent() float64 {
+	read := func() (idle, total uint64) {
+		data, err := os.ReadFile("/proc/stat")
+		if err != nil {
+			return 0, 0
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if !strings.HasPrefix(line, "cpu ") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 8 {
+				break
+			}
+			vals := make([]uint64, len(fields)-1)
+			for i, f := range fields[1:] {
+				v, _ := strconv.ParseUint(f, 10, 64)
+				vals[i] = v
+			}
+			// user nice system idle iowait irq softirq steal …
+			idle = vals[3] + vals[4] // idle + iowait
+			for _, v := range vals {
+				total += v
+			}
+			break
+		}
+		return
+	}
+	idle1, total1 := read()
+	time.Sleep(500 * time.Millisecond)
+	idle2, total2 := read()
+	if total2 <= total1 {
+		return 0
+	}
+	idleDelta := float64(idle2 - idle1)
+	totalDelta := float64(total2 - total1)
+	return (1 - idleDelta/totalDelta) * 100
+}
+
+// collectMemory parses /proc/meminfo for MemTotal and MemAvailable (bytes).
+func collectMemory() (total, used int64) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0
+	}
+	var memTotal, memAvail int64
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		val, _ := strconv.ParseInt(fields[1], 10, 64)
+		val *= 1024 // kB → bytes
+		switch fields[0] {
+		case "MemTotal:":
+			memTotal = val
+		case "MemAvailable:":
+			memAvail = val
+		}
+	}
+	if memTotal == 0 {
+		return 0, 0
+	}
+	return memTotal, memTotal - memAvail
+}
+
+// collectDisk returns disk total/used bytes for the filesystem containing dataDir.
+func collectDisk(dataDir string) (total, used int64) {
+	if dataDir == "" {
+		dataDir = "/"
+	}
+	out, err := exec.Command("df", "-B1", "--output=size,used", dataDir).Output()
+	if err != nil {
+		// Fallback: try root
+		out, err = exec.Command("df", "-B1", "--output=size,used", "/").Output()
+		if err != nil {
+			return 0, 0
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return 0, 0
+	}
+	fields := strings.Fields(lines[len(lines)-1])
+	if len(fields) < 2 {
+		return 0, 0
+	}
+	t, _ := strconv.ParseInt(fields[0], 10, 64)
+	u, _ := strconv.ParseInt(fields[1], 10, 64)
+	return t, u
+}
+
+// collectLoadAvg reads load averages from /proc/loadavg.
+func collectLoadAvg() (load1, load5, load15 float64) {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, 0, 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 3 {
+		return 0, 0, 0
+	}
+	l1, _ := strconv.ParseFloat(fields[0], 64)
+	l5, _ := strconv.ParseFloat(fields[1], 64)
+	l15, _ := strconv.ParseFloat(fields[2], 64)
+	return l1, l5, l15
 }
 
 func str(m map[string]interface{}, key string) string {

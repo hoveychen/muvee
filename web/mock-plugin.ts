@@ -190,6 +190,18 @@ interface MockFileHistory {
   occurred_at: string
 }
 
+interface MockContainerMetric {
+  deployment_id: string
+  collected_at: number   // epoch seconds
+  cpu_percent: number
+  mem_usage_bytes: number
+  mem_limit_bytes: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  block_read_bytes: number
+  block_write_bytes: number
+}
+
 function buildInitialState() {
   const meUser: MockUser = {
     id: 'user-001',
@@ -431,6 +443,48 @@ function buildInitialState() {
     },
   ]
 
+  // 为 dep-001 (proj-001 的运行中 deployment) 生成最近 60 条监控采样（每 30 秒一条）
+  const containerMetrics: MockContainerMetric[] = (() => {
+    const MEM_LIMIT = 4 * 1024 * 1024 * 1024  // 4 GiB
+    const now = Math.floor(Date.now() / 1000)
+    const samples: MockContainerMetric[] = []
+    let netRx = 180 * 1024 * 1024     // 起始网络接收累计 180 MB
+    let netTx = 42 * 1024 * 1024      // 起始网络发送累计 42 MB
+    let blkRead = 2.4 * 1024 * 1024 * 1024  // 起始磁盘读取累计 2.4 GB
+    let blkWrite = 600 * 1024 * 1024  // 起始磁盘写入累计 600 MB
+
+    for (let i = 59; i >= 0; i--) {
+      // CPU：ML 训练负载，波动在 35%~92% 之间，带周期性脉冲
+      const cpuBase = 60 + 25 * Math.sin(i * 0.18) + 8 * Math.sin(i * 0.7)
+      const cpu = Math.max(5, Math.min(99, cpuBase + (Math.random() - 0.5) * 10))
+
+      // 内存：稳定在 2.8~3.4 GiB，缓慢增长
+      const memUsage = Math.floor((2.8 + 0.006 * (59 - i) + (Math.random() - 0.5) * 0.12) * 1024 * 1024 * 1024)
+
+      // 网络：累计递增，ML 服务接收多、发送少
+      netRx += Math.floor((80 + Math.random() * 40) * 1024)   // 每样本 +80~120 KB
+      netTx += Math.floor((8 + Math.random() * 6) * 1024)     // 每样本 +8~14 KB
+
+      // 磁盘：读取量大（加载 checkpoint）、写入少（保存结果）
+      blkRead += Math.floor((600 + Math.random() * 300) * 1024)  // 每样本 +600~900 KB
+      blkWrite += Math.floor((20 + Math.random() * 30) * 1024)   // 每样本 +20~50 KB
+
+      samples.push({
+        deployment_id: 'dep-001',
+        collected_at: now - i * 30,
+        cpu_percent: parseFloat(cpu.toFixed(2)),
+        mem_usage_bytes: memUsage,
+        mem_limit_bytes: MEM_LIMIT,
+        net_rx_bytes: Math.floor(netRx),
+        net_tx_bytes: Math.floor(netTx),
+        block_read_bytes: Math.floor(blkRead),
+        block_write_bytes: Math.floor(blkWrite),
+      })
+    }
+    // 返回最新在前（与真实 API 一致）
+    return samples.reverse()
+  })()
+
   return {
     me: meUser,
     users,
@@ -444,6 +498,7 @@ function buildInitialState() {
     deployments,
     snapshots,
     fileHistory,
+    containerMetrics,
   }
 }
 
@@ -616,6 +671,32 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
         dep.status = 'running'
         dep.logs += '\n[deploy] Container is running'
         dep.updated_at = isoNow()
+        // 生成初始监控采样，后续每 30 秒追加一条
+        const MEM_LIMIT = 4 * 1024 * 1024 * 1024
+        const addSample = () => {
+          const isRunning = state.deployments.find((d) => d.id === dep.id)?.status === 'running'
+          if (!isRunning) return
+          const prev = state.containerMetrics.find((m) => m.deployment_id === dep.id)
+          const cpu = parseFloat((Math.random() * 60 + 20).toFixed(2))
+          const memUsage = Math.floor((2.5 + Math.random() * 0.8) * 1024 * 1024 * 1024)
+          const netRxDelta = Math.floor((60 + Math.random() * 60) * 1024)
+          const netTxDelta = Math.floor((6 + Math.random() * 8) * 1024)
+          const blkRDelta = Math.floor((400 + Math.random() * 400) * 1024)
+          const blkWDelta = Math.floor((15 + Math.random() * 35) * 1024)
+          state.containerMetrics.unshift({
+            deployment_id: dep.id,
+            collected_at: Math.floor(Date.now() / 1000),
+            cpu_percent: cpu,
+            mem_usage_bytes: memUsage,
+            mem_limit_bytes: MEM_LIMIT,
+            net_rx_bytes: (prev?.net_rx_bytes ?? 0) + netRxDelta,
+            net_tx_bytes: (prev?.net_tx_bytes ?? 0) + netTxDelta,
+            block_read_bytes: (prev?.block_read_bytes ?? 0) + blkRDelta,
+            block_write_bytes: (prev?.block_write_bytes ?? 0) + blkWDelta,
+          })
+          setTimeout(addSample, 30_000)
+        }
+        addSample()
       }, 5000)
       return dep
     }),
@@ -623,6 +704,19 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
     // ---------- /api/projects/:id/deployments ----------
     defineRoute('GET', '/api/projects/:id/deployments', ({ params }) => {
       return state.deployments.filter((d) => d.project_id === params.id)
+    }),
+
+    // ---------- /api/projects/:id/metrics ----------
+    defineRoute('GET', '/api/projects/:id/metrics', ({ params, searchParams }) => {
+      // 找到该 project 当前 running deployment 的 id
+      const running = state.deployments.find(
+        (d) => d.project_id === params.id && d.status === 'running',
+      )
+      if (!running) return []
+      const limit = Math.min(1440, Math.max(1, parseInt(searchParams.get('limit') ?? '60', 10) || 60))
+      return state.containerMetrics
+        .filter((m) => m.deployment_id === running.id)
+        .slice(0, limit)
     }),
 
     // ---------- /api/datasets ----------
@@ -686,6 +780,24 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
 
     // ---------- /api/nodes ----------
     defineRoute('GET', '/api/nodes', () => state.nodes),
+
+    defineRoute('GET', '/api/nodes/:id/metrics', ({ params }) => {
+      const node = state.nodes.find(n => n.id === params.id)
+      if (!node) return null
+      const now = Math.floor(Date.now() / 1000)
+      return {
+        node_id: node.id,
+        collected_at: now - 15,
+        cpu_percent: 30 + Math.random() * 40,
+        mem_total_bytes: 32 * 1024 * 1024 * 1024,
+        mem_used_bytes: Math.floor((8 + Math.random() * 16) * 1024 * 1024 * 1024),
+        disk_total_bytes: node.max_storage_bytes,
+        disk_used_bytes: node.used_storage_bytes,
+        load1: 0.5 + Math.random() * 2,
+        load5: 0.4 + Math.random() * 1.5,
+        load15: 0.3 + Math.random() * 1,
+      }
+    }),
   ]
 }
 

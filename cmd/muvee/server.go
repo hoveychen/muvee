@@ -58,13 +58,21 @@ func runServer() {
 		registryAddr = "localhost:5000"
 	}
 
+	volumeNFSBasePath := os.Getenv("VOLUME_NFS_BASE_PATH")
+	if volumeNFSBasePath != "" {
+		log.Printf("Workspace volume base path: %s", volumeNFSBasePath)
+	} else {
+		log.Println("Warning: VOLUME_NFS_BASE_PATH is not set; project workspace volumes are disabled")
+	}
+
 	srv := api.NewServer(st, authSvc, sched, mon, api.ServerConfig{
-		BaseDomain:       baseDomain,
-		AuthServiceURL:   authServiceURL,
-		AgentSecret:      agentSecret,
-		RegistryAddr:     registryAddr,
-		RegistryUser:     os.Getenv("REGISTRY_USER"),
-		RegistryPassword: os.Getenv("REGISTRY_PASSWORD"),
+		BaseDomain:        baseDomain,
+		AuthServiceURL:    authServiceURL,
+		AgentSecret:       agentSecret,
+		RegistryAddr:      registryAddr,
+		RegistryUser:      os.Getenv("REGISTRY_USER"),
+		RegistryPassword:  os.Getenv("REGISTRY_PASSWORD"),
+		VolumeNFSBasePath: volumeNFSBasePath,
 	})
 	handler := mountFrontend(srv.Router())
 

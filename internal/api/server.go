@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,26 +23,28 @@ import (
 )
 
 type Server struct {
-	store            *store.Store
-	auth             *auth.Service
-	sched            *scheduler.Scheduler
-	monitor          *monitor.Monitor
-	baseDomain       string
-	authServiceURL   string // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
-	agentSecret      string // shared secret for agent ↔ server authentication
-	registryAddr     string // address of the Docker registry distributed to agents
-	registryUser     string // registry basic-auth username distributed to agents
-	registryPassword string // registry basic-auth password distributed to agents
-	cliPending       sync.Map // state -> cli_port (string)
+	store              *store.Store
+	auth               *auth.Service
+	sched              *scheduler.Scheduler
+	monitor            *monitor.Monitor
+	baseDomain         string
+	authServiceURL     string // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
+	agentSecret        string // shared secret for agent ↔ server authentication
+	registryAddr       string // address of the Docker registry distributed to agents
+	registryUser       string // registry basic-auth username distributed to agents
+	registryPassword   string // registry basic-auth password distributed to agents
+	volumeNFSBasePath  string // base NFS path for project workspace volumes
+	cliPending         sync.Map // state -> cli_port (string)
 }
 
 type ServerConfig struct {
-	BaseDomain       string
-	AuthServiceURL   string
-	AgentSecret      string
-	RegistryAddr     string
-	RegistryUser     string
-	RegistryPassword string
+	BaseDomain        string
+	AuthServiceURL    string
+	AgentSecret       string
+	RegistryAddr      string
+	RegistryUser      string
+	RegistryPassword  string
+	VolumeNFSBasePath string
 }
 
 func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Scheduler, mon *monitor.Monitor, cfg ServerConfig) *Server {
@@ -47,16 +52,17 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		cfg.AuthServiceURL = "http://muvee-authservice:4181"
 	}
 	return &Server{
-		store:            st,
-		auth:             authSvc,
-		sched:            sched,
-		monitor:          mon,
-		baseDomain:       cfg.BaseDomain,
-		authServiceURL:   cfg.AuthServiceURL,
-		agentSecret:      cfg.AgentSecret,
-		registryAddr:     cfg.RegistryAddr,
-		registryUser:     cfg.RegistryUser,
-		registryPassword: cfg.RegistryPassword,
+		store:             st,
+		auth:              authSvc,
+		sched:             sched,
+		monitor:           mon,
+		baseDomain:        cfg.BaseDomain,
+		authServiceURL:    cfg.AuthServiceURL,
+		agentSecret:       cfg.AgentSecret,
+		registryAddr:      cfg.RegistryAddr,
+		registryUser:      cfg.RegistryUser,
+		registryPassword:  cfg.RegistryPassword,
+		volumeNFSBasePath: cfg.VolumeNFSBasePath,
 	}
 }
 
@@ -125,6 +131,11 @@ func (s *Server) Router() http.Handler {
 		r.Put("/api/projects/{id}/secrets", s.setProjectSecrets)
 		r.Post("/api/projects/{id}/deploy", s.triggerDeploy)
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
+		r.Get("/api/projects/{id}/metrics", s.getProjectMetrics)
+		r.Get("/api/projects/{id}/workspace", s.workspaceList)
+		r.Get("/api/projects/{id}/workspace/download", s.workspaceDownload)
+		r.Post("/api/projects/{id}/workspace/upload", s.workspaceUpload)
+		r.Delete("/api/projects/{id}/workspace", s.workspaceDelete)
 
 		// Datasets
 		r.Get("/api/datasets", s.listDatasets)
@@ -140,6 +151,7 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.AdminOnly)
 			r.Get("/api/nodes", s.listNodes)
+			r.Get("/api/nodes/{id}/metrics", s.getNodeMetrics)
 			r.Get("/api/users", s.listUsers)
 			r.Put("/api/users/{id}/role", s.setUserRole)
 		})
@@ -153,6 +165,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/agent/register", s.registerNode)
 		r.Get("/api/agent/config", s.handleAgentConfig)
 		r.Post("/api/agent/container-statuses", s.handleContainerStatuses)
+		r.Post("/api/agent/container-metrics", s.handleContainerMetrics)
+		r.Post("/api/agent/node-metrics", s.handleNodeMetrics)
 	})
 
 	return r
@@ -765,6 +779,32 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, nodes)
 }
 
+// getNodeMetrics returns the latest host-level metric sample for a node.
+func (s *Server) getNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	m, err := s.store.GetLatestNodeMetricByNodeID(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if m == nil {
+		jsonOK(w, nil)
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"node_id":          m.NodeID,
+		"collected_at":     m.CollectedAt.Unix(),
+		"cpu_percent":      m.CPUPercent,
+		"mem_total_bytes":  m.MemTotalBytes,
+		"mem_used_bytes":   m.MemUsedBytes,
+		"disk_total_bytes": m.DiskTotalBytes,
+		"disk_used_bytes":  m.DiskUsedBytes,
+		"load1":            m.Load1,
+		"load5":            m.Load5,
+		"load15":           m.Load15,
+	})
+}
+
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.store.ListUsers(r.Context())
 	if err != nil {
@@ -795,10 +835,11 @@ func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
 // with the control plane's own configuration (registry credentials, base domain, etc.).
 func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{
-		"registry_addr":     s.registryAddr,
-		"registry_user":     s.registryUser,
-		"registry_password": s.registryPassword,
-		"base_domain":       s.baseDomain,
+		"registry_addr":       s.registryAddr,
+		"registry_user":       s.registryUser,
+		"registry_password":   s.registryPassword,
+		"base_domain":         s.baseDomain,
+		"volume_nfs_base_path": s.volumeNFSBasePath,
 	})
 }
 
@@ -819,6 +860,124 @@ func (s *Server) handleContainerStatuses(w http.ResponseWriter, r *http.Request)
 		_ = s.store.UpdateDeploymentRuntimeStatus(r.Context(), s2.DomainPrefix, s2.RestartCount, s2.OOMKilled)
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// handleContainerMetrics receives a batch of resource metric samples from deploy agents
+// and persists them in the container_metrics table.
+func (s *Server) handleContainerMetrics(w http.ResponseWriter, r *http.Request) {
+	var reports []struct {
+		DomainPrefix    string  `json:"domain_prefix"`
+		CPUPercent      float64 `json:"cpu_percent"`
+		MemUsageBytes   int64   `json:"mem_usage_bytes"`
+		MemLimitBytes   int64   `json:"mem_limit_bytes"`
+		NetRxBytes      int64   `json:"net_rx_bytes"`
+		NetTxBytes      int64   `json:"net_tx_bytes"`
+		BlockReadBytes  int64   `json:"block_read_bytes"`
+		BlockWriteBytes int64   `json:"block_write_bytes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&reports); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	for _, rep := range reports {
+		m := &store.ContainerMetric{
+			CPUPercent:      rep.CPUPercent,
+			MemUsageBytes:   rep.MemUsageBytes,
+			MemLimitBytes:   rep.MemLimitBytes,
+			NetRxBytes:      rep.NetRxBytes,
+			NetTxBytes:      rep.NetTxBytes,
+			BlockReadBytes:  rep.BlockReadBytes,
+			BlockWriteBytes: rep.BlockWriteBytes,
+		}
+		_ = s.store.InsertContainerMetricByDomainPrefix(r.Context(), rep.DomainPrefix, m)
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// handleNodeMetrics receives a host-level resource metric sample from an agent and persists it.
+func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	var rep struct {
+		NodeID         string  `json:"node_id"`
+		CPUPercent     float64 `json:"cpu_percent"`
+		MemTotalBytes  int64   `json:"mem_total_bytes"`
+		MemUsedBytes   int64   `json:"mem_used_bytes"`
+		DiskTotalBytes int64   `json:"disk_total_bytes"`
+		DiskUsedBytes  int64   `json:"disk_used_bytes"`
+		Load1          float64 `json:"load1"`
+		Load5          float64 `json:"load5"`
+		Load15         float64 `json:"load15"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	nodeID, err := uuid.Parse(rep.NodeID)
+	if err != nil {
+		jsonErr(w, fmt.Errorf("invalid node_id"), 400)
+		return
+	}
+	m := &store.NodeMetric{
+		NodeID:         nodeID,
+		CPUPercent:     rep.CPUPercent,
+		MemTotalBytes:  rep.MemTotalBytes,
+		MemUsedBytes:   rep.MemUsedBytes,
+		DiskTotalBytes: rep.DiskTotalBytes,
+		DiskUsedBytes:  rep.DiskUsedBytes,
+		Load1:          rep.Load1,
+		Load5:          rep.Load5,
+		Load15:         rep.Load15,
+	}
+	_ = s.store.InsertNodeMetric(r.Context(), m)
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// getProjectMetrics returns recent container metric samples for a project's running deployment.
+// Query param: limit (default 60, max 1440).
+func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	limit := 60
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &limit); n == 1 && err == nil {
+			if limit > 1440 {
+				limit = 1440
+			}
+			if limit < 1 {
+				limit = 1
+			}
+		}
+	}
+	metrics, err := s.store.GetContainerMetricsForProject(r.Context(), id, limit)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	// Return epoch timestamps for frontend compatibility.
+	type metricOut struct {
+		DeploymentID    string  `json:"deployment_id"`
+		CollectedAt     int64   `json:"collected_at"`
+		CPUPercent      float64 `json:"cpu_percent"`
+		MemUsageBytes   int64   `json:"mem_usage_bytes"`
+		MemLimitBytes   int64   `json:"mem_limit_bytes"`
+		NetRxBytes      int64   `json:"net_rx_bytes"`
+		NetTxBytes      int64   `json:"net_tx_bytes"`
+		BlockReadBytes  int64   `json:"block_read_bytes"`
+		BlockWriteBytes int64   `json:"block_write_bytes"`
+	}
+	out := make([]metricOut, 0, len(metrics))
+	for _, m := range metrics {
+		out = append(out, metricOut{
+			DeploymentID:    m.DeploymentID.String(),
+			CollectedAt:     m.CollectedAt.Unix(),
+			CPUPercent:      m.CPUPercent,
+			MemUsageBytes:   m.MemUsageBytes,
+			MemLimitBytes:   m.MemLimitBytes,
+			NetRxBytes:      m.NetRxBytes,
+			NetTxBytes:      m.NetTxBytes,
+			BlockReadBytes:  m.BlockReadBytes,
+			BlockWriteBytes: m.BlockWriteBytes,
+		})
+	}
+	jsonOK(w, out)
 }
 
 func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
@@ -1167,6 +1326,212 @@ func (s *Server) setProjectSecrets(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err := s.store.SetProjectSecrets(r.Context(), projectID, bindings); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// ─── Workspace File Management ────────────────────────────────────────────────
+
+// workspaceDir returns the host-side NFS directory for a project's volume.
+// Returns an error if VOLUME_NFS_BASE_PATH is not configured.
+func (s *Server) workspaceDir(projectID uuid.UUID) (string, error) {
+	if s.volumeNFSBasePath == "" {
+		return "", fmt.Errorf("VOLUME_NFS_BASE_PATH is not configured on this server")
+	}
+	return filepath.Join(s.volumeNFSBasePath, projectID.String()), nil
+}
+
+// workspaceSafePath joins base and subPath while preventing path traversal.
+func workspaceSafePath(base, subPath string) (string, error) {
+	joined := filepath.Join(base, filepath.Clean("/"+subPath))
+	if !strings.HasPrefix(joined, base) {
+		return "", fmt.Errorf("path traversal detected")
+	}
+	return joined, nil
+}
+
+type workspaceEntry struct {
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	IsDir   bool   `json:"is_dir"`
+	ModTime int64  `json:"mod_time"`
+}
+
+// workspaceList lists files in a workspace directory.
+// GET /api/projects/{id}/workspace?path=<subdir>
+func (s *Server) workspaceList(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !ok {
+		jsonErr(w, nil, 404)
+		return
+	}
+	base, err := s.workspaceDir(projectID)
+	if err != nil {
+		jsonErr(w, err, 503)
+		return
+	}
+	subPath := r.URL.Query().Get("path")
+	dir, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		jsonOK(w, []workspaceEntry{})
+		return
+	}
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	result := make([]workspaceEntry, 0, len(entries))
+	for _, e := range entries {
+		info, _ := e.Info()
+		var size int64
+		var modTime int64
+		if info != nil {
+			size = info.Size()
+			modTime = info.ModTime().Unix()
+		}
+		result = append(result, workspaceEntry{
+			Name:    e.Name(),
+			Size:    size,
+			IsDir:   e.IsDir(),
+			ModTime: modTime,
+		})
+	}
+	jsonOK(w, result)
+}
+
+// workspaceDownload streams a single file to the client.
+// GET /api/projects/{id}/workspace/download?path=<file>
+func (s *Server) workspaceDownload(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !ok {
+		jsonErr(w, nil, 404)
+		return
+	}
+	base, err := s.workspaceDir(projectID)
+	if err != nil {
+		jsonErr(w, err, 503)
+		return
+	}
+	subPath := r.URL.Query().Get("path")
+	if subPath == "" {
+		jsonErr(w, fmt.Errorf("path is required"), 400)
+		return
+	}
+	filePath, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	f, err := os.Open(filePath)
+	if os.IsNotExist(err) {
+		jsonErr(w, fmt.Errorf("file not found"), 404)
+		return
+	}
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	defer f.Close()
+	info, _ := f.Stat()
+	if info != nil && info.IsDir() {
+		jsonErr(w, fmt.Errorf("path is a directory"), 400)
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(filePath))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = io.Copy(w, f)
+}
+
+// workspaceUpload saves an uploaded file into the workspace.
+// POST /api/projects/{id}/workspace/upload?path=<subdir>
+func (s *Server) workspaceUpload(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !ok {
+		jsonErr(w, nil, 403)
+		return
+	}
+	base, err := s.workspaceDir(projectID)
+	if err != nil {
+		jsonErr(w, err, 503)
+		return
+	}
+	if err := r.ParseMultipartForm(256 << 20); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	defer file.Close()
+	subPath := r.URL.Query().Get("path")
+	destDir, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	destPath := filepath.Join(destDir, filepath.Base(header.Filename))
+	out, err := os.Create(destPath)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, file); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok", "path": strings.TrimPrefix(destPath, base)})
+}
+
+// workspaceDelete removes a file or directory from the workspace.
+// DELETE /api/projects/{id}/workspace?path=<path>
+func (s *Server) workspaceDelete(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !ok {
+		jsonErr(w, nil, 403)
+		return
+	}
+	base, err := s.workspaceDir(projectID)
+	if err != nil {
+		jsonErr(w, err, 503)
+		return
+	}
+	subPath := r.URL.Query().Get("path")
+	if subPath == "" {
+		jsonErr(w, fmt.Errorf("path is required"), 400)
+		return
+	}
+	target, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if target == base {
+		jsonErr(w, fmt.Errorf("cannot delete the workspace root"), 400)
+		return
+	}
+	if err := os.RemoveAll(target); err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
