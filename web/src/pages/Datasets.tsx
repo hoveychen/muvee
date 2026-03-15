@@ -4,6 +4,7 @@ import { PlusCircle, Scan, Trash2, ChevronRight, FileText, FolderOpen } from 'lu
 import { api } from '../lib/api'
 import type { Dataset, DatasetSnapshot, FileHistory } from '../lib/types'
 import { formatBytes, timeAgo } from '../lib/utils'
+import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
@@ -14,6 +15,7 @@ export default function Datasets() {
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Dataset | null>(null)
   const [view, setView] = useState<View>('list')
+  const { t } = useTranslation()
 
   useEffect(() => {
     api.datasets.list().then(setDatasets).finally(() => setLoading(false))
@@ -26,7 +28,7 @@ export default function Datasets() {
 
   const handleDelete = async (ds: Dataset, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!confirm(`Delete dataset "${ds.name}"?`)) return
+    if (!confirm(t('datasets.deleteConfirm', { name: ds.name }))) return
     await api.datasets.delete(ds.id)
     setDatasets(prev => prev.filter(d => d.id !== ds.id))
   }
@@ -44,31 +46,38 @@ export default function Datasets() {
     <div className="page-enter">
       <div className="flex items-end justify-between mb-8">
         <div>
-          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>DATA WAREHOUSE</p>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>Datasets</h1>
+          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>{t('datasets.sectionLabel')}</p>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>{t('datasets.heading')}</h1>
         </div>
         <Link
           to="/datasets/new"
           className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm"
           style={{ background: 'var(--accent)', color: '#ffffff', fontWeight: 500, textDecoration: 'none' }}
         >
-          <PlusCircle size={14} /> New Dataset
+          <PlusCircle size={14} /> {t('datasets.newDataset')}
         </Link>
       </div>
 
       {loading ? (
-        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>Loading...</div>
+        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>{t('datasets.loading')}</div>
       ) : datasets.length === 0 ? (
         <div className="py-16 text-center">
-          <div style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--border)' }}>No datasets</div>
-          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem', marginTop: '0.5rem' }}>Register an NFS path to start tracking</p>
+          <div style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--border)' }}>{t('datasets.empty')}</div>
+          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{t('datasets.emptyHint')}</p>
         </div>
       ) : (
         <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
           <table className="w-full border-collapse">
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-                {['NAME', 'NFS PATH', 'SIZE', 'VERSION', 'UPDATED', ''].map(h => (
+                {[
+                  t('datasets.columns.name'),
+                  t('datasets.columns.nfsPath'),
+                  t('datasets.columns.size'),
+                  t('datasets.columns.version'),
+                  t('datasets.columns.updated'),
+                  '',
+                ].map(h => (
                   <th key={h} style={{
                     fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)',
                     letterSpacing: '0.08em', padding: '0.6rem 1rem', textAlign: 'left', fontWeight: 500,
@@ -114,7 +123,7 @@ export default function Datasets() {
                     <div className="flex items-center gap-1 justify-end">
                       <button
                         onClick={e => handleScan(ds, e)}
-                        title="Trigger scan"
+                        title={t('datasets.triggerScan')}
                         className="p-1.5 rounded-md transition-colors"
                         style={{ background: 'none', border: 'none', color: 'var(--fg-muted)', cursor: 'pointer' }}
                         onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)' }}
@@ -149,6 +158,7 @@ function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => vo
   const [history, setHistory] = useState<FileHistory[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [fileHistory, setFileHistory] = useState<FileHistory[]>([])
+  const { t } = useTranslation()
 
   useEffect(() => {
     api.datasets.snapshots(dataset.id).then(setSnapshots)
@@ -172,7 +182,7 @@ function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => vo
         onClick={onBack}
         style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '4px' }}
       >
-        ← Back to Datasets
+        {t('datasets.backToDatasets')}
       </button>
 
       <div className="flex items-start justify-between mb-8">
@@ -189,12 +199,12 @@ function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => vo
       {/* Snapshot history */}
       {snapshots.length > 0 && (
         <div className="mb-8">
-          <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.75rem' }}>SCAN HISTORY</p>
+          <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.75rem' }}>{t('datasets.scanHistory')}</p>
           <div className="flex gap-2 overflow-x-auto pb-2">
             {snapshots.slice(0, 10).map(snap => (
               <div key={snap.id} className="flex-shrink-0 px-3 py-2 rounded-md" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', minWidth: '130px' }}>
                 <div style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--accent)' }}>v{snap.version}</div>
-                <div style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', marginTop: '2px' }}>{snap.total_files.toLocaleString()} files</div>
+                <div style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', marginTop: '2px' }}>{snap.total_files.toLocaleString()} {t('datasets.files')}</div>
                 <div style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>{timeAgo(snap.scanned_at)}</div>
               </div>
             ))}
@@ -207,7 +217,7 @@ function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => vo
         {/* File tree */}
         <div className="w-1/3 overflow-y-auto" style={{ background: 'var(--bg-card)' }}>
           <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)', fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
-            FILES ({files.length})
+            {t('datasets.filesHeader')} ({files.length})
           </div>
           {files.map(path => (
             <button
@@ -231,7 +241,7 @@ function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => vo
           {files.length === 0 && (
             <div className="py-8 text-center" style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>
               <FolderOpen size={24} style={{ margin: '0 auto 0.5rem' }} />
-              No history yet
+              {t('datasets.noHistory')}
             </div>
           )}
         </div>
@@ -239,11 +249,11 @@ function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => vo
         {/* History timeline */}
         <div className="flex-1 overflow-y-auto" style={{ background: 'var(--bg-card)', borderLeft: '1px solid var(--border)' }}>
           <div className="px-5 py-3" style={{ borderBottom: '1px solid var(--border)', fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
-            {selectedFile ? `HISTORY: ${selectedFile}` : 'ALL CHANGES'}
+            {selectedFile ? t('datasets.fileHistory', { file: selectedFile }) : t('datasets.allChanges')}
           </div>
           {(selectedFile ? fileHistory : history).length === 0 ? (
             <div className="py-12 text-center" style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>
-              {selectedFile ? 'No history for this file' : 'No changes recorded yet'}
+              {selectedFile ? t('datasets.noFileHistory') : t('datasets.noChanges')}
             </div>
           ) : (
             <div className="relative">

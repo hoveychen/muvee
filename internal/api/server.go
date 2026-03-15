@@ -152,6 +152,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/agent/tasks/{id}/complete", s.completeTask)
 		r.Post("/api/agent/register", s.registerNode)
 		r.Get("/api/agent/config", s.handleAgentConfig)
+		r.Post("/api/agent/container-statuses", s.handleContainerStatuses)
 	})
 
 	return r
@@ -801,6 +802,25 @@ func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleContainerStatuses receives a batch of container runtime statuses from deploy agents
+// and updates the restart_count / oom_killed fields on the currently running deployment
+// for each reported container (identified by domain_prefix).
+func (s *Server) handleContainerStatuses(w http.ResponseWriter, r *http.Request) {
+	var statuses []struct {
+		DomainPrefix string `json:"domain_prefix"`
+		RestartCount int    `json:"restart_count"`
+		OOMKilled    bool   `json:"oom_killed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&statuses); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	for _, s2 := range statuses {
+		_ = s.store.UpdateDeploymentRuntimeStatus(r.Context(), s2.DomainPrefix, s2.RestartCount, s2.OOMKilled)
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 	var n store.Node
 	if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
@@ -863,9 +883,19 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 	case store.TaskTypeDeploy:
 		if body.HostPort > 0 {
 			_ = s.store.SetDeploymentHostPort(r.Context(), task.DeploymentID, body.HostPort)
-			// Retire previous running deployments for the same project
+			// Retire previous running deployments for the same project.
+			// For any retired deployment that ran on a different node, dispatch a cleanup
+			// task so the stale container is removed from that node.
 			if dep, err := s.store.GetDeployment(r.Context(), task.DeploymentID); err == nil && dep != nil {
-				_ = s.store.StopProjectDeployments(r.Context(), dep.ProjectID, task.DeploymentID)
+				if project, err := s.store.GetProject(r.Context(), dep.ProjectID); err == nil && project != nil {
+					if stopped, err := s.store.StopProjectDeployments(r.Context(), dep.ProjectID, task.DeploymentID); err == nil {
+						for _, old := range stopped {
+							if old.NodeID != nil && task.NodeID != nil && *old.NodeID != *task.NodeID {
+								_ = s.sched.DispatchCleanup(r.Context(), *old.NodeID, old, project.DomainPrefix)
+							}
+						}
+					}
+				}
 			}
 		} else {
 			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusFailed, "deploy completed but no host_port reported")

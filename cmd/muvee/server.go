@@ -69,6 +69,7 @@ func runServer() {
 	handler := mountFrontend(srv.Router())
 
 	go processBuildCompletions(ctx, st, sched)
+	go processNodeFailovers(ctx, st, sched)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -93,6 +94,74 @@ func mountFrontend(apiHandler http.Handler) http.Handler {
 		}
 		frontend.ServeHTTP(w, r)
 	})
+}
+
+// processNodeFailovers periodically detects dead deploy nodes and re-dispatches
+// their running deployments onto healthy nodes.
+func processNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.Scheduler) {
+	const deadNodeThreshold = 3 * time.Minute
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			checkNodeFailovers(ctx, st, sched, deadNodeThreshold)
+		}
+	}
+}
+
+func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.Scheduler, threshold time.Duration) {
+	nodes, err := st.ListNodes(ctx)
+	if err != nil {
+		return
+	}
+	for _, node := range nodes {
+		if node.Role != store.NodeRoleDeploy {
+			continue
+		}
+		if time.Since(node.LastSeenAt) < threshold {
+			continue
+		}
+		// Node is considered dead. Evict all its running deployments.
+		deps, err := st.GetRunningDeploymentsByNode(ctx, node.ID)
+		if err != nil || len(deps) == 0 {
+			continue
+		}
+		log.Printf("Node %s (%s) has been offline for %s; evicting %d deployment(s)",
+			node.Hostname, node.ID, time.Since(node.LastSeenAt).Round(time.Second), len(deps))
+		for _, dep := range deps {
+			project, err := st.GetProject(ctx, dep.ProjectID)
+			if err != nil || project == nil {
+				continue
+			}
+			if dep.ImageTag == "" {
+				log.Printf("Skipping eviction of deployment %s: no image tag", dep.ID)
+				continue
+			}
+			// Mark old deployment as stopped before creating the replacement.
+			_ = st.UpdateDeploymentStatus(ctx, dep.ID, store.DeploymentStatusStopped,
+				fmt.Sprintf("evicted: node %s (%s) offline", node.Hostname, node.ID))
+
+			newDep, err := st.CreateDeployment(ctx, &store.Deployment{
+				ProjectID: dep.ProjectID,
+				ImageTag:  dep.ImageTag,
+				CommitSHA: dep.CommitSHA,
+			})
+			if err != nil {
+				log.Printf("Failed to create replacement deployment for project %s: %v", project.Name, err)
+				continue
+			}
+			_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusDeploying, "")
+			if err := sched.DispatchDeploy(ctx, newDep, project, newDep.ImageTag); err != nil {
+				log.Printf("Failed to dispatch failover deploy for project %s: %v", project.Name, err)
+				_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusFailed, err.Error())
+			} else {
+				log.Printf("Failover deployment %s dispatched for project %s", newDep.ID, project.Name)
+			}
+		}
+	}
 }
 
 // processBuildCompletions polls for completed build tasks and dispatches deploy tasks.

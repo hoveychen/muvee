@@ -87,10 +87,13 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 	if p.ContainerPort == 0 {
 		p.ContainerPort = 8080
 	}
+	if p.MemoryLimit == "" {
+		p.MemoryLimit = "4g"
+	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO projects (id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-	`, p.ID, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.CreatedAt, p.UpdatedAt)
+		INSERT INTO projects (id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+	`, p.ID, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -101,9 +104,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 func (s *Store) GetProject(ctx context.Context, id uuid.UUID) (*Project, error) {
 	var p Project
 	err := s.db.QueryRow(ctx, `
-		SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, created_at, updated_at
+		SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, created_at, updated_at
 		FROM projects WHERE id = $1
-	`, id).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.CreatedAt, &p.UpdatedAt)
+	`, id).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.CreatedAt, &p.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -114,9 +117,9 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	var query string
 	var args []interface{}
 	if isAdmin {
-		query = `SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, created_at, updated_at FROM projects ORDER BY created_at DESC`
+		query = `SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, created_at, updated_at FROM projects ORDER BY created_at DESC`
 	} else {
-		query = `SELECT p.id, p.name, p.git_url, p.git_branch, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.container_port, p.created_at, p.updated_at
+		query = `SELECT p.id, p.name, p.git_url, p.git_branch, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.container_port, p.memory_limit, p.created_at, p.updated_at
 			FROM projects p JOIN project_members pm ON p.id = pm.project_id WHERE pm.user_id = $1 ORDER BY p.created_at DESC`
 		args = []interface{}{userID}
 	}
@@ -128,7 +131,7 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	projects := make([]*Project, 0)
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, &p)
@@ -142,8 +145,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		p.ContainerPort = 8080
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, domain_prefix=$4, dockerfile_path=$5, auth_required=$6, auth_allowed_domains=$7, container_port=$8, updated_at=$9 WHERE id=$10
-	`, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.UpdatedAt, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, domain_prefix=$4, dockerfile_path=$5, auth_required=$6, auth_allowed_domains=$7, container_port=$8, memory_limit=$9, updated_at=$10 WHERE id=$11
+	`, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.UpdatedAt, p.ID)
 	return err
 }
 
@@ -288,17 +291,17 @@ func (s *Store) CreateDeployment(ctx context.Context, d *Deployment) (*Deploymen
 	d.CreatedAt = time.Now()
 	d.UpdatedAt = time.Now()
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO deployments (id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, d.ID, d.ProjectID, d.ImageTag, d.CommitSHA, d.Status, d.NodeID, d.HostPort, d.Logs, d.CreatedAt, d.UpdatedAt)
+		INSERT INTO deployments (id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, restart_count, oom_killed, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+	`, d.ID, d.ProjectID, d.ImageTag, d.CommitSHA, d.Status, d.NodeID, d.HostPort, d.Logs, d.RestartCount, d.OOMKilled, d.CreatedAt, d.UpdatedAt)
 	return d, err
 }
 
 func (s *Store) GetDeployment(ctx context.Context, id uuid.UUID) (*Deployment, error) {
 	var d Deployment
 	err := s.db.QueryRow(ctx, `
-		SELECT id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, created_at, updated_at FROM deployments WHERE id = $1
-	`, id).Scan(&d.ID, &d.ProjectID, &d.ImageTag, &d.CommitSHA, &d.Status, &d.NodeID, &d.HostPort, &d.Logs, &d.CreatedAt, &d.UpdatedAt)
+		SELECT id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, restart_count, oom_killed, created_at, updated_at FROM deployments WHERE id = $1
+	`, id).Scan(&d.ID, &d.ProjectID, &d.ImageTag, &d.CommitSHA, &d.Status, &d.NodeID, &d.HostPort, &d.Logs, &d.RestartCount, &d.OOMKilled, &d.CreatedAt, &d.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -307,7 +310,7 @@ func (s *Store) GetDeployment(ctx context.Context, id uuid.UUID) (*Deployment, e
 
 func (s *Store) ListDeployments(ctx context.Context, projectID uuid.UUID) ([]*Deployment, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, created_at, updated_at FROM deployments WHERE project_id = $1 ORDER BY created_at DESC LIMIT 50
+		SELECT id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, restart_count, oom_killed, created_at, updated_at FROM deployments WHERE project_id = $1 ORDER BY created_at DESC LIMIT 50
 	`, projectID)
 	if err != nil {
 		return nil, err
@@ -316,7 +319,7 @@ func (s *Store) ListDeployments(ctx context.Context, projectID uuid.UUID) ([]*De
 	deployments := make([]*Deployment, 0)
 	for rows.Next() {
 		var d Deployment
-		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ImageTag, &d.CommitSHA, &d.Status, &d.NodeID, &d.HostPort, &d.Logs, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ImageTag, &d.CommitSHA, &d.Status, &d.NodeID, &d.HostPort, &d.Logs, &d.RestartCount, &d.OOMKilled, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		deployments = append(deployments, &d)
@@ -333,11 +336,64 @@ func (s *Store) SetDeploymentHostPort(ctx context.Context, id uuid.UUID, hostPor
 }
 
 // StopProjectDeployments marks all running deployments for a project as stopped, except the given one.
-func (s *Store) StopProjectDeployments(ctx context.Context, projectID, exceptID uuid.UUID) error {
-	_, err := s.db.Exec(ctx, `
+// Returns the list of deployments that were stopped (useful for dispatching cross-node cleanup tasks).
+func (s *Store) StopProjectDeployments(ctx context.Context, projectID, exceptID uuid.UUID) ([]*Deployment, error) {
+	rows, err := s.db.Query(ctx, `
 		UPDATE deployments SET status='stopped', updated_at=NOW()
 		WHERE project_id=$1 AND id != $2 AND status='running'
+		RETURNING id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, restart_count, oom_killed, created_at, updated_at
 	`, projectID, exceptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var stopped []*Deployment
+	for rows.Next() {
+		var d Deployment
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ImageTag, &d.CommitSHA, &d.Status, &d.NodeID, &d.HostPort, &d.Logs, &d.RestartCount, &d.OOMKilled, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		stopped = append(stopped, &d)
+	}
+	return stopped, nil
+}
+
+// GetRunningDeploymentsByNode returns all running deployments assigned to a specific node.
+func (s *Store) GetRunningDeploymentsByNode(ctx context.Context, nodeID uuid.UUID) ([]*Deployment, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, project_id, image_tag, commit_sha, status, node_id, host_port, logs, restart_count, oom_killed, created_at, updated_at
+		FROM deployments WHERE node_id=$1 AND status='running'
+	`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deps []*Deployment
+	for rows.Next() {
+		var d Deployment
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ImageTag, &d.CommitSHA, &d.Status, &d.NodeID, &d.HostPort, &d.Logs, &d.RestartCount, &d.OOMKilled, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		deps = append(deps, &d)
+	}
+	return deps, nil
+}
+
+// UpdateDeploymentRuntimeStatus updates the restart count and OOM-killed flag for the
+// currently running deployment of a project identified by domain prefix.
+// restart_count is updated to the maximum of the stored and reported value (monotonically increasing).
+// oom_killed is sticky: once true it stays true.
+func (s *Store) UpdateDeploymentRuntimeStatus(ctx context.Context, domainPrefix string, restartCount int, oomKilled bool) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE deployments d
+		SET restart_count = GREATEST(d.restart_count, $1),
+		    oom_killed    = d.oom_killed OR $2,
+		    updated_at    = NOW()
+		FROM projects p
+		WHERE d.project_id = p.id
+		  AND p.domain_prefix = $3
+		  AND d.status = 'running'
+	`, restartCount, oomKilled, domainPrefix)
 	return err
 }
 

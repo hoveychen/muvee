@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { useTranslation } from 'react-i18next'
 
 const MONO = 'DM Mono'
 
@@ -38,6 +39,7 @@ export default function NewDataset() {
   const [nfsPath, setNfsPath] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const { t } = useTranslation()
 
   const canSubmit = name.trim() !== '' && nfsPath.trim() !== ''
 
@@ -51,7 +53,7 @@ export default function NewDataset() {
       navigate('/datasets')
       void dataset
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create dataset')
+      setError(err instanceof Error ? err.message : t('newDataset.failed'))
     } finally {
       setSubmitting(false)
     }
@@ -60,15 +62,15 @@ export default function NewDataset() {
   return (
     <div className="page-enter" style={{ maxWidth: '560px' }}>
       <div style={{ marginBottom: '2rem' }}>
-        <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>DATA WAREHOUSE</p>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>New Dataset</h1>
+        <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>{t('newDataset.sectionLabel')}</p>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>{t('newDataset.heading')}</h1>
       </div>
 
       <form onSubmit={handleSubmit}>
         <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', background: 'var(--bg-card)' }}>
           <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border)' }}>
             <div style={{ marginBottom: '1.25rem' }}>
-              <label style={labelStyle}>NAME</label>
+              <label style={labelStyle}>{t('newDataset.name')}</label>
               <input
                 style={inputStyle}
                 value={name}
@@ -81,7 +83,7 @@ export default function NewDataset() {
             </div>
 
             <div>
-              <label style={labelStyle}>NFS PATH</label>
+              <label style={labelStyle}>{t('newDataset.nfsPath')}</label>
               <input
                 style={inputStyle}
                 value={nfsPath}
@@ -91,7 +93,7 @@ export default function NewDataset() {
                 placeholder="/mnt/nfs/data"
               />
               <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', marginTop: '0.4rem' }}>
-                挂载到节点上的 NFS 绝对路径
+                {t('newDataset.nfsPathHint')}
               </p>
             </div>
           </div>
@@ -111,7 +113,7 @@ export default function NewDataset() {
                 background: 'none', border: 'none', cursor: 'pointer', padding: '0.4rem 0.75rem',
               }}
             >
-              取消
+              {t('newDataset.cancel')}
             </button>
             <button
               type="submit"
@@ -124,7 +126,7 @@ export default function NewDataset() {
                 padding: '0.5rem 1.25rem', transition: 'background 150ms',
               }}
             >
-              {submitting ? '创建中...' : '创建 Dataset'}
+              {submitting ? t('newDataset.creating') : t('newDataset.create')}
             </button>
           </div>
         </div>

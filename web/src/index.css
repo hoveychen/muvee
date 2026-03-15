@@ -15,6 +15,17 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+[data-theme="light"] {
+  --bg-base: #ffffff;
+  --bg-card: #f6f8fa;
+  --bg-hover: #eaeef2;
+  --fg-primary: #1f2328;
+  --fg-muted: #636c76;
+  --accent: #0969da;
+  --danger: #cf222e;
+  --border: #d0d7de;
+}
+
 * {
   box-sizing: border-box;
 }

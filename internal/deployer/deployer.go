@@ -25,6 +25,9 @@ type Config struct {
 	RegistryAddr  string
 	// EnvVars are injected into the container as environment variables.
 	EnvVars map[string]string
+	// MemoryLimit sets the Docker --memory flag (e.g. "4g", "512m").
+	// Empty string means no limit.
+	MemoryLimit string
 }
 
 type DatasetSpec struct {
@@ -85,6 +88,10 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 		"--name", oldContainer,
 		"--restart", "unless-stopped",
 		"-p", fmt.Sprintf("0:%d", containerPort),
+	}
+	if cfg.MemoryLimit != "" {
+		dockerArgs = append(dockerArgs, "--memory", cfg.MemoryLimit)
+		dockerArgs = append(dockerArgs, "--memory-swap", cfg.MemoryLimit) // disable swap
 	}
 
 	for _, m := range allMounts {

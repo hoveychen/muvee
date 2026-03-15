@@ -1,29 +1,37 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Database, KeyRound, Server, Users, LogOut } from 'lucide-react'
+import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages } from 'lucide-react'
 import { useAuth } from '../lib/auth'
+import { useTheme } from '../lib/theme'
 import { api } from '../lib/api'
 import type { Node } from '../lib/types'
+import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
-
-const ALL_NAV_ITEMS = [
-  { to: '/projects', icon: LayoutGrid, label: 'Projects', adminOnly: false },
-  { to: '/datasets', icon: Database, label: 'Datasets', adminOnly: false },
-  { to: '/secrets', icon: KeyRound, label: 'Secrets', adminOnly: false },
-  { to: '/nodes', icon: Server, label: 'Nodes', adminOnly: true },
-  { to: '/users', icon: Users, label: 'Users', adminOnly: true },
-]
 
 export default function Layout({ children }: { children?: ReactNode }) {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const { theme, toggleTheme } = useTheme()
+  const { t, i18n } = useTranslation()
   const isAdmin = user?.role === 'admin'
+
+  const ALL_NAV_ITEMS = [
+    { to: '/projects', icon: LayoutGrid, label: t('nav.projects'), adminOnly: false },
+    { to: '/datasets', icon: Database, label: t('nav.datasets'), adminOnly: false },
+    { to: '/secrets', icon: KeyRound, label: t('nav.secrets'), adminOnly: false },
+    { to: '/nodes', icon: Server, label: t('nav.nodes'), adminOnly: true },
+    { to: '/users', icon: Users, label: t('nav.users'), adminOnly: true },
+  ]
   const navItems = ALL_NAV_ITEMS.filter(item => !item.adminOnly || isAdmin)
 
   const handleLogout = async () => {
     await fetch('/auth/logout', { method: 'POST', credentials: 'include' })
     navigate('/login')
+  }
+
+  const toggleLang = () => {
+    i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')
   }
 
   return (
@@ -47,7 +55,7 @@ export default function Layout({ children }: { children?: ReactNode }) {
               muvee
             </div>
             <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', marginTop: '1px' }}>
-              private cloud
+              {t('nav.privateCloud')}
             </div>
           </div>
         </div>
@@ -99,8 +107,26 @@ export default function Layout({ children }: { children?: ReactNode }) {
                 </div>
               </div>
               <button
+                onClick={toggleLang}
+                title={i18n.language === 'zh' ? t('nav.switchToEn') : t('nav.switchToZh')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '4px', borderRadius: '4px' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-primary)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)' }}
+              >
+                <Languages size={14} />
+              </button>
+              <button
+                onClick={toggleTheme}
+                title={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '4px', borderRadius: '4px' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-primary)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)' }}
+              >
+                {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+              </button>
+              <button
                 onClick={handleLogout}
-                title="Logout"
+                title={t('nav.logout')}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '4px', borderRadius: '4px' }}
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--danger)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)' }}
@@ -122,6 +148,7 @@ export default function Layout({ children }: { children?: ReactNode }) {
 
 export function NodesPage() {
   const [nodes, setNodes] = useState<Node[]>([])
+  const { t } = useTranslation()
   useEffect(() => { api.nodes.list().then(setNodes).catch(() => {}) }, [])
 
   const isOnline = (n: Node) => {
@@ -132,8 +159,8 @@ export function NodesPage() {
   return (
     <div className="page-enter">
       <div className="mb-8">
-        <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.05em' }}>INFRASTRUCTURE</p>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>Nodes</h1>
+        <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.05em' }}>{t('nodes.sectionLabel')}</p>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>{t('nodes.heading')}</h1>
       </div>
       <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
         {nodes.map((n, i) => {
@@ -144,7 +171,7 @@ export function NodesPage() {
               <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: online ? '#3fb950' : 'var(--fg-muted)', flexShrink: 0 }} className={online ? 'status-running' : ''} />
               <div className="flex-1">
                 <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{n.hostname}</div>
-                <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '2px' }}>{n.role} · {online ? 'online' : 'offline'}</div>
+                <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '2px' }}>{n.role} · {online ? t('nodes.online') : t('nodes.offline')}</div>
               </div>
               {n.role === 'deploy' && n.max_storage_bytes > 0 && (
                 <div className="w-32">
@@ -166,7 +193,7 @@ export function NodesPage() {
         })}
         {nodes.length === 0 && (
           <div className="py-10 text-center" style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem', background: 'var(--bg-card)' }}>
-            No nodes registered yet. Start an Agent to connect nodes.
+            {t('nodes.empty')}
           </div>
         )}
       </div>
@@ -177,6 +204,7 @@ export function NodesPage() {
 export function UsersPage() {
   const [users, setUsers] = useState<import('../lib/types').User[]>([])
   const { user: me } = useAuth()
+  const { t } = useTranslation()
   useEffect(() => { api.users.list().then(setUsers).catch(() => {}) }, [])
 
   const toggleRole = async (u: import('../lib/types').User) => {
@@ -188,14 +216,14 @@ export function UsersPage() {
   return (
     <div className="page-enter">
       <div className="mb-8">
-        <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.05em' }}>ACCESS CONTROL</p>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>Users</h1>
+        <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.05em' }}>{t('users.sectionLabel')}</p>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>{t('users.heading')}</h1>
       </div>
       <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
         <table className="w-full border-collapse">
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-              {['USER', 'EMAIL', 'ROLE', 'JOINED', ''].map(h => (
+              {[t('users.columns.user'), t('users.columns.email'), t('users.columns.role'), t('users.columns.joined'), ''].map(h => (
                 <th key={h} style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', padding: '0.6rem 1rem', textAlign: 'left', fontWeight: 500 }}>
                   {h}
                 </th>
@@ -246,7 +274,7 @@ export function UsersPage() {
                         cursor: 'pointer',
                       }}
                     >
-                      {u.role === 'admin' ? 'Make Member' : 'Make Admin'}
+                      {u.role === 'admin' ? t('users.makeMember') : t('users.makeAdmin')}
                     </button>
                   )}
                 </td>

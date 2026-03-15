@@ -1,0 +1,244 @@
+{
+  "nav": {
+    "projects": "项目",
+    "datasets": "数据集",
+    "secrets": "密钥",
+    "nodes": "节点",
+    "users": "用户",
+    "privateCloud": "私有云",
+    "logout": "退出登录",
+    "switchToLight": "切换到亮色模式",
+    "switchToDark": "切换到暗色模式",
+    "switchToZh": "切换到中文",
+    "switchToEn": "Switch to English"
+  },
+  "login": {
+    "tagline": "私有云平台",
+    "description": "容器部署。数据集管理。\n数据仓库监控。一站式解决。",
+    "feat1": "Git → Docker → 部署",
+    "feat2": "LRU 数据集缓存",
+    "feat3": "Traefik 路由",
+    "signIn": "登录",
+    "authorizedOnly": "仅限授权人员",
+    "continueWithGoogle": "使用 Google 继续",
+    "accessRestricted": "仅限授权域名访问"
+  },
+  "projects": {
+    "sectionLabel": "项目",
+    "heading": "全部项目",
+    "newProject": "新建项目",
+    "loading": "加载中...",
+    "noProjects": "暂无项目",
+    "noProjectsHint": "创建第一个项目以开始使用",
+    "developerAccess": "开发者访问",
+    "skillUrl": "Skill URL",
+    "claudeSkillUrl": "CLAUDE SKILL URL",
+    "skillUrlDesc": "将此 URL 分享给 Claude，使其学会代表你使用 muveectl CLI。",
+    "copyUrl": "复制链接",
+    "preview": "预览",
+    "copied": "已复制！",
+    "copy": "复制",
+    "status": {
+      "running": "运行中",
+      "building": "构建中",
+      "deploying": "部署中",
+      "failed": "失败",
+      "stopped": "已停止",
+      "pending": "空闲"
+    }
+  },
+  "projectDetail": {
+    "backToProjects": "返回项目列表",
+    "visit": "访问",
+    "triggering": "触发中...",
+    "deploy": "部署",
+    "tabs": {
+      "deployments": "部署记录",
+      "config": "配置",
+      "datasets": "数据集",
+      "secrets": "密钥"
+    },
+    "noDeployments": "暂无部署记录，点击「部署」按钮开始。",
+    "config": {
+      "projectName": "项目名称",
+      "gitUrl": "Git 地址",
+      "gitBranch": "Git 分支",
+      "domainPrefix": "域名前缀",
+      "dockerfilePath": "Dockerfile 路径",
+      "memoryLimit": "内存限制",
+      "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g",
+      "requireGoogleAuth": "启用 Google 身份验证",
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "allowedDomains": "允许的邮箱域名（逗号分隔）",
+      "domainOptional": "可选 — 留空时默认使用 \"{{name}}\"",
+      "domainRequired": "必填 — 项目名称不能用作子域名",
+      "saving": "保存中...",
+      "saveChanges": "保存修改",
+      "delete": "删除",
+      "deleteConfirm": "确认删除此项目？"
+    },
+    "datasets": {
+      "hint": "选择要挂载到容器中的数据集。<accent>dependency</accent> = rsync 复制（LRU 缓存）。<blue>readwrite</blue> = 直接 NFS 挂载。",
+      "empty": "暂无可用数据集，请先在数据集页面创建。"
+    },
+    "secrets": {
+      "hint": "绑定密钥，在下次部署时注入为环境变量。",
+      "saving": "保存中…",
+      "empty": "暂无密钥，请先在",
+      "emptyLink": "密钥",
+      "emptySuffix": "页面创建。",
+      "attach": "绑定",
+      "detach": "解绑",
+      "envVar": "环境变量名",
+      "username": "用户名",
+      "useForGitSsh": "用于 git clone（SSH）",
+      "useForGitHttps": "用于 git clone（HTTPS）",
+      "githubPat": "（GitHub PAT → x-access-token）",
+      "failedToUpdate": "更新密钥失败："
+    }
+  },
+  "datasets": {
+    "sectionLabel": "数据仓库",
+    "heading": "数据集",
+    "newDataset": "新建数据集",
+    "loading": "加载中...",
+    "empty": "暂无数据集",
+    "emptyHint": "注册 NFS 路径以开始追踪",
+    "columns": {
+      "name": "名称",
+      "nfsPath": "NFS 路径",
+      "size": "大小",
+      "version": "版本",
+      "updated": "更新时间"
+    },
+    "triggerScan": "触发扫描",
+    "backToDatasets": "← 返回数据集",
+    "deleteConfirm": "确认删除数据集「{{name}}」？",
+    "scanHistory": "扫描历史",
+    "files": "个文件",
+    "filesHeader": "文件列表",
+    "noHistory": "暂无历史记录",
+    "allChanges": "全部变更",
+    "fileHistory": "历史记录：{{file}}",
+    "noFileHistory": "该文件暂无历史记录",
+    "noChanges": "暂无变更记录"
+  },
+  "newProject": {
+    "sectionLabel": "新建项目",
+    "heading": "创建项目",
+    "fields": {
+      "name": "名称",
+      "gitUrl": "Git 地址",
+      "gitBranch": "Git 分支",
+      "domainPrefix": "域名前缀",
+      "dockerfilePath": "Dockerfile 路径",
+      "memoryLimit": "内存限制",
+      "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g"
+    },
+    "domainOptional": "可选 — 留空时默认使用 \"{{name}}\"",
+    "domainRequired": "必填 — 项目名称不能用作子域名",
+    "privateRepo": {
+      "configured": "私有仓库 — 凭证已配置",
+      "configure": "私有仓库？配置访问凭证",
+      "detected": "（检测到 {{provider}}）",
+      "none": "无（公开仓库）",
+      "newSshKey": "新建 SSH Key",
+      "newToken": "新建 {{provider}} Token",
+      "newPat": "新建 PAT",
+      "existingSecret": "使用已有密钥",
+      "noCredentials": "无凭证 — 仓库必须公开可访问。",
+      "githubPatHint": "在 GitHub → Settings → Developer settings → Fine-grained tokens 生成 PAT（Contents: Read-only）。",
+      "genericPatHint": "输入具有仓库读取权限的 Personal Access Token。",
+      "gitUsername": "GIT 用户名",
+      "githubUsernameHint": "GitHub：x-access-token",
+      "gitlabUsernameHint": "GitLab：oauth2",
+      "genericUsernameHint": "通常是账户用户名或固定值如 \"x-access-token\"",
+      "tokenValue": "Token 值",
+      "writeOnly": "（只写）",
+      "tokenPlaceholder": "粘贴 {{provider}} token",
+      "newPatSecretHint": "将创建名为「{{name}} Git Token」的密钥并绑定到此项目。",
+      "privateKey": "私钥",
+      "privateKeyHint": "粘贴 <strong>私钥</strong>（PEM 格式）。将对应公钥添加为仓库的 Deploy Key。",
+      "newSshSecretHint": "将创建名为「{{name}} Deploy Key」的密钥并绑定到此项目。",
+      "selectSecret": "选择密钥",
+      "noSecrets": "暂无密钥。",
+      "createOne": "立即创建",
+      "noSecretsFirst": "一个。",
+      "chooseSecret": "— 选择密钥 —"
+    },
+    "errors": {
+      "noToken": "请输入 token 值，若仓库为公开则选择「无」。",
+      "noSshKey": "请粘贴私钥，若仓库为公开则选择「无」。",
+      "noSecret": "请选择一个密钥。"
+    },
+    "creating": "创建中…",
+    "createProject": "创建项目"
+  },
+  "secrets": {
+    "sectionLabel": "凭证管理",
+    "heading": "密钥",
+    "newSecret": "新建密钥",
+    "infoText": "密钥在存储时加密（AES-256-GCM）。值为 <strong>只写</strong> — 创建后不可读取。在项目的<strong>密钥</strong>标签中将密钥绑定到项目。",
+    "loading": "加载中...",
+    "columns": {
+      "name": "名称",
+      "type": "类型",
+      "created": "创建时间"
+    },
+    "sshKey": "SSH 密钥",
+    "password": "密码",
+    "deleteTitle": "删除密钥",
+    "deleteConfirm": "确认删除此密钥？使用它的项目在下次部署时将失去访问权限。",
+    "form": {
+      "title": "新建密钥",
+      "name": "名称",
+      "type": "类型",
+      "sshKey": "SSH 密钥",
+      "passwordToken": "密码 / Token",
+      "sshKeyHint": "粘贴 <strong>私钥</strong>（PEM 格式）。在项目密钥标签中启用它作为 git clone 密钥。",
+      "value": "值",
+      "valueWriteOnly": "（只写 — 保存后不可读取）",
+      "secretPlaceholder": "输入密钥值",
+      "saving": "保存中...",
+      "save": "保存密钥",
+      "cancel": "取消",
+      "validation": "名称和值为必填项。",
+      "failed": "失败："
+    },
+    "empty": {
+      "title": "暂无密钥",
+      "hint": "添加密码、API Token 或 SSH 密钥，安全地注入到部署中。"
+    }
+  },
+  "newDataset": {
+    "sectionLabel": "数据仓库",
+    "heading": "新建数据集",
+    "name": "名称",
+    "nfsPath": "NFS 路径",
+    "nfsPathHint": "挂载到节点上的 NFS 绝对路径",
+    "cancel": "取消",
+    "creating": "创建中...",
+    "create": "创建数据集",
+    "failed": "创建数据集失败"
+  },
+  "nodes": {
+    "sectionLabel": "基础设施",
+    "heading": "节点",
+    "online": "在线",
+    "offline": "离线",
+    "empty": "暂无已注册节点，启动 Agent 以连接节点。"
+  },
+  "users": {
+    "sectionLabel": "访问控制",
+    "heading": "用户",
+    "columns": {
+      "user": "用户",
+      "email": "邮箱",
+      "role": "角色",
+      "joined": "加入时间"
+    },
+    "makeAdmin": "设为管理员",
+    "makeMember": "设为成员"
+  }
+}

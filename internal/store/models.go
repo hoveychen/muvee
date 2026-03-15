@@ -33,6 +33,7 @@ type Project struct {
 	AuthRequired       bool      `db:"auth_required"        json:"auth_required"`
 	AuthAllowedDomains string    `db:"auth_allowed_domains" json:"auth_allowed_domains"`
 	ContainerPort      int       `db:"container_port"       json:"container_port"`
+	MemoryLimit        string    `db:"memory_limit"         json:"memory_limit"`
 	CreatedAt          time.Time `db:"created_at"           json:"created_at"`
 	UpdatedAt          time.Time `db:"updated_at"           json:"updated_at"`
 }
@@ -84,16 +85,18 @@ const (
 )
 
 type Deployment struct {
-	ID        uuid.UUID        `db:"id"         json:"id"`
-	ProjectID uuid.UUID        `db:"project_id" json:"project_id"`
-	ImageTag  string           `db:"image_tag"  json:"image_tag"`
-	CommitSHA string           `db:"commit_sha" json:"commit_sha"`
-	Status    DeploymentStatus `db:"status"     json:"status"`
-	NodeID    *uuid.UUID       `db:"node_id"    json:"node_id"`
-	HostPort  int              `db:"host_port"  json:"host_port"`
-	Logs      string           `db:"logs"       json:"logs"`
-	CreatedAt time.Time        `db:"created_at" json:"created_at"`
-	UpdatedAt time.Time        `db:"updated_at" json:"updated_at"`
+	ID           uuid.UUID        `db:"id"            json:"id"`
+	ProjectID    uuid.UUID        `db:"project_id"    json:"project_id"`
+	ImageTag     string           `db:"image_tag"     json:"image_tag"`
+	CommitSHA    string           `db:"commit_sha"    json:"commit_sha"`
+	Status       DeploymentStatus `db:"status"        json:"status"`
+	NodeID       *uuid.UUID       `db:"node_id"       json:"node_id"`
+	HostPort     int              `db:"host_port"     json:"host_port"`
+	Logs         string           `db:"logs"          json:"logs"`
+	RestartCount int              `db:"restart_count" json:"restart_count"`
+	OOMKilled    bool             `db:"oom_killed"    json:"oom_killed"`
+	CreatedAt    time.Time        `db:"created_at"    json:"created_at"`
+	UpdatedAt    time.Time        `db:"updated_at"    json:"updated_at"`
 }
 
 // RunningDeploymentInfo is a denormalized view of a running deployment
@@ -177,8 +180,9 @@ type DatasetFileHistory struct {
 type TaskType string
 
 const (
-	TaskTypeBuild  TaskType = "build"
-	TaskTypeDeploy TaskType = "deploy"
+	TaskTypeBuild   TaskType = "build"
+	TaskTypeDeploy  TaskType = "deploy"
+	TaskTypeCleanup TaskType = "cleanup"
 )
 
 type TaskStatus string

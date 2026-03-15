@@ -4,21 +4,14 @@ import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLi
 import { api } from '../lib/api'
 import type { Project } from '../lib/types'
 import { timeAgo, statusColor } from '../lib/utils'
+import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
-
-const STATUS_LABELS: Record<string, string> = {
-  running: 'running',
-  building: 'building',
-  deploying: 'deploying',
-  failed: 'failed',
-  stopped: 'stopped',
-  pending: 'idle',
-}
 
 export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  const { t } = useTranslation()
 
   useEffect(() => {
     api.projects.list().then(setProjects).finally(() => setLoading(false))
@@ -29,10 +22,10 @@ export default function Projects() {
       <div className="flex items-end justify-between mb-8">
         <div>
           <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
-            PROJECTS
+            {t('projects.sectionLabel')}
           </p>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>
-            All Projects
+            {t('projects.heading')}
           </h1>
         </div>
         <Link
@@ -46,12 +39,12 @@ export default function Projects() {
           }}
         >
           <PlusCircle size={14} />
-          New Project
+          {t('projects.newProject')}
         </Link>
       </div>
 
       {loading ? (
-        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>Loading...</div>
+        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>{t('projects.loading')}</div>
       ) : projects.length === 0 ? (
         <EmptyState />
       ) : (
@@ -69,6 +62,7 @@ export default function Projects() {
 
 function ProjectRow({ project, index, total }: { project: Project; index: number; total: number }) {
   const [latestDeploy, setLatestDeploy] = useState<import('../lib/types').Deployment | null>(null)
+  const { t } = useTranslation()
 
   useEffect(() => {
     api.projects.deployments(project.id)
@@ -78,6 +72,15 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
 
   const status = latestDeploy?.status ?? 'pending'
   const color = statusColor(status)
+
+  const STATUS_LABELS: Record<string, string> = {
+    running: t('projects.status.running'),
+    building: t('projects.status.building'),
+    deploying: t('projects.status.deploying'),
+    failed: t('projects.status.failed'),
+    stopped: t('projects.status.stopped'),
+    pending: t('projects.status.pending'),
+  }
 
   return (
     <Link
@@ -147,13 +150,14 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
 }
 
 function EmptyState() {
+  const { t } = useTranslation()
   return (
     <div className="flex flex-col items-center justify-center py-20 gap-3">
       <div style={{ fontSize: '2.5rem', fontWeight: 700, color: 'var(--border)' }}>
-        No projects
+        {t('projects.noProjects')}
       </div>
       <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>
-        Create your first project to get started
+        {t('projects.noProjectsHint')}
       </p>
     </div>
   )
@@ -163,6 +167,7 @@ function EmptyState() {
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false)
+  const { t } = useTranslation()
   const copy = () => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true)
@@ -184,13 +189,14 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
       title={`Copy ${label ?? text}`}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
-      {copied ? 'Copied!' : (label ?? 'Copy')}
+      {copied ? t('projects.copied') : (label ?? t('projects.copy'))}
     </button>
   )
 }
 
 function CLIAccessCard() {
   const [open, setOpen] = useState(false)
+  const { t } = useTranslation()
   const skillURL = `${window.location.origin}/api/skill`
 
   return (
@@ -206,10 +212,10 @@ function CLIAccessCard() {
         <Terminal size={15} style={{ color: 'var(--accent)' }} />
         <div className="flex-1">
           <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em' }}>
-            DEVELOPER ACCESS
+            {t('projects.developerAccess')}
           </p>
           <p style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '2px' }}>
-            Skill URL
+            {t('projects.skillUrl')}
           </p>
         </div>
         <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
@@ -220,10 +226,10 @@ function CLIAccessCard() {
       {open && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '1.5rem' }}>
           <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
-            CLAUDE SKILL URL
+            {t('projects.claudeSkillUrl')}
           </p>
           <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.6 }}>
-            Share this URL with Claude to teach it how to use the muveectl CLI on your behalf.
+            {t('projects.skillUrlDesc')}
           </p>
           <div className="flex items-center gap-2">
             <div
@@ -241,7 +247,7 @@ function CLIAccessCard() {
             >
               {skillURL}
             </div>
-            <CopyButton text={skillURL} label="Copy URL" />
+            <CopyButton text={skillURL} label={t('projects.copyUrl')} />
             <a
               href={skillURL}
               target="_blank"
@@ -257,7 +263,7 @@ function CLIAccessCard() {
               }}
             >
               <ExternalLink size={11} />
-              Preview
+              {t('projects.preview')}
             </a>
           </div>
         </div>

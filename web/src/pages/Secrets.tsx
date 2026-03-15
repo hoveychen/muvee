@@ -3,6 +3,7 @@ import { KeyRound, Plus, Trash2, Eye, EyeOff, Lock } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Secret } from '../lib/types'
 import { timeAgo } from '../lib/utils'
+import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
@@ -12,14 +13,15 @@ export default function SecretsPage() {
   const [secrets, setSecrets] = useState<Secret[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const { t } = useTranslation()
 
   useEffect(() => {
     api.secrets.list().then(setSecrets).finally(() => setLoading(false))
   }, [])
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this secret? Projects using it will lose access on next deploy.')) return
-    await api.secrets.delete(id).catch(e => alert('Failed: ' + e.message))
+    if (!confirm(t('secrets.deleteConfirm'))) return
+    await api.secrets.delete(id).catch(e => alert(t('secrets.form.failed') + e.message))
     setSecrets(prev => prev.filter(s => s.id !== id))
   }
 
@@ -28,10 +30,10 @@ export default function SecretsPage() {
       <div className="flex items-end justify-between mb-8">
         <div>
           <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
-            CREDENTIALS
+            {t('secrets.sectionLabel')}
           </p>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>
-            Secrets
+            {t('secrets.heading')}
           </h1>
         </div>
         <button
@@ -46,7 +48,7 @@ export default function SecretsPage() {
           }}
         >
           <Plus size={14} />
-          New Secret
+          {t('secrets.newSecret')}
         </button>
       </div>
 
@@ -55,10 +57,10 @@ export default function SecretsPage() {
         className="mb-6 px-4 py-3 rounded-md"
         style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
       >
-        <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', lineHeight: 1.7 }}>
-          Secrets are encrypted at rest (AES-256-GCM). Values are <strong style={{ color: 'var(--fg-primary)' }}>write-only</strong> — they cannot
-          be retrieved after creation. Attach secrets to projects from the project's <strong style={{ color: 'var(--fg-primary)' }}>Secrets</strong> tab.
-        </p>
+        <p
+          style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', lineHeight: 1.7 }}
+          dangerouslySetInnerHTML={{ __html: t('secrets.infoText') }}
+        />
       </div>
 
       {showCreate && (
@@ -72,7 +74,7 @@ export default function SecretsPage() {
       )}
 
       {loading ? (
-        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>Loading...</div>
+        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>{t('secrets.loading')}</div>
       ) : secrets.length === 0 && !showCreate ? (
         <EmptyState onNew={() => setShowCreate(true)} />
       ) : (
@@ -89,9 +91,9 @@ export default function SecretsPage() {
               letterSpacing: '0.08em',
             }}
           >
-            <span>NAME</span>
-            <span>TYPE</span>
-            <span>CREATED</span>
+            <span>{t('secrets.columns.name')}</span>
+            <span>{t('secrets.columns.type')}</span>
+            <span>{t('secrets.columns.created')}</span>
             <span></span>
           </div>
 
@@ -105,7 +107,8 @@ export default function SecretsPage() {
 }
 
 function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: number; total: number; onDelete: (id: string) => void }) {
-  const typeLabel = secret.type === 'ssh_key' ? 'SSH KEY' : 'PASSWORD'
+  const { t } = useTranslation()
+  const typeLabel = secret.type === 'ssh_key' ? t('secrets.sshKey') : t('secrets.password')
 
   return (
     <div
@@ -151,7 +154,7 @@ function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: 
         style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)' }}
         onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--danger)' }}
         onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)' }}
-        title="Delete secret"
+        title={t('secrets.deleteTitle')}
       >
         <Trash2 size={14} />
       </button>
@@ -166,10 +169,11 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
   const [showValue, setShowValue] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const { t } = useTranslation()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim() || !value.trim()) { setError('Name and value are required.'); return }
+    if (!name.trim() || !value.trim()) { setError(t('secrets.form.validation')); return }
     setSaving(true)
     setError('')
     try {
@@ -198,14 +202,14 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
       style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
     >
       <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '1.25rem' }}>
-        New Secret
+        {t('secrets.form.title')}
       </p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {/* Name */}
         <div>
           <label style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', display: 'block', marginBottom: '0.4rem' }}>
-            NAME
+            {t('secrets.form.name')}
           </label>
           <input
             value={name}
@@ -218,40 +222,41 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
         {/* Type */}
         <div>
           <label style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', display: 'block', marginBottom: '0.4rem' }}>
-            TYPE
+            {t('secrets.form.type')}
           </label>
           <div className="flex gap-2">
-            {(['password', 'ssh_key'] as SecretType[]).map(t => (
+            {(['password', 'ssh_key'] as SecretType[]).map(typOpt => (
               <button
-                key={t}
+                key={typOpt}
                 type="button"
-                onClick={() => setType(t)}
+                onClick={() => setType(typOpt)}
                 style={{
                   fontFamily: MONO,
                   fontSize: '0.78rem',
                   padding: '0.4rem 1rem',
                   borderRadius: '6px',
-                  border: `1px solid ${type === t ? 'var(--accent)' : 'var(--border)'}`,
-                  background: type === t ? 'rgba(88,166,255,0.1)' : 'var(--bg-hover)',
-                  color: type === t ? 'var(--accent)' : 'var(--fg-muted)',
+                  border: `1px solid ${type === typOpt ? 'var(--accent)' : 'var(--border)'}`,
+                  background: type === typOpt ? 'rgba(88,166,255,0.1)' : 'var(--bg-hover)',
+                  color: type === typOpt ? 'var(--accent)' : 'var(--fg-muted)',
                   cursor: 'pointer',
                 }}
               >
-                {t === 'ssh_key' ? 'SSH Key' : 'Password / Token'}
+                {typOpt === 'ssh_key' ? t('secrets.form.sshKey') : t('secrets.form.passwordToken')}
               </button>
             ))}
           </div>
           {type === 'ssh_key' && (
-            <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}>
-              Paste the <strong style={{ color: 'var(--fg-primary)' }}>private key</strong> (PEM format). You can enable it as the git clone key in the project's Secrets tab.
-            </p>
+            <p
+              style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}
+              dangerouslySetInnerHTML={{ __html: t('secrets.form.sshKeyHint') }}
+            />
           )}
         </div>
 
         {/* Value */}
         <div>
           <label style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', display: 'block', marginBottom: '0.4rem' }}>
-            VALUE <span style={{ color: 'var(--danger)', fontWeight: 400 }}>(write-only — not retrievable after saving)</span>
+            {t('secrets.form.value')} <span style={{ color: 'var(--danger)', fontWeight: 400 }}>{t('secrets.form.valueWriteOnly')}</span>
           </label>
           <div className="relative">
             {type === 'ssh_key' ? (
@@ -268,7 +273,7 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
                   type={showValue ? 'text' : 'password'}
                   value={value}
                   onChange={e => setValue(e.target.value)}
-                  placeholder="Enter secret value"
+                  placeholder={t('secrets.form.secretPlaceholder')}
                   style={{ ...inputBase, fontSize: '0.875rem', padding: '0.5rem 2.5rem 0.5rem 0.75rem' }}
                 />
                 <button
@@ -304,7 +309,7 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
               fontWeight: 500,
             }}
           >
-            {saving ? 'Saving...' : 'Save Secret'}
+            {saving ? t('secrets.form.saving') : t('secrets.form.save')}
           </button>
           <button
             type="button"
@@ -320,7 +325,7 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
               cursor: 'pointer',
             }}
           >
-            Cancel
+            {t('secrets.form.cancel')}
           </button>
         </div>
       </form>
@@ -329,6 +334,7 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
 }
 
 function EmptyState({ onNew }: { onNew: () => void }) {
+  const { t } = useTranslation()
   return (
     <div
       className="flex flex-col items-center justify-center py-20 rounded-md"
@@ -336,10 +342,10 @@ function EmptyState({ onNew }: { onNew: () => void }) {
     >
       <KeyRound size={32} style={{ color: 'var(--fg-muted)', marginBottom: '1rem' }} />
       <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '0.5rem' }}>
-        No Secrets Yet
+        {t('secrets.empty.title')}
       </p>
       <p style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)', marginBottom: '1.5rem' }}>
-        Add passwords, API tokens, or SSH keys to securely inject into your deployments.
+        {t('secrets.empty.hint')}
       </p>
       <button
         onClick={onNew}
@@ -347,7 +353,7 @@ function EmptyState({ onNew }: { onNew: () => void }) {
         style={{ background: 'var(--accent)', color: '#ffffff', fontFamily: MONO, fontSize: '0.82rem', border: 'none', cursor: 'pointer', fontWeight: 500 }}
       >
         <Plus size={14} />
-        New Secret
+        {t('secrets.newSecret')}
       </button>
     </div>
   )

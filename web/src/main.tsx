@@ -2,7 +2,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import './index.css'
+import './lib/i18n'
 import { AuthProvider, useAuth } from './lib/auth'
+import { ThemeProvider } from './lib/theme'
 import LoginPage from './pages/Login'
 import Projects from './pages/Projects'
 import NewProject from './pages/NewProject'
@@ -26,6 +28,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <BrowserRouter>
+      <ThemeProvider>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -42,6 +45,7 @@ function App() {
           </Route>
         </Routes>
       </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   )
 }

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, Secret } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix } from '../lib/utils'
+import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
@@ -12,6 +13,7 @@ type Tab = 'deploy' | 'config' | 'datasets' | 'secrets'
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const [project, setProject] = useState<Project | null>(null)
   const [deployments, setDeployments] = useState<Deployment[]>([])
   const [datasets, setDatasets] = useState<Dataset[]>([])
@@ -63,7 +65,7 @@ export default function ProjectDetail() {
   }
 
   const handleDelete = async () => {
-    if (!id || !confirm('Delete this project?')) return
+    if (!id || !confirm(t('projectDetail.config.deleteConfirm'))) return
     await api.projects.delete(id)
     navigate('/projects')
   }
@@ -90,7 +92,7 @@ export default function ProjectDetail() {
     setProjectDatasets(result)
   }
 
-  if (!project) return <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', padding: '2rem' }}>Loading...</div>
+  if (!project) return <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', padding: '2rem' }}>{t('projects.loading')}</div>
 
   const latestDeploy = deployments[0]
   const color = statusColor(latestDeploy?.status ?? 'pending')
@@ -104,7 +106,7 @@ export default function ProjectDetail() {
           className="flex items-center gap-1 mb-4 text-xs transition-colors"
           style={{ fontFamily: MONO, color: 'var(--fg-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
         >
-          <ArrowLeft size={12} /> Back to Projects
+          <ArrowLeft size={12} /> {t('projectDetail.backToProjects')}
         </button>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -116,21 +118,48 @@ export default function ProjectDetail() {
               {project.name}
             </h1>
           </div>
-          <button
-            onClick={handleDeploy}
-            disabled={deploying}
-            className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all duration-150"
-            style={{
-              background: deploying ? 'var(--bg-hover)' : 'var(--accent)',
-              color: deploying ? 'var(--fg-muted)' : '#ffffff',
-              fontWeight: 500,
-              border: 'none',
-              cursor: deploying ? 'not-allowed' : 'pointer',
-            }}
-          >
-            <Rocket size={14} />
-            {deploying ? 'Triggering...' : 'Deploy'}
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href={`https://${project.domain_prefix}.domain.com`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all duration-150"
+              style={{
+                background: 'var(--bg-hover)',
+                color: 'var(--fg-muted)',
+                fontWeight: 500,
+                border: '1px solid var(--border)',
+                cursor: 'pointer',
+                textDecoration: 'none',
+              }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLAnchorElement).style.color = 'var(--fg-primary)'
+                ;(e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--fg-muted)'
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLAnchorElement).style.color = 'var(--fg-muted)'
+                ;(e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border)'
+              }}
+            >
+              <ExternalLink size={14} />
+              {t('projectDetail.visit')}
+            </a>
+            <button
+              onClick={handleDeploy}
+              disabled={deploying}
+              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all duration-150"
+              style={{
+                background: deploying ? 'var(--bg-hover)' : 'var(--accent)',
+                color: deploying ? 'var(--fg-muted)' : '#ffffff',
+                fontWeight: 500,
+                border: 'none',
+                cursor: deploying ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <Rocket size={14} />
+              {deploying ? t('projectDetail.triggering') : t('projectDetail.deploy')}
+            </button>
+          </div>
         </div>
         <div style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)', marginTop: '0.4rem', marginLeft: '1.75rem' }}>
           {project.domain_prefix}.domain.com
@@ -139,7 +168,12 @@ export default function ProjectDetail() {
 
       {/* Tabs */}
       <div className="flex gap-0 mb-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        {([['deploy', Rocket, 'Deployments'], ['config', Settings, 'Config'], ['datasets', Database, 'Datasets'], ['secrets', KeyRound, 'Secrets']] as const).map(([key, Icon, label]) => (
+        {([
+          ['deploy', Rocket, t('projectDetail.tabs.deployments')],
+          ['config', Settings, t('projectDetail.tabs.config')],
+          ['datasets', Database, t('projectDetail.tabs.datasets')],
+          ['secrets', KeyRound, t('projectDetail.tabs.secrets')],
+        ] as const).map(([key, Icon, label]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
@@ -197,11 +231,12 @@ export default function ProjectDetail() {
 
 function DeployTab({ deployments }: { deployments: Deployment[] }) {
   const [expanded, setExpanded] = useState<string | null>(deployments[0]?.id ?? null)
+  const { t } = useTranslation()
 
   if (deployments.length === 0) {
     return (
       <div className="py-12 text-center" style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>
-        No deployments yet. Click Deploy to start.
+        {t('projectDetail.noDeployments')}
       </div>
     )
   }
@@ -237,6 +272,24 @@ function DeployTab({ deployments }: { deployments: Deployment[] }) {
               >
                 {d.status}
               </div>
+              {d.oom_killed && (
+                <div
+                  className="px-2 py-0.5 rounded-full text-xs"
+                  style={{ fontFamily: MONO, color: '#ff6b6b', border: '1px solid #ff6b6b44', background: '#ff6b6b18', flexShrink: 0 }}
+                  title="容器曾因 OOM 被杀死"
+                >
+                  OOM
+                </div>
+              )}
+              {d.restart_count > 0 && (
+                <div
+                  className="px-2 py-0.5 rounded-full text-xs"
+                  style={{ fontFamily: MONO, color: '#ffa94d', border: '1px solid #ffa94d44', background: '#ffa94d18', flexShrink: 0 }}
+                  title={`容器已重启 ${d.restart_count} 次`}
+                >
+                  ↺{d.restart_count}
+                </div>
+              )}
               <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
                 {timeAgo(d.created_at)}
               </div>
@@ -278,6 +331,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
   onDelete: () => void
   saving: boolean
 }) {
+  const { t } = useTranslation()
   const inputStyle = {
     background: 'var(--bg-hover)',
     border: '1px solid var(--border)',
@@ -314,13 +368,13 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
 
   return (
     <div className="max-w-lg space-y-5">
-      {field('Project Name', 'name')}
-      {field('Git URL', 'git_url')}
-      {field('Git Branch', 'git_branch')}
+      {field(t('projectDetail.config.projectName'), 'name')}
+      {field(t('projectDetail.config.gitUrl'), 'git_url')}
+      {field(t('projectDetail.config.gitBranch'), 'git_branch')}
 
       <div>
         <label style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', display: 'block', marginBottom: '0.4rem' }}>
-          DOMAIN PREFIX
+          {t('projectDetail.config.domainPrefix').toUpperCase()}
           {domainPrefixRequired && (
             <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>
           )}
@@ -337,16 +391,17 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
         />
         <p style={{ fontFamily: MONO, fontSize: '0.68rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
           {nameIsValidPrefix
-            ? `Optional — defaults to "${form.name}" if left blank`
-            : 'Required — project name cannot be used as a subdomain'}
+            ? t('projectDetail.config.domainOptional', { name: form.name })
+            : t('projectDetail.config.domainRequired')}
         </p>
       </div>
 
-      {field('Dockerfile Path', 'dockerfile_path')}
+      {field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
+      {field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
 
       <div>
         <label style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', display: 'block', marginBottom: '0.4rem' }}>
-          REQUIRE GOOGLE AUTH
+          {t('projectDetail.config.requireGoogleAuth')}
         </label>
         <label className="flex items-center gap-3 cursor-pointer">
           <div
@@ -368,12 +423,12 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
             />
           </div>
           <span style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>
-            {form.auth_required ? 'Enabled' : 'Disabled'}
+            {form.auth_required ? t('projectDetail.config.enabled') : t('projectDetail.config.disabled')}
           </span>
         </label>
       </div>
 
-      {form.auth_required && field('Allowed Email Domains (comma separated)', 'auth_allowed_domains')}
+      {form.auth_required && field(t('projectDetail.config.allowedDomains'), 'auth_allowed_domains')}
 
       <div className="flex gap-3 pt-2">
         <button
@@ -389,14 +444,14 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
             opacity: saving ? 0.7 : 1,
           }}
         >
-          {saving ? 'Saving...' : 'Save Changes'}
+          {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
         </button>
         <button
           onClick={onDelete}
           className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all"
           style={{ background: 'var(--bg-hover)', color: 'var(--danger)', border: '1px solid var(--border)', cursor: 'pointer' }}
         >
-          <Trash2 size={13} /> Delete
+          <Trash2 size={13} /> {t('projectDetail.config.delete')}
         </button>
       </div>
     </div>
@@ -409,12 +464,29 @@ function DatasetsTab({ available, selected, onToggle, onUpdateMode }: {
   onToggle: (id: string, mode: 'dependency' | 'readwrite') => void
   onUpdateMode: (id: string, mode: 'dependency' | 'readwrite') => void
 }) {
+  const { t } = useTranslation()
   const selectedMap = Object.fromEntries(selected.map(pd => [pd.dataset_id, pd]))
 
   return (
     <div>
       <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-        Select datasets to mount into the container. <span style={{ color: 'var(--accent)' }}>dependency</span> = rsync copy (LRU cached). <span style={{ color: '#79c0ff' }}>readwrite</span> = direct NFS mount.
+        {t('projectDetail.datasets.hint', {
+          defaultValue: 'Select datasets to mount into the container. <accent>dependency</accent> = rsync copy (LRU cached). <blue>readwrite</blue> = direct NFS mount.',
+        }).split('<accent>dependency</accent>').map((part, i, arr) =>
+          i < arr.length - 1 ? (
+            <span key={i}>
+              {part}
+              <span style={{ color: 'var(--accent)' }}>dependency</span>
+            </span>
+          ) : part.split('<blue>readwrite</blue>').map((p, j, a) =>
+            j < a.length - 1 ? (
+              <span key={j}>
+                {p}
+                <span style={{ color: '#79c0ff' }}>readwrite</span>
+              </span>
+            ) : p
+          )
+        )}
       </p>
       <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
         {available.map((ds, i) => {
@@ -465,7 +537,7 @@ function DatasetsTab({ available, selected, onToggle, onUpdateMode }: {
         })}
         {available.length === 0 && (
           <div className="py-10 text-center" style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem', background: 'var(--bg-card)' }}>
-            No datasets available. Create one in the Datasets section.
+            {t('projectDetail.datasets.empty')}
           </div>
         )}
       </div>
@@ -487,6 +559,7 @@ function SecretsTab({
   onBindingsChange: (b: ProjectSecretBinding[]) => void
 }) {
   const [saving, setSaving] = useState(false)
+  const { t } = useTranslation()
 
   const isBound = (secretId: string) => bindings.some(b => b.secret_id === secretId)
   const getBinding = (secretId: string) => bindings.find(b => b.secret_id === secretId)
@@ -505,7 +578,7 @@ function SecretsTab({
       )
       onBindingsChange(updated)
     } catch (e) {
-      alert('Failed to update secrets: ' + (e as Error).message)
+      alert(t('projectDetail.secrets.failedToUpdate') + (e as Error).message)
     } finally {
       setSaving(false)
     }
@@ -538,15 +611,16 @@ function SecretsTab({
   return (
     <div>
       <div className="mb-4" style={{ fontFamily: mono, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
-        Attach secrets to inject as environment variables on next deploy.
-        {saving && <span style={{ marginLeft: '1em', color: 'var(--accent)' }}>Saving…</span>}
+        {t('projectDetail.secrets.hint')}
+        {saving && <span style={{ marginLeft: '1em', color: 'var(--accent)' }}>{t('projectDetail.secrets.saving')}</span>}
       </div>
 
       <div style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
         {allSecrets.length === 0 ? (
           <div className="py-12 text-center" style={{ fontFamily: mono, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>
-            No secrets found. Create secrets in the{' '}
-            <a href="/secrets" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Secrets</a> section first.
+            {t('projectDetail.secrets.empty')}{' '}
+            <a href="/secrets" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{t('projectDetail.secrets.emptyLink')}</a>
+            {' '}{t('projectDetail.secrets.emptySuffix')}
           </div>
         ) : (
           allSecrets.map((sec, i) => {
@@ -567,7 +641,7 @@ function SecretsTab({
                   {/* Bind toggle */}
                   <button
                     onClick={() => toggleBind(sec)}
-                    title={bound ? 'Detach' : 'Attach'}
+                    title={bound ? t('projectDetail.secrets.detach') : t('projectDetail.secrets.attach')}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: bound ? 'var(--accent)' : 'var(--fg-muted)', marginTop: '2px', flexShrink: 0 }}
                   >
                     {bound ? <Link2 size={15} /> : <Link2Off size={15} />}
@@ -584,7 +658,7 @@ function SecretsTab({
                         background: sec.type === 'ssh_key' ? 'rgba(200,240,60,0.15)' : 'rgba(123,97,255,0.2)',
                         color: sec.type === 'ssh_key' ? 'var(--accent)' : '#a78bfa',
                       }}>
-                        {sec.type === 'ssh_key' ? 'SSH KEY' : 'PASSWORD'}
+                        {sec.type === 'ssh_key' ? t('secrets.sshKey') : t('secrets.password')}
                       </span>
                     </div>
 
@@ -595,7 +669,7 @@ function SecretsTab({
                         {/* Env var name (all types) */}
                         <div className="flex items-center gap-2">
                           <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
-                            ENV VAR
+                            {t('projectDetail.secrets.envVar')}
                           </span>
                           <input
                             value={binding.env_var_name}
@@ -620,7 +694,7 @@ function SecretsTab({
                               onChange={() => updateField(sec.id, { use_for_git: !binding.use_for_git })}
                               style={{ accentColor: 'var(--accent)' }}
                             />
-                            Use for git clone (SSH)
+                            {t('projectDetail.secrets.useForGitSsh')}
                           </label>
                         )}
 
@@ -634,12 +708,12 @@ function SecretsTab({
                                 onChange={() => updateField(sec.id, { use_for_git: !binding.use_for_git, git_username: binding.git_username || 'x-access-token' })}
                                 style={{ accentColor: 'var(--accent)' }}
                               />
-                              Use for git clone (HTTPS)
+                              {t('projectDetail.secrets.useForGitHttps')}
                             </label>
                             {binding.use_for_git && (
                               <div className="flex items-center gap-2">
                                 <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
-                                  USERNAME
+                                  {t('projectDetail.secrets.username')}
                                 </span>
                                 <input
                                   value={binding.git_username}
@@ -654,7 +728,7 @@ function SecretsTab({
                                   onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
                                 />
                                 <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
-                                  (GitHub PAT → <code style={{ color: 'var(--accent)' }}>x-access-token</code>)
+                                  {t('projectDetail.secrets.githubPat')} (<code style={{ color: 'var(--accent)' }}>x-access-token</code>)
                                 </span>
                               </div>
                             )}

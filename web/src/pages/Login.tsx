@@ -1,8 +1,11 @@
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
 export default function LoginPage() {
+  const { t } = useTranslation()
+
   useEffect(() => {
     document.title = 'muvee — Sign In'
   }, [])
@@ -29,7 +32,7 @@ export default function LoginPage() {
             className="text-xs tracking-widest uppercase"
             style={{ color: 'var(--fg-muted)', fontFamily: MONO }}
           >
-            Private Cloud Platform
+            {t('login.tagline')}
           </span>
         </div>
 
@@ -42,19 +45,18 @@ export default function LoginPage() {
           </h1>
           <p
             className="mt-6 text-lg max-w-sm"
-            style={{ color: 'var(--fg-muted)', lineHeight: '1.7' }}
+            style={{ color: 'var(--fg-muted)', lineHeight: '1.7', whiteSpace: 'pre-line' }}
           >
-            Deploy containers. Manage datasets.
-            Monitor your data warehouse. All in one place.
+            {t('login.description')}
           </p>
         </div>
 
         <div className="relative z-10 flex gap-6" style={{ color: 'var(--fg-muted)', fontFamily: MONO, fontSize: '0.78rem' }}>
-          <span>Git → Docker → Deploy</span>
+          <span>{t('login.feat1')}</span>
           <span style={{ color: 'var(--border)' }}>·</span>
-          <span>LRU Dataset Cache</span>
+          <span>{t('login.feat2')}</span>
           <span style={{ color: 'var(--border)' }}>·</span>
-          <span>Traefik Routing</span>
+          <span>{t('login.feat3')}</span>
         </div>
       </div>
 
@@ -82,13 +84,13 @@ export default function LoginPage() {
               className="text-xl font-semibold mb-1"
               style={{ color: 'var(--fg-primary)' }}
             >
-              Sign in
+              {t('login.signIn')}
             </h2>
             <p
               className="text-sm mb-8"
               style={{ fontFamily: MONO, color: 'var(--fg-muted)' }}
             >
-              Authorized personnel only
+              {t('login.authorizedOnly')}
             </p>
 
             <a
@@ -109,7 +111,7 @@ export default function LoginPage() {
               }}
             >
               <GoogleIcon />
-              Continue with Google
+              {t('login.continueWithGoogle')}
             </a>
           </div>
 
@@ -117,7 +119,7 @@ export default function LoginPage() {
             className="text-center mt-5 text-xs"
             style={{ fontFamily: MONO, color: 'var(--fg-muted)' }}
           >
-            Access restricted to authorized domains
+            {t('login.accessRestricted')}
           </p>
         </div>
       </div>

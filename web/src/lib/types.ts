@@ -17,6 +17,7 @@ export interface Project {
   owner_id: string
   auth_required: boolean
   auth_allowed_domains: string
+  memory_limit: string
   created_at: string
   updated_at: string
 }
@@ -47,6 +48,8 @@ export interface Deployment {
   status: 'pending' | 'building' | 'deploying' | 'running' | 'failed' | 'stopped'
   node_id: string | null
   logs: string
+  restart_count: number
+  oom_killed: boolean
   created_at: string
   updated_at: string
 }

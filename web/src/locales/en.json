@@ -1,0 +1,244 @@
+{
+  "nav": {
+    "projects": "Projects",
+    "datasets": "Datasets",
+    "secrets": "Secrets",
+    "nodes": "Nodes",
+    "users": "Users",
+    "privateCloud": "private cloud",
+    "logout": "Logout",
+    "switchToLight": "Switch to light mode",
+    "switchToDark": "Switch to dark mode",
+    "switchToZh": "切换到中文",
+    "switchToEn": "Switch to English"
+  },
+  "login": {
+    "tagline": "Private Cloud Platform",
+    "description": "Deploy containers. Manage datasets.\nMonitor your data warehouse. All in one place.",
+    "feat1": "Git → Docker → Deploy",
+    "feat2": "LRU Dataset Cache",
+    "feat3": "Traefik Routing",
+    "signIn": "Sign in",
+    "authorizedOnly": "Authorized personnel only",
+    "continueWithGoogle": "Continue with Google",
+    "accessRestricted": "Access restricted to authorized domains"
+  },
+  "projects": {
+    "sectionLabel": "PROJECTS",
+    "heading": "All Projects",
+    "newProject": "New Project",
+    "loading": "Loading...",
+    "noProjects": "No projects",
+    "noProjectsHint": "Create your first project to get started",
+    "developerAccess": "DEVELOPER ACCESS",
+    "skillUrl": "Skill URL",
+    "claudeSkillUrl": "CLAUDE SKILL URL",
+    "skillUrlDesc": "Share this URL with Claude to teach it how to use the muveectl CLI on your behalf.",
+    "copyUrl": "Copy URL",
+    "preview": "Preview",
+    "copied": "Copied!",
+    "copy": "Copy",
+    "status": {
+      "running": "running",
+      "building": "building",
+      "deploying": "deploying",
+      "failed": "failed",
+      "stopped": "stopped",
+      "pending": "idle"
+    }
+  },
+  "projectDetail": {
+    "backToProjects": "Back to Projects",
+    "visit": "Visit",
+    "triggering": "Triggering...",
+    "deploy": "Deploy",
+    "tabs": {
+      "deployments": "Deployments",
+      "config": "Config",
+      "datasets": "Datasets",
+      "secrets": "Secrets"
+    },
+    "noDeployments": "No deployments yet. Click Deploy to start.",
+    "config": {
+      "projectName": "Project Name",
+      "gitUrl": "Git URL",
+      "gitBranch": "Git Branch",
+      "domainPrefix": "DOMAIN PREFIX",
+      "dockerfilePath": "Dockerfile Path",
+      "memoryLimit": "Memory Limit",
+      "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g",
+      "requireGoogleAuth": "REQUIRE GOOGLE AUTH",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "allowedDomains": "Allowed Email Domains (comma separated)",
+      "domainOptional": "Optional — defaults to \"{{name}}\" if left blank",
+      "domainRequired": "Required — project name cannot be used as a subdomain",
+      "saving": "Saving...",
+      "saveChanges": "Save Changes",
+      "delete": "Delete",
+      "deleteConfirm": "Delete this project?"
+    },
+    "datasets": {
+      "hint": "Select datasets to mount into the container. <accent>dependency</accent> = rsync copy (LRU cached). <blue>readwrite</blue> = direct NFS mount.",
+      "empty": "No datasets available. Create one in the Datasets section."
+    },
+    "secrets": {
+      "hint": "Attach secrets to inject as environment variables on next deploy.",
+      "saving": "Saving…",
+      "empty": "No secrets found. Create secrets in the",
+      "emptyLink": "Secrets",
+      "emptySuffix": "section first.",
+      "attach": "Attach",
+      "detach": "Detach",
+      "envVar": "ENV VAR",
+      "username": "USERNAME",
+      "useForGitSsh": "Use for git clone (SSH)",
+      "useForGitHttps": "Use for git clone (HTTPS)",
+      "githubPat": "(GitHub PAT → x-access-token)",
+      "failedToUpdate": "Failed to update secrets: "
+    }
+  },
+  "datasets": {
+    "sectionLabel": "DATA WAREHOUSE",
+    "heading": "Datasets",
+    "newDataset": "New Dataset",
+    "loading": "Loading...",
+    "empty": "No datasets",
+    "emptyHint": "Register an NFS path to start tracking",
+    "columns": {
+      "name": "NAME",
+      "nfsPath": "NFS PATH",
+      "size": "SIZE",
+      "version": "VERSION",
+      "updated": "UPDATED"
+    },
+    "triggerScan": "Trigger scan",
+    "backToDatasets": "← Back to Datasets",
+    "deleteConfirm": "Delete dataset \"{{name}}\"?",
+    "scanHistory": "SCAN HISTORY",
+    "files": "files",
+    "filesHeader": "FILES",
+    "noHistory": "No history yet",
+    "allChanges": "ALL CHANGES",
+    "fileHistory": "HISTORY: {{file}}",
+    "noFileHistory": "No history for this file",
+    "noChanges": "No changes recorded yet"
+  },
+  "newProject": {
+    "sectionLabel": "NEW PROJECT",
+    "heading": "Create Project",
+    "fields": {
+      "name": "Name",
+      "gitUrl": "Git URL",
+      "gitBranch": "Git Branch",
+      "domainPrefix": "DOMAIN PREFIX",
+      "dockerfilePath": "Dockerfile Path",
+      "memoryLimit": "Memory Limit",
+      "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g"
+    },
+    "domainOptional": "Optional — defaults to \"{{name}}\" if left blank",
+    "domainRequired": "Required — project name cannot be used as a subdomain",
+    "privateRepo": {
+      "configured": "Private repository — credential configured",
+      "configure": "Private repository? Configure credentials",
+      "detected": "({{provider}} detected)",
+      "none": "None (public repo)",
+      "newSshKey": "New SSH Key",
+      "newToken": "New {{provider}} Token",
+      "newPat": "New PAT",
+      "existingSecret": "Existing Secret",
+      "noCredentials": "No credentials — repository must be publicly accessible.",
+      "githubPatHint": "Generate a fine-grained PAT at GitHub → Settings → Developer settings → Fine-grained tokens (Contents: Read-only).",
+      "genericPatHint": "Enter a Personal Access Token with read access to the repository.",
+      "gitUsername": "GIT USERNAME",
+      "githubUsernameHint": "GitHub: x-access-token",
+      "gitlabUsernameHint": "GitLab: oauth2",
+      "genericUsernameHint": "Usually your account username or a fixed value like \"x-access-token\"",
+      "tokenValue": "TOKEN VALUE",
+      "writeOnly": "(write-only)",
+      "tokenPlaceholder": "Paste {{provider}} token here",
+      "newPatSecretHint": "A new secret named \"{{name}} Git Token\" will be created and bound to this project.",
+      "privateKey": "PRIVATE KEY",
+      "privateKeyHint": "Paste the <strong>private key</strong> (PEM format). Add the corresponding public key as a Deploy Key in your repository settings.",
+      "newSshSecretHint": "A new secret named \"{{name}} Deploy Key\" will be created and bound to this project.",
+      "selectSecret": "SELECT SECRET",
+      "noSecrets": "No secrets found.",
+      "createOne": "Create one",
+      "noSecretsFirst": "first.",
+      "chooseSecret": "— choose a secret —"
+    },
+    "errors": {
+      "noToken": "Please enter the token value, or choose \"None\" if the repository is public.",
+      "noSshKey": "Please paste the private key, or choose \"None\" if the repository is public.",
+      "noSecret": "Please select a secret."
+    },
+    "creating": "Creating…",
+    "createProject": "Create Project"
+  },
+  "secrets": {
+    "sectionLabel": "CREDENTIALS",
+    "heading": "Secrets",
+    "newSecret": "New Secret",
+    "infoText": "Secrets are encrypted at rest (AES-256-GCM). Values are <strong>write-only</strong> — they cannot be retrieved after creation. Attach secrets to projects from the project's <strong>Secrets</strong> tab.",
+    "loading": "Loading...",
+    "columns": {
+      "name": "NAME",
+      "type": "TYPE",
+      "created": "CREATED"
+    },
+    "sshKey": "SSH KEY",
+    "password": "PASSWORD",
+    "deleteTitle": "Delete secret",
+    "deleteConfirm": "Delete this secret? Projects using it will lose access on next deploy.",
+    "form": {
+      "title": "New Secret",
+      "name": "NAME",
+      "type": "TYPE",
+      "sshKey": "SSH Key",
+      "passwordToken": "Password / Token",
+      "sshKeyHint": "Paste the <strong>private key</strong> (PEM format). You can enable it as the git clone key in the project's Secrets tab.",
+      "value": "VALUE",
+      "valueWriteOnly": "(write-only — not retrievable after saving)",
+      "secretPlaceholder": "Enter secret value",
+      "saving": "Saving...",
+      "save": "Save Secret",
+      "cancel": "Cancel",
+      "validation": "Name and value are required.",
+      "failed": "Failed: "
+    },
+    "empty": {
+      "title": "No Secrets Yet",
+      "hint": "Add passwords, API tokens, or SSH keys to securely inject into your deployments."
+    }
+  },
+  "newDataset": {
+    "sectionLabel": "DATA WAREHOUSE",
+    "heading": "New Dataset",
+    "name": "NAME",
+    "nfsPath": "NFS PATH",
+    "nfsPathHint": "Absolute NFS path mounted on the node",
+    "cancel": "Cancel",
+    "creating": "Creating...",
+    "create": "Create Dataset",
+    "failed": "Failed to create dataset"
+  },
+  "nodes": {
+    "sectionLabel": "INFRASTRUCTURE",
+    "heading": "Nodes",
+    "online": "online",
+    "offline": "offline",
+    "empty": "No nodes registered yet. Start an Agent to connect nodes."
+  },
+  "users": {
+    "sectionLabel": "ACCESS CONTROL",
+    "heading": "Users",
+    "columns": {
+      "user": "USER",
+      "email": "EMAIL",
+      "role": "ROLE",
+      "joined": "JOINED"
+    },
+    "makeAdmin": "Make Admin",
+    "makeMember": "Make Member"
+  }
+}

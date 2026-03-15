@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -70,6 +71,7 @@ func runAgent() {
 	var cache *datacache.Cache
 	if nodeRole == "deploy" {
 		cache = datacache.New(nil, nodeID, baseDir)
+		go runContainerStatusReporter(ctx, controlPlaneURL, agentSecret)
 	}
 
 	ticker := time.NewTicker(5 * time.Second)
@@ -209,6 +211,9 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		if err == nil && hostPort > 0 {
 			extra["host_port"] = hostPort
 		}
+
+	case store.TaskTypeCleanup:
+		taskErr = runCleanup(ctx, task)
 	}
 
 	if taskErr != nil {
@@ -263,6 +268,7 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 		ContainerPort: intVal(p, "container_port"),
 		AuthRequired:  boolVal(p, "auth_required"),
 		AuthDomains:   str(p, "auth_domains"),
+		MemoryLimit:   str(p, "memory_limit"),
 		Datasets:      datasets,
 		BaseDomain:    baseDomain,
 	}
@@ -314,6 +320,93 @@ func agentPost(url, secret, contentType string, body io.Reader) (*http.Response,
 		req.Header.Set("X-Agent-Secret", secret)
 	}
 	return http.DefaultClient.Do(req)
+}
+
+func runCleanup(ctx context.Context, task *store.Task) error {
+	domainPrefix := str(task.Payload, "domain_prefix")
+	if domainPrefix == "" {
+		return fmt.Errorf("cleanup task missing domain_prefix")
+	}
+	containerName := "muvee-" + domainPrefix
+	log.Printf("Cleanup: removing stale container %s", containerName)
+	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", containerName)
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		log.Printf("Cleanup docker rm output: %s", strings.TrimSpace(string(out)))
+	}
+	// Ignore "no such container" errors – the container may already be gone.
+	if err != nil && !strings.Contains(string(out), "No such container") {
+		return fmt.Errorf("docker rm -f %s: %w", containerName, err)
+	}
+	return nil
+}
+
+// runContainerStatusReporter periodically inspects all muvee-* containers on this node
+// and reports their restart counts and OOM-killed flags to the control plane.
+func runContainerStatusReporter(ctx context.Context, baseURL, secret string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reportContainerStatuses(ctx, baseURL, secret)
+		}
+	}
+}
+
+func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
+	out, err := exec.CommandContext(ctx, "docker", "ps",
+		"--filter", "name=muvee-",
+		"--format", "{{.Names}}").Output()
+	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		return
+	}
+
+	type containerStatus struct {
+		DomainPrefix string `json:"domain_prefix"`
+		RestartCount int    `json:"restart_count"`
+		OOMKilled    bool   `json:"oom_killed"`
+	}
+	var statuses []containerStatus
+
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name = strings.TrimSpace(name)
+		if !strings.HasPrefix(name, "muvee-") {
+			continue
+		}
+		domainPrefix := strings.TrimPrefix(name, "muvee-")
+
+		inspectOut, err := exec.CommandContext(ctx, "docker", "inspect",
+			"--format", `{"restart_count":{{.RestartCount}},"oom_killed":{{.State.OOMKilled}}}`,
+			name).Output()
+		if err != nil {
+			continue
+		}
+		var st struct {
+			RestartCount int  `json:"restart_count"`
+			OOMKilled    bool `json:"oom_killed"`
+		}
+		if err := json.Unmarshal(bytes.TrimSpace(inspectOut), &st); err != nil {
+			log.Printf("Failed to parse inspect output for %s: %v", name, err)
+			continue
+		}
+		statuses = append(statuses, containerStatus{
+			DomainPrefix: domainPrefix,
+			RestartCount: st.RestartCount,
+			OOMKilled:    st.OOMKilled,
+		})
+	}
+
+	if len(statuses) == 0 {
+		return
+	}
+	body, _ := json.Marshal(statuses)
+	resp, _ := agentPost(baseURL+"/api/agent/container-statuses", secret, "application/json", jsonReader(body))
+	if resp != nil {
+		resp.Body.Close()
+	}
 }
 
 func str(m map[string]interface{}, key string) string {

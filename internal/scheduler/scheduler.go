@@ -123,6 +123,22 @@ func (s *Scheduler) PickBuilderNode(ctx context.Context) (*store.Node, error) {
 	return nil, fmt.Errorf("no active builder nodes")
 }
 
+// DispatchCleanup sends a cleanup task to a specific node to remove a stale container.
+// This is used when a deployment migrates to a different node and the old container
+// on the previous node must be removed.
+func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stoppedDeployment *store.Deployment, domainPrefix string) error {
+	task := &store.Task{
+		Type:         store.TaskTypeCleanup,
+		NodeID:       &nodeID,
+		DeploymentID: stoppedDeployment.ID,
+		Payload: map[string]interface{}{
+			"domain_prefix": domainPrefix,
+		},
+	}
+	_, err := s.store.CreateTask(ctx, task)
+	return err
+}
+
 // DispatchBuild creates a build task on the best builder node.
 func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
 	builderNode, err := s.PickBuilderNode(ctx)
@@ -231,6 +247,7 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 			"auth_required":  project.AuthRequired,
 			"auth_domains":   project.AuthAllowedDomains,
 			"container_port": project.ContainerPort,
+			"memory_limit":   project.MemoryLimit,
 			"datasets":       datasets,
 			"env_vars":       envVars,
 		},
