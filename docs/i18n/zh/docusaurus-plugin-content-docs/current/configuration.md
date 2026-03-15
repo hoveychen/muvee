@@ -36,7 +36,8 @@ sidebar_position: 3
 | `PORT` | `4181` | HTTP 监听端口 |
 | `GOOGLE_CLIENT_ID` | — | 与控制平面相同 |
 | `GOOGLE_CLIENT_SECRET` | — | 与控制平面相同 |
-| `FORWARD_AUTH_REDIRECT_URL` | `http://localhost:4181/_oauth` | ForwardAuth 的 OAuth2 回调 URL |
+| `FORWARD_AUTH_REDIRECT_URL` | `http://localhost:4181/_oauth` | ForwardAuth 的 OAuth2 回调 URL。生产环境设置为 `https://www.BASE_DOMAIN/_oauth`，并在 Google Cloud Console 中与 `GOOGLE_REDIRECT_URL` 一起注册。 |
+| `BASE_DOMAIN` | — | 根域名。必填，用于将 session cookie 共享给所有 `*.BASE_DOMAIN` 子域名（如 `traefik.BASE_DOMAIN`、各 project 子域名）。 |
 | `JWT_SECRET` | — | 必须与控制平面的值一致 |
 | `ADMIN_EMAILS` | — | 必须与控制平面的值一致；用于控制 `/verify-admin`（Traefik 控制台）访问权限 |
 

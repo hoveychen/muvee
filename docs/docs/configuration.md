@@ -36,7 +36,8 @@ All configuration is via environment variables.
 | `PORT` | `4181` | HTTP listen port |
 | `GOOGLE_CLIENT_ID` | — | Same as control plane |
 | `GOOGLE_CLIENT_SECRET` | — | Same as control plane |
-| `FORWARD_AUTH_REDIRECT_URL` | `http://localhost:4181/_oauth` | OAuth2 callback URL for ForwardAuth |
+| `FORWARD_AUTH_REDIRECT_URL` | `http://localhost:4181/_oauth` | OAuth2 callback URL for ForwardAuth. In production set to `https://www.BASE_DOMAIN/_oauth` and register it in Google Cloud Console alongside `GOOGLE_REDIRECT_URL`. |
+| `BASE_DOMAIN` | — | Root domain. Required so the session cookie is shared across all `*.BASE_DOMAIN` subdomains (e.g. `traefik.BASE_DOMAIN`, project subdomains). |
 | `JWT_SECRET` | — | Must match the control plane value |
 | `ADMIN_EMAILS` | — | Must match the control plane value; used to gate `/verify-admin` (Traefik dashboard) |
 

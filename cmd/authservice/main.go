@@ -26,6 +26,7 @@ var (
 	oidcVerifier *gooidc.IDTokenVerifier
 	jwtSecret    []byte
 	adminEmails  map[string]struct{}
+	cookieDomain string
 )
 
 func main() {
@@ -36,6 +37,7 @@ func main() {
 	if redirectURL == "" {
 		redirectURL = "http://localhost:4181/_oauth"
 	}
+	cookieDomain = os.Getenv("BASE_DOMAIN")
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		secret = "change-me-in-production"
@@ -149,21 +151,33 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: signed,
-		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/", SameSite: http.SameSiteLaxMode,
+		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
+		Domain: cookieDomain, SameSite: http.SameSiteLaxMode,
 	})
-	redirect := r.URL.Query().Get("redirect")
-	if redirect == "" {
-		redirect = "/"
+	// Retrieve the original destination from the cookie set in redirectToLogin.
+	redirectCookie, err := r.Cookie("fwd_oauth_redirect")
+	redirect := "/"
+	if err == nil && redirectCookie.Value != "" {
+		redirect = redirectCookie.Value
 	}
+	// Clear the temporary redirect cookie.
+	http.SetCookie(w, &http.Cookie{
+		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
+		HttpOnly: true, Path: "/", Domain: cookieDomain,
+	})
 	http.Redirect(w, r, redirect, http.StatusFound)
 }
 
 func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	state := fmt.Sprintf("%d", time.Now().UnixNano())
 	http.SetCookie(w, &http.Cookie{Name: "fwd_oauth_state", Value: state, MaxAge: 300, HttpOnly: true, Path: "/"})
-	redirect := r.Header.Get("X-Forwarded-Uri")
-	authURL := oauth2Cfg.AuthCodeURL(state, oauth2.SetAuthURLParam("redirect_uri",
-		oauth2Cfg.RedirectURL+"?redirect="+redirect))
+	// Store original destination in a cookie so redirect_uri stays clean (no query params).
+	originalURI := r.Header.Get("X-Forwarded-Uri")
+	http.SetCookie(w, &http.Cookie{
+		Name: "fwd_oauth_redirect", Value: originalURI,
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+	})
+	authURL := oauth2Cfg.AuthCodeURL(state)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 

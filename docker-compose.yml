@@ -80,6 +80,7 @@ services:
       FORWARD_AUTH_REDIRECT_URL: https://www.${BASE_DOMAIN}/_oauth
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_EMAILS: ${ADMIN_EMAILS}
+      BASE_DOMAIN: ${BASE_DOMAIN}
       PORT: "4181"
     networks:
       - muvee-net
@@ -88,6 +89,7 @@ services:
     image: traefik:v3.3
     command:
       - "--configFile=/etc/traefik/traefik.yml"
+      - "--certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}"
     ports:
       - "80:80"
       - "443:443"
