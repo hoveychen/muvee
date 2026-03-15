@@ -14,27 +14,27 @@ const (
 )
 
 type User struct {
-	ID        uuid.UUID `db:"id"`
-	Email     string    `db:"email"`
-	Name      string    `db:"name"`
-	AvatarURL string    `db:"avatar_url"`
-	Role      UserRole  `db:"role"`
-	CreatedAt time.Time `db:"created_at"`
+	ID        uuid.UUID `db:"id"         json:"id"`
+	Email     string    `db:"email"      json:"email"`
+	Name      string    `db:"name"       json:"name"`
+	AvatarURL string    `db:"avatar_url" json:"avatar_url"`
+	Role      UserRole  `db:"role"       json:"role"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
 }
 
 type Project struct {
-	ID                 uuid.UUID `db:"id"`
-	Name               string    `db:"name"`
-	GitURL             string    `db:"git_url"`
-	GitBranch          string    `db:"git_branch"`
-	DomainPrefix       string    `db:"domain_prefix"`
-	DockerfilePath     string    `db:"dockerfile_path"`
-	OwnerID            uuid.UUID `db:"owner_id"`
-	AuthRequired       bool      `db:"auth_required"`
-	AuthAllowedDomains string    `db:"auth_allowed_domains"`
-	ContainerPort      int       `db:"container_port"`
-	CreatedAt          time.Time `db:"created_at"`
-	UpdatedAt          time.Time `db:"updated_at"`
+	ID                 uuid.UUID `db:"id"                   json:"id"`
+	Name               string    `db:"name"                 json:"name"`
+	GitURL             string    `db:"git_url"              json:"git_url"`
+	GitBranch          string    `db:"git_branch"           json:"git_branch"`
+	DomainPrefix       string    `db:"domain_prefix"        json:"domain_prefix"`
+	DockerfilePath     string    `db:"dockerfile_path"      json:"dockerfile_path"`
+	OwnerID            uuid.UUID `db:"owner_id"             json:"owner_id"`
+	AuthRequired       bool      `db:"auth_required"        json:"auth_required"`
+	AuthAllowedDomains string    `db:"auth_allowed_domains" json:"auth_allowed_domains"`
+	ContainerPort      int       `db:"container_port"       json:"container_port"`
+	CreatedAt          time.Time `db:"created_at"           json:"created_at"`
+	UpdatedAt          time.Time `db:"updated_at"           json:"updated_at"`
 }
 
 type MountMode string
@@ -45,21 +45,21 @@ const (
 )
 
 type Dataset struct {
-	ID        uuid.UUID `db:"id"`
-	Name      string    `db:"name"`
-	NFSPath   string    `db:"nfs_path"`
-	SizeBytes int64     `db:"size_bytes"`
-	Checksum  string    `db:"checksum"`
-	Version   int64     `db:"version"`
-	OwnerID   uuid.UUID `db:"owner_id"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
+	ID        uuid.UUID `db:"id"         json:"id"`
+	Name      string    `db:"name"       json:"name"`
+	NFSPath   string    `db:"nfs_path"   json:"nfs_path"`
+	SizeBytes int64     `db:"size_bytes" json:"size_bytes"`
+	Checksum  string    `db:"checksum"   json:"checksum"`
+	Version   int64     `db:"version"    json:"version"`
+	OwnerID   uuid.UUID `db:"owner_id"   json:"owner_id"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type ProjectDataset struct {
-	ProjectID uuid.UUID `db:"project_id"`
-	DatasetID uuid.UUID `db:"dataset_id"`
-	MountMode MountMode `db:"mount_mode"`
+	ProjectID uuid.UUID `db:"project_id" json:"project_id"`
+	DatasetID uuid.UUID `db:"dataset_id" json:"dataset_id"`
+	MountMode MountMode `db:"mount_mode" json:"mount_mode"`
 }
 
 type ProjectMember struct {
@@ -84,16 +84,16 @@ const (
 )
 
 type Deployment struct {
-	ID        uuid.UUID        `db:"id"`
-	ProjectID uuid.UUID        `db:"project_id"`
-	ImageTag  string           `db:"image_tag"`
-	CommitSHA string           `db:"commit_sha"`
-	Status    DeploymentStatus `db:"status"`
-	NodeID    *uuid.UUID       `db:"node_id"`
-	HostPort  int              `db:"host_port"`
-	Logs      string           `db:"logs"`
-	CreatedAt time.Time        `db:"created_at"`
-	UpdatedAt time.Time        `db:"updated_at"`
+	ID        uuid.UUID        `db:"id"         json:"id"`
+	ProjectID uuid.UUID        `db:"project_id" json:"project_id"`
+	ImageTag  string           `db:"image_tag"  json:"image_tag"`
+	CommitSHA string           `db:"commit_sha" json:"commit_sha"`
+	Status    DeploymentStatus `db:"status"     json:"status"`
+	NodeID    *uuid.UUID       `db:"node_id"    json:"node_id"`
+	HostPort  int              `db:"host_port"  json:"host_port"`
+	Logs      string           `db:"logs"       json:"logs"`
+	CreatedAt time.Time        `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time        `db:"updated_at" json:"updated_at"`
 }
 
 // RunningDeploymentInfo is a denormalized view of a running deployment
@@ -116,14 +116,14 @@ const (
 )
 
 type Node struct {
-	ID               uuid.UUID `db:"id"`
-	Hostname         string    `db:"hostname"`
-	Role             NodeRole  `db:"role"`
-	HostIP           string    `db:"host_ip"`
-	MaxStorageBytes  int64     `db:"max_storage_bytes"`
-	UsedStorageBytes int64     `db:"used_storage_bytes"`
-	LastSeenAt       time.Time `db:"last_seen_at"`
-	CreatedAt        time.Time `db:"created_at"`
+	ID               uuid.UUID `db:"id"                 json:"id"`
+	Hostname         string    `db:"hostname"           json:"hostname"`
+	Role             NodeRole  `db:"role"               json:"role"`
+	HostIP           string    `db:"host_ip"            json:"host_ip"`
+	MaxStorageBytes  int64     `db:"max_storage_bytes"  json:"max_storage_bytes"`
+	UsedStorageBytes int64     `db:"used_storage_bytes" json:"used_storage_bytes"`
+	LastSeenAt       time.Time `db:"last_seen_at"       json:"last_seen_at"`
+	CreatedAt        time.Time `db:"created_at"         json:"created_at"`
 }
 
 type NodeDataset struct {
@@ -134,12 +134,12 @@ type NodeDataset struct {
 }
 
 type DatasetSnapshot struct {
-	ID             uuid.UUID `db:"id"`
-	DatasetID      uuid.UUID `db:"dataset_id"`
-	ScannedAt      time.Time `db:"scanned_at"`
-	TotalFiles     int64     `db:"total_files"`
-	TotalSizeBytes int64     `db:"total_size_bytes"`
-	Version        int64     `db:"version"`
+	ID             uuid.UUID `db:"id"              json:"id"`
+	DatasetID      uuid.UUID `db:"dataset_id"      json:"dataset_id"`
+	ScannedAt      time.Time `db:"scanned_at"      json:"scanned_at"`
+	TotalFiles     int64     `db:"total_files"     json:"total_files"`
+	TotalSizeBytes int64     `db:"total_size_bytes" json:"total_size_bytes"`
+	Version        int64     `db:"version"         json:"version"`
 }
 
 type FileEventType string
@@ -162,16 +162,16 @@ type ApiToken struct {
 }
 
 type DatasetFileHistory struct {
-	ID           uuid.UUID     `db:"id"`
-	DatasetID    uuid.UUID     `db:"dataset_id"`
-	FilePath     string        `db:"file_path"`
-	EventType    FileEventType `db:"event_type"`
-	OldSize      int64         `db:"old_size"`
-	NewSize      int64         `db:"new_size"`
-	OldChecksum  string        `db:"old_checksum"`
-	NewChecksum  string        `db:"new_checksum"`
-	SnapshotID   uuid.UUID     `db:"snapshot_id"`
-	OccurredAt   time.Time     `db:"occurred_at"`
+	ID          uuid.UUID     `db:"id"           json:"id"`
+	DatasetID   uuid.UUID     `db:"dataset_id"   json:"dataset_id"`
+	FilePath    string        `db:"file_path"    json:"file_path"`
+	EventType   FileEventType `db:"event_type"   json:"event_type"`
+	OldSize     int64         `db:"old_size"     json:"old_size"`
+	NewSize     int64         `db:"new_size"     json:"new_size"`
+	OldChecksum string        `db:"old_checksum" json:"old_checksum"`
+	NewChecksum string        `db:"new_checksum" json:"new_checksum"`
+	SnapshotID  uuid.UUID     `db:"snapshot_id"  json:"snapshot_id"`
+	OccurredAt  time.Time     `db:"occurred_at"  json:"occurred_at"`
 }
 
 type TaskType string

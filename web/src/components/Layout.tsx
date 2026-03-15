@@ -82,7 +82,7 @@ export default function Layout({ children }: { children?: ReactNode }) {
                 <img src={user.avatar_url} alt="" className="rounded-full" style={{ width: '24px', height: '24px' }} />
               ) : (
                 <div className="rounded-full flex items-center justify-center" style={{ width: '24px', height: '24px', background: 'var(--bg-hover)', fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
-                  {user.name.charAt(0).toUpperCase()}
+                  {(user.name || user.email || '?').charAt(0).toUpperCase()}
                 </div>
               )}
               <div className="flex-1 min-w-0">

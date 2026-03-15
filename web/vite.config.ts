@@ -11,8 +11,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': process.env.BACKEND_URL ?? 'http://localhost:8080',
-      '/auth': process.env.BACKEND_URL ?? 'http://localhost:8080',
+      '/api': 'http://localhost:8080',
+      '/auth': 'http://localhost:8080',
     },
   },
 })

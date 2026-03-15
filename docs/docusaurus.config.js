@@ -55,7 +55,7 @@ const config = {
         title: 'muvee',
         logo: {
           alt: 'muvee Logo',
-          src: 'img/logo.svg',
+          src: 'img/icon.png',
         },
         style: 'dark',
         items: [

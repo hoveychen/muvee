@@ -2,6 +2,8 @@
 
 <h1>muvee</h1>
 
+<img src="docs/static/img/mascot.png" alt="muvee mascot" width="320" />
+
 <p>
   <a href="https://github.com/hoveychen/muvee/actions/workflows/ci.yml">
     <img src="https://github.com/hoveychen/muvee/actions/workflows/ci.yml/badge.svg" alt="CI" />
@@ -34,6 +36,8 @@
 ## English
 
 ### What is muvee?
+
+**muvee** stands for **M**icroservices **U**nified **V**irtualized **E**xecution **E**ngine.
 
 muvee is a **self-hosted PaaS** designed for private clouds with many lightweight applications. No Kubernetes, no YAML sprawl. Push a tag → binary is released. Connect a Git repo → container is deployed.
 
@@ -203,6 +207,8 @@ See the [muveectl CLI reference](https://hoveychen.github.io/muvee/docs/muveectl
 ## 中文
 
 ### muvee 是什么？
+
+**muvee** 是 **M**icroservices **U**nified **V**irtualized **E**xecution **E**ngine 的缩写（微服务统一虚拟化执行引擎）。
 
 muvee 是一个面向私有云的**轻量自托管 PaaS**，专为大量小型应用的快速上线设计。不需要 Kubernetes，不需要复杂配置。绑定 Git 仓库，点击发布，应用即上线。
 
