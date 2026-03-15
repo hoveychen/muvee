@@ -8,6 +8,7 @@ import Projects from './pages/Projects'
 import NewProject from './pages/NewProject'
 import ProjectDetail from './pages/ProjectDetail'
 import Datasets from './pages/Datasets'
+import NewDataset from './pages/NewDataset'
 import SecretsPage from './pages/Secrets'
 import Layout, { NodesPage, UsersPage } from './components/Layout'
 
@@ -34,6 +35,7 @@ function App() {
             <Route path="projects/new" element={<NewProject />} />
             <Route path="projects/:id" element={<ProjectDetail />} />
             <Route path="datasets" element={<Datasets />} />
+            <Route path="datasets/new" element={<NewDataset />} />
             <Route path="secrets" element={<SecretsPage />} />
             <Route path="nodes" element={<NodesPage />} />
             <Route path="users" element={<UsersPage />} />

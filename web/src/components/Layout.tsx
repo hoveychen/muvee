@@ -7,17 +7,19 @@ import type { Node } from '../lib/types'
 
 const MONO = 'var(--font-mono)'
 
-const navItems = [
-  { to: '/projects', icon: LayoutGrid, label: 'Projects' },
-  { to: '/datasets', icon: Database, label: 'Datasets' },
-  { to: '/secrets', icon: KeyRound, label: 'Secrets' },
-  { to: '/nodes', icon: Server, label: 'Nodes' },
-  { to: '/users', icon: Users, label: 'Users' },
+const ALL_NAV_ITEMS = [
+  { to: '/projects', icon: LayoutGrid, label: 'Projects', adminOnly: false },
+  { to: '/datasets', icon: Database, label: 'Datasets', adminOnly: false },
+  { to: '/secrets', icon: KeyRound, label: 'Secrets', adminOnly: false },
+  { to: '/nodes', icon: Server, label: 'Nodes', adminOnly: true },
+  { to: '/users', icon: Users, label: 'Users', adminOnly: true },
 ]
 
 export default function Layout({ children }: { children?: ReactNode }) {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const isAdmin = user?.role === 'admin'
+  const navItems = ALL_NAV_ITEMS.filter(item => !item.adminOnly || isAdmin)
 
   const handleLogout = async () => {
     await fetch('/auth/logout', { method: 'POST', credentials: 'include' })
@@ -38,12 +40,15 @@ export default function Layout({ children }: { children?: ReactNode }) {
         }}
       >
         {/* Logo */}
-        <div className="px-4 py-5" style={{ borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontFamily: MONO, fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
-            muvee
-          </div>
-          <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
-            private cloud
+        <div className="px-4 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
+          <img src="/icon.png" alt="muvee" style={{ width: '28px', height: '28px', borderRadius: '6px', flexShrink: 0 }} />
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
+              muvee
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', marginTop: '1px' }}>
+              private cloud
+            </div>
           </div>
         </div>
 

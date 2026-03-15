@@ -147,8 +147,8 @@ function PrivateRepoSection({
             {[
               { id: 'none' as CredMode, label: 'None (public repo)' },
               { id: (defaultCredType === 'ssh' ? 'new_ssh' : 'new_pat') as CredMode, label: defaultCredType === 'ssh' ? 'New SSH Key' : `New ${provider ?? 'HTTPS'} Token` },
-              { id: 'new_pat' as CredMode, label: 'New PAT', hidden: defaultCredType === 'ssh' },
-              { id: 'new_ssh' as CredMode, label: 'New SSH Key', hidden: defaultCredType !== 'ssh' },
+              { id: 'new_pat' as CredMode, label: 'New PAT', hidden: defaultCredType !== 'ssh' },
+              { id: 'new_ssh' as CredMode, label: 'New SSH Key', hidden: defaultCredType === 'ssh' },
               { id: 'existing' as CredMode, label: 'Existing Secret' },
             ].filter(t => !t.hidden).map(tab => (
               <button

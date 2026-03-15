@@ -62,7 +62,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var users []*User
+	users := make([]*User, 0)
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.CreatedAt); err != nil {
@@ -125,7 +125,7 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 		return nil, err
 	}
 	defer rows.Close()
-	var projects []*Project
+	projects := make([]*Project, 0)
 	for rows.Next() {
 		var p Project
 		if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.CreatedAt, &p.UpdatedAt); err != nil {
@@ -186,7 +186,7 @@ func (s *Store) GetProjectDatasets(ctx context.Context, projectID uuid.UUID) ([]
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ProjectDataset
+	items := make([]ProjectDataset, 0)
 	for rows.Next() {
 		var item ProjectDataset
 		if err := rows.Scan(&item.ProjectID, &item.DatasetID, &item.MountMode); err != nil {
@@ -241,7 +241,7 @@ func (s *Store) ListDatasetsForUser(ctx context.Context, userID uuid.UUID, isAdm
 		return nil, err
 	}
 	defer rows.Close()
-	var datasets []*Dataset
+	datasets := make([]*Dataset, 0)
 	for rows.Next() {
 		var d Dataset
 		if err := rows.Scan(&d.ID, &d.Name, &d.NFSPath, &d.SizeBytes, &d.Checksum, &d.Version, &d.OwnerID, &d.CreatedAt, &d.UpdatedAt); err != nil {
@@ -313,7 +313,7 @@ func (s *Store) ListDeployments(ctx context.Context, projectID uuid.UUID) ([]*De
 		return nil, err
 	}
 	defer rows.Close()
-	var deployments []*Deployment
+	deployments := make([]*Deployment, 0)
 	for rows.Next() {
 		var d Deployment
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ImageTag, &d.CommitSHA, &d.Status, &d.NodeID, &d.HostPort, &d.Logs, &d.CreatedAt, &d.UpdatedAt); err != nil {
@@ -370,7 +370,7 @@ func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeployment
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RunningDeploymentInfo
+	items := make([]*RunningDeploymentInfo, 0)
 	for rows.Next() {
 		var r RunningDeploymentInfo
 		if err := rows.Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.HostIP, &r.HostPort); err != nil {
@@ -423,7 +423,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var nodes []*Node
+	nodes := make([]*Node, 0)
 	for rows.Next() {
 		var n Node
 		if err := rows.Scan(&n.ID, &n.Hostname, &n.Role, &n.HostIP, &n.MaxStorageBytes, &n.UsedStorageBytes, &n.LastSeenAt, &n.CreatedAt); err != nil {
@@ -440,7 +440,7 @@ func (s *Store) GetDeployNodes(ctx context.Context) ([]*Node, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var nodes []*Node
+	nodes := make([]*Node, 0)
 	for rows.Next() {
 		var n Node
 		if err := rows.Scan(&n.ID, &n.Hostname, &n.Role, &n.HostIP, &n.MaxStorageBytes, &n.UsedStorageBytes, &n.LastSeenAt, &n.CreatedAt); err != nil {
@@ -459,7 +459,7 @@ func (s *Store) GetNodeDatasets(ctx context.Context, nodeID uuid.UUID) ([]*NodeD
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*NodeDataset
+	items := make([]*NodeDataset, 0)
 	for rows.Next() {
 		var nd NodeDataset
 		if err := rows.Scan(&nd.NodeID, &nd.DatasetID, &nd.LastUsedAt, &nd.SizeBytes); err != nil {
@@ -491,7 +491,7 @@ func (s *Store) GetLRUDatasetsForNode(ctx context.Context, nodeID uuid.UUID, nee
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*NodeDataset
+	items := make([]*NodeDataset, 0)
 	var freed int64
 	for rows.Next() && freed < needed {
 		var nd NodeDataset
@@ -532,7 +532,7 @@ func (s *Store) PollTasksForNode(ctx context.Context, nodeID uuid.UUID) ([]*Task
 		return nil, err
 	}
 	defer rows.Close()
-	var tasks []*Task
+	tasks := make([]*Task, 0)
 	for rows.Next() {
 		var t Task
 		if err := rows.Scan(&t.ID, &t.Type, &t.NodeID, &t.DeploymentID, &t.PayloadJSON, &t.Status, &t.Result, &t.CreatedAt, &t.UpdatedAt); err != nil {
@@ -578,7 +578,7 @@ func (s *Store) ListSnapshotsForDataset(ctx context.Context, datasetID uuid.UUID
 		return nil, err
 	}
 	defer rows.Close()
-	var snaps []*DatasetSnapshot
+	snaps := make([]*DatasetSnapshot, 0)
 	for rows.Next() {
 		var s DatasetSnapshot
 		if err := rows.Scan(&s.ID, &s.DatasetID, &s.ScannedAt, &s.TotalFiles, &s.TotalSizeBytes, &s.Version); err != nil {
@@ -627,7 +627,7 @@ func (s *Store) ListFileHistory(ctx context.Context, datasetID uuid.UUID, filePa
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*DatasetFileHistory
+	items := make([]*DatasetFileHistory, 0)
 	for rows.Next() {
 		var h DatasetFileHistory
 		if err := rows.Scan(&h.ID, &h.DatasetID, &h.FilePath, &h.EventType, &h.OldSize, &h.NewSize, &h.OldChecksum, &h.NewChecksum, &h.SnapshotID, &h.OccurredAt); err != nil {
@@ -684,7 +684,7 @@ func (s *Store) ListAPITokensForUser(ctx context.Context, userID uuid.UUID) ([]*
 		return nil, err
 	}
 	defer rows.Close()
-	var tokens []*ApiToken
+	tokens := make([]*ApiToken, 0)
 	for rows.Next() {
 		var t ApiToken
 		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.CreatedAt); err != nil {
@@ -738,7 +738,7 @@ func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Se
 		return nil, err
 	}
 	defer rows.Close()
-	var secrets []*Secret
+	secrets := make([]*Secret, 0)
 	for rows.Next() {
 		var sec Secret
 		if err := rows.Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.CreatedAt, &sec.UpdatedAt); err != nil {
@@ -781,7 +781,7 @@ func (s *Store) GetProjectSecretsWithMeta(ctx context.Context, projectID uuid.UU
 		return nil, err
 	}
 	defer rows.Close()
-	var result []*ProjectSecretWithMeta
+	result := make([]*ProjectSecretWithMeta, 0)
 	for rows.Next() {
 		var ps ProjectSecretWithMeta
 		if err := rows.Scan(&ps.ProjectID, &ps.SecretID, &ps.EnvVarName, &ps.UseForGit, &ps.GitUsername, &ps.SecretName, &ps.SecretType); err != nil {
@@ -819,7 +819,7 @@ func (s *Store) GetProjectSecretsDecrypted(ctx context.Context, projectID uuid.U
 		return nil, err
 	}
 	defer rows.Close()
-	var result []*DecryptedProjectSecret
+	result := make([]*DecryptedProjectSecret, 0)
 	for rows.Next() {
 		var d DecryptedProjectSecret
 		var encVal string

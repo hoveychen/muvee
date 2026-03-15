@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, Trash2, Plus, ExternalLink } from 'lucide-react'
+import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLink } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Project, ApiToken, CreatedApiToken } from '../lib/types'
+import type { Project } from '../lib/types'
 import { timeAgo, statusColor } from '../lib/utils'
 
 const MONO = 'var(--font-mono)'
@@ -190,40 +190,8 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 
 function CLIAccessCard() {
-  const [tokens, setTokens] = useState<ApiToken[]>([])
-  const [newToken, setNewToken] = useState<CreatedApiToken | null>(null)
-  const [creating, setCreating] = useState(false)
-  const [tokenName, setTokenName] = useState('CLI Token')
   const [open, setOpen] = useState(false)
-
   const skillURL = `${window.location.origin}/api/skill`
-  const serverURL = window.location.origin
-
-  useEffect(() => {
-    if (open) {
-      api.tokens.list().then(setTokens).catch(() => {})
-    }
-  }, [open])
-
-  const handleCreate = async () => {
-    setCreating(true)
-    try {
-      const t = await api.tokens.create(tokenName || 'CLI Token')
-      setNewToken(t)
-      setTokens(prev => [{ id: t.id, name: t.name, last_used_at: null, created_at: new Date().toISOString() }, ...prev])
-    } catch (e) {
-      alert('Failed to create token: ' + (e as Error).message)
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Revoke this token? This cannot be undone.')) return
-    await api.tokens.delete(id).catch(() => {})
-    setTokens(prev => prev.filter(t => t.id !== id))
-    if (newToken?.id === id) setNewToken(null)
-  }
 
   return (
     <div className="mt-8" style={{ border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--bg-card)', overflow: 'hidden' }}>
@@ -241,7 +209,7 @@ function CLIAccessCard() {
             DEVELOPER ACCESS
           </p>
           <p style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '2px' }}>
-            CLI &amp; API Tokens
+            Skill URL
           </p>
         </div>
         <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
@@ -251,193 +219,46 @@ function CLIAccessCard() {
 
       {open && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '1.5rem' }}>
-          {/* Skill URL */}
-          <div className="mb-6">
-            <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
-              CLAUDE SKILL URL
-            </p>
-            <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.6 }}>
-              Share this URL with Claude to teach it how to use the muveectl CLI on your behalf.
-            </p>
-            <div className="flex items-center gap-2">
-              <div
-                className="flex-1 px-3 py-2 rounded-md"
-                style={{
-                  fontFamily: MONO,
-                  fontSize: '0.75rem',
-                  color: 'var(--accent)',
-                  background: 'var(--bg-hover)',
-                  border: '1px solid var(--border)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {skillURL}
-              </div>
-              <CopyButton text={skillURL} label="Copy URL" />
-              <a
-                href={skillURL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all duration-150"
-                style={{
-                  fontFamily: MONO,
-                  fontSize: '0.72rem',
-                  background: 'var(--bg-hover)',
-                  color: 'var(--fg-muted)',
-                  border: '1px solid var(--border)',
-                  textDecoration: 'none',
-                }}
-              >
-                <ExternalLink size={11} />
-                Preview
-              </a>
+          <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
+            CLAUDE SKILL URL
+          </p>
+          <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.6 }}>
+            Share this URL with Claude to teach it how to use the muveectl CLI on your behalf.
+          </p>
+          <div className="flex items-center gap-2">
+            <div
+              className="flex-1 px-3 py-2 rounded-md"
+              style={{
+                fontFamily: MONO,
+                fontSize: '0.75rem',
+                color: 'var(--accent)',
+                background: 'var(--bg-hover)',
+                border: '1px solid var(--border)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {skillURL}
             </div>
-          </div>
-
-          {/* Quick start */}
-          <div className="mb-6">
-            <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
-              QUICK START
-            </p>
-            <div className="flex flex-col gap-2">
-              {[
-                { label: 'Login', cmd: `muveectl login --server ${serverURL}` },
-                { label: 'List projects', cmd: 'muveectl projects list' },
-                { label: 'Deploy', cmd: 'muveectl projects deploy <PROJECT_ID>' },
-              ].map(({ label, cmd }) => (
-                <div key={label} className="flex items-center gap-2">
-                  <div
-                    className="flex-1 px-3 py-1.5 rounded-md"
-                    style={{
-                      fontFamily: MONO,
-                      fontSize: '0.75rem',
-                      color: 'var(--fg-primary)',
-                      background: 'var(--bg-base)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <span style={{ color: 'var(--fg-muted)', marginRight: '0.5rem' }}>$</span>
-                    {cmd}
-                  </div>
-                  <CopyButton text={cmd} label={label} />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* API Tokens */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
-                API TOKENS
-              </p>
-              <div className="flex items-center gap-2">
-                <input
-                  value={tokenName}
-                  onChange={e => setTokenName(e.target.value)}
-                  placeholder="Token name"
-                  style={{
-                    fontFamily: MONO,
-                    fontSize: '0.8rem',
-                    padding: '0.25rem 0.6rem',
-                    background: 'var(--bg-hover)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--fg-primary)',
-                    borderRadius: '6px',
-                    outline: 'none',
-                    width: '140px',
-                  }}
-                />
-                <button
-                  onClick={handleCreate}
-                  disabled={creating}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all duration-150"
-                  style={{
-                    fontFamily: MONO,
-                    fontSize: '0.75rem',
-                    background: 'var(--accent)',
-                    color: '#ffffff',
-                    border: 'none',
-                    cursor: creating ? 'not-allowed' : 'pointer',
-                    opacity: creating ? 0.6 : 1,
-                    fontWeight: 500,
-                  }}
-                >
-                  <Plus size={11} />
-                  {creating ? 'Creating…' : 'New Token'}
-                </button>
-              </div>
-            </div>
-
-            {/* Newly created token banner */}
-            {newToken && (
-              <div
-                className="mb-3 px-4 py-3 rounded-md"
-                style={{ background: 'rgba(88,166,255,0.1)', border: '1px solid rgba(88,166,255,0.3)' }}
-              >
-                <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--accent)', marginBottom: '0.4rem', letterSpacing: '0.05em' }}>
-                  NEW TOKEN — COPY NOW, IT WON'T BE SHOWN AGAIN
-                </p>
-                <div className="flex items-center gap-2">
-                  <div
-                    className="flex-1 px-3 py-1.5 rounded-md"
-                    style={{
-                      fontFamily: MONO,
-                      fontSize: '0.75rem',
-                      color: 'var(--accent)',
-                      background: 'var(--bg-base)',
-                      border: '1px solid rgba(88,166,255,0.3)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {newToken.token}
-                  </div>
-                  <CopyButton text={newToken.token} label="Copy Token" />
-                </div>
-              </div>
-            )}
-
-            {/* Token list */}
-            {tokens.length === 0 ? (
-              <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>
-                No tokens yet. Create one to use the CLI.
-              </p>
-            ) : (
-              <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
-                {tokens.map((t, i) => (
-                  <div
-                    key={t.id}
-                    className="flex items-center gap-4 px-4 py-2.5"
-                    style={{ background: 'var(--bg-card)', borderBottom: i < tokens.length - 1 ? '1px solid var(--border)' : 'none' }}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p style={{ fontFamily: MONO, fontSize: '0.82rem', color: 'var(--fg-primary)' }}>{t.name}</p>
-                      <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>
-                        Created {timeAgo(t.created_at)}
-                        {t.last_used_at ? ` · Last used ${timeAgo(t.last_used_at)}` : ' · Never used'}
-                      </p>
-                    </div>
-                    <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
-                      {t.id.slice(0, 8)}…
-                    </p>
-                    <button
-                      onClick={() => handleDelete(t.id)}
-                      className="p-1 rounded-md transition-all duration-150"
-                      style={{ background: 'none', border: 'none', color: 'var(--fg-muted)', cursor: 'pointer' }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--danger)' }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)' }}
-                      title="Revoke token"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <CopyButton text={skillURL} label="Copy URL" />
+            <a
+              href={skillURL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all duration-150"
+              style={{
+                fontFamily: MONO,
+                fontSize: '0.72rem',
+                background: 'var(--bg-hover)',
+                color: 'var(--fg-muted)',
+                border: '1px solid var(--border)',
+                textDecoration: 'none',
+              }}
+            >
+              <ExternalLink size={11} />
+              Preview
+            </a>
           </div>
         </div>
       )}
