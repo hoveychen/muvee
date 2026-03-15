@@ -67,7 +67,7 @@ docker compose up -d
 ```
 
 This starts:
-- **muvee-server** — API + embedded web UI at `https://www.BASE_DOMAIN`
+- **muvee-server** — API + embedded web UI at `https://BASE_DOMAIN`
 - **muvee-authservice** — Traefik ForwardAuth sidecar (`:4181`)
 - **PostgreSQL** — metadata store
 - **Traefik** — reverse proxy with automatic HTTPS; dashboard at `https://traefik.BASE_DOMAIN` (admin only)
@@ -101,7 +101,7 @@ docker run -d --name muvee-agent \
 
 ### 5. Create your first project
 
-1. Open `https://www.example.com` and sign in with Google
+1. Open `https://example.com` and sign in with Google
 2. Click **New Project**
 3. Fill in Git URL, branch, domain prefix
 4. Click **Deploy** — muvee will:

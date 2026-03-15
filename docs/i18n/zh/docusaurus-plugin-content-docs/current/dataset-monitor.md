@@ -30,7 +30,7 @@ sidebar_position: 6
 ## 手动触发扫描
 
 ```bash
-curl -X POST https://www.example.com/api/datasets/{id}/scan \
+curl -X POST https://example.com/api/datasets/{id}/scan \
   -H "Authorization: Bearer $TOKEN"
 ```
 

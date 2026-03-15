@@ -1,0 +1,25 @@
+{
+  "nav": {
+    "switchToLight": "Switch to light mode",
+    "switchToDark": "Switch to dark mode",
+    "switchToZh": "切换到中文",
+    "switchToEn": "Switch to English"
+  },
+  "community": {
+    "enterDashboard": "Dashboard",
+    "platformLabel": "Private Cloud",
+    "heroTitle": "Explore Live Applications",
+    "heroDesc": "Browse all currently running projects deployed on this platform. Click any card to visit.",
+    "runningCount": "{{count}} apps online",
+    "loginRequired": "Login required",
+    "noPreview": "Preview unavailable",
+    "emptyTitle": "No apps running",
+    "emptyDesc": "Projects will appear here once they are deployed and running",
+    "authModal": {
+      "label": "ACCESS RESTRICTED",
+      "desc": "This app requires authentication. Clicking proceed will redirect you to the login page.",
+      "proceed": "Proceed",
+      "cancel": "Cancel"
+    }
+  }
+}

@@ -43,12 +43,12 @@ traefik.http.routers.{proj}.middlewares={proj}-auth
 1. 用户访问 `{project}.domain.com`
 2. Traefik 携带请求头调用 ForwardAuth 边车服务
 3. 边车服务检查 `muvee_fwd_session` Cookie（JWT）
-4. 若 Cookie 缺失或已过期：重定向到 Google OAuth2（回调地址为 `www.BASE_DOMAIN/_oauth`）
+4. 若 Cookie 缺失或已过期：重定向到 Google OAuth2（回调地址为 `BASE_DOMAIN/_oauth`）
 5. Google 登录完成后：设置域级 JWT Cookie（在所有 `*.BASE_DOMAIN` 子域名间共享），重定向回原始访问地址
 6. 后续请求：验证 JWT，检查邮箱域名，返回 `200`
 
 :::info OAuth 回调的路由方式
-`www.BASE_DOMAIN/_oauth` 路径由 Traefik 直接路由至 `muvee-authservice`，而非 Web UI。这通过 `docker-compose.yml` 中 `muvee-authservice` 容器的 Traefik labels 实现。由于 Traefik 会优先匹配更精确的 `Host + Path` 规则，`www.BASE_DOMAIN/_oauth` 由 Auth 边车服务处理，其余 `www.BASE_DOMAIN` 路径仍正常路由至 `muvee-server`。
+`BASE_DOMAIN/_oauth` 路径由 Traefik 直接路由至 `muvee-authservice`，而非 Web UI。这通过 `docker-compose.yml` 中 `muvee-authservice` 容器的 Traefik labels 实现。由于 Traefik 会优先匹配更精确的 `Host + Path` 规则，`BASE_DOMAIN/_oauth` 由 Auth 边车服务处理，其余 `BASE_DOMAIN` 路径仍正常路由至 `muvee-server`。
 :::
 
 ## 公开项目

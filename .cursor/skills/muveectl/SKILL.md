@@ -38,7 +38,7 @@ Move-Item muveectl.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\muveectl.exe"
 
 ```bash
 # First-time login (opens browser for Google OAuth)
-muveectl login --server https://www.example.com
+muveectl login --server https://example.com
 
 # Verify session
 muveectl whoami

@@ -45,7 +45,7 @@ services:
       MIGRATIONS_DIR: /app/db/migrations
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      GOOGLE_REDIRECT_URL: https://www.${BASE_DOMAIN}/auth/google/callback
+      GOOGLE_REDIRECT_URL: https://${BASE_DOMAIN}/auth/google/callback
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS}
       ADMIN_EMAILS: ${ADMIN_EMAILS}
       JWT_SECRET: ${JWT_SECRET}
@@ -65,7 +65,7 @@ services:
       - muvee-net
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.muvee.rule=Host(`www.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.muvee.rule=Host(`${BASE_DOMAIN}`)"
       - "traefik.http.routers.muvee.entrypoints=websecure"
       - "traefik.http.routers.muvee.tls.certresolver=letsencrypt"
       - "traefik.http.services.muvee.loadbalancer.server.port=8080"
@@ -77,7 +77,7 @@ services:
     environment:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      FORWARD_AUTH_REDIRECT_URL: https://www.${BASE_DOMAIN}/_oauth
+      FORWARD_AUTH_REDIRECT_URL: https://${BASE_DOMAIN}/_oauth
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_EMAILS: ${ADMIN_EMAILS}
       BASE_DOMAIN: ${BASE_DOMAIN}
@@ -86,7 +86,7 @@ services:
       - muvee-net
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.muvee-authservice.rule=Host(`www.${BASE_DOMAIN}`) && Path(`/_oauth`)"
+      - "traefik.http.routers.muvee-authservice.rule=Host(`${BASE_DOMAIN}`) && Path(`/_oauth`)"
       - "traefik.http.routers.muvee-authservice.entrypoints=websecure"
       - "traefik.http.routers.muvee-authservice.tls.certresolver=letsencrypt"
       - "traefik.http.services.muvee-authservice.loadbalancer.server.port=4181"

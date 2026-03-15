@@ -457,7 +457,6 @@ func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 // reservedDomainPrefixes are subdomain prefixes occupied by system services.
 // User-created projects must not use these names to avoid routing conflicts.
 var reservedDomainPrefixes = map[string]bool{
-	"www":      true,
 	"registry": true,
 	"traefik":  true,
 	"muvee":    true,

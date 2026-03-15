@@ -19,6 +19,11 @@ web/embed/dist/
 web/.vite/
 web/tsconfig.tsbuildinfo
 
+# Examples
+examples/community/node_modules/
+examples/community/dist/
+examples/community/tsconfig.tsbuildinfo
+
 # Docs
 docs/node_modules/
 docs/build/

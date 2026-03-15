@@ -30,7 +30,7 @@ To avoid SHA256-hashing every large file on every scan, the monitor uses a two-p
 ## Manual Trigger
 
 ```bash
-curl -X POST https://www.example.com/api/datasets/{id}/scan \
+curl -X POST https://example.com/api/datasets/{id}/scan \
   -H "Authorization: Bearer $TOKEN"
 ```
 

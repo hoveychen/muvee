@@ -1,0 +1,25 @@
+{
+  "nav": {
+    "switchToLight": "切换到亮色模式",
+    "switchToDark": "切换到暗色模式",
+    "switchToZh": "切换到中文",
+    "switchToEn": "Switch to English"
+  },
+  "community": {
+    "enterDashboard": "进入控制台",
+    "platformLabel": "私有云平台",
+    "heroTitle": "探索正在运行的应用",
+    "heroDesc": "以下是当前平台上部署在线的全部项目，点击任意卡片即可访问。",
+    "runningCount": "{{count}} 个应用在线",
+    "loginRequired": "需要登录",
+    "noPreview": "预览不可用",
+    "emptyTitle": "暂无在线应用",
+    "emptyDesc": "当有项目部署并运行后，它们将出现在这里",
+    "authModal": {
+      "label": "访问限制",
+      "desc": "此应用需要登录才能访问，点击「前往访问」将跳转到登录页面。",
+      "proceed": "前往访问",
+      "cancel": "取消"
+    }
+  }
+}

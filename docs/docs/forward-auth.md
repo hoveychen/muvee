@@ -43,12 +43,12 @@ traefik.http.routers.{proj}.middlewares={proj}-auth
 1. User visits `{project}.domain.com`
 2. Traefik calls ForwardAuth sidecar with the request headers
 3. Sidecar checks `muvee_fwd_session` cookie (JWT)
-4. If missing/expired: redirect to Google OAuth2 (`/_oauth` callback on `www.BASE_DOMAIN`)
+4. If missing/expired: redirect to Google OAuth2 (`/_oauth` callback on `BASE_DOMAIN`)
 5. After Google login: set JWT cookie (domain-wide, shared across all `*.BASE_DOMAIN` subdomains), redirect back to original URL
 6. On subsequent requests: validate JWT, check email domain, return `200`
 
 :::info How the OAuth callback is routed
-The `/_oauth` path on `www.BASE_DOMAIN` is routed by Traefik directly to `muvee-authservice` (not to the main web UI). This is configured via Traefik labels on the `muvee-authservice` container in `docker-compose.yml`. Because Traefik gives higher priority to the more specific `Host + Path` rule, `www.BASE_DOMAIN/_oauth` is correctly handled by the auth sidecar while all other `www.BASE_DOMAIN` paths continue to reach `muvee-server`.
+The `/_oauth` path on `BASE_DOMAIN` is routed by Traefik directly to `muvee-authservice` (not to the main web UI). This is configured via Traefik labels on the `muvee-authservice` container in `docker-compose.yml`. Because Traefik gives higher priority to the more specific `Host + Path` rule, `BASE_DOMAIN/_oauth` is correctly handled by the auth sidecar while all other `BASE_DOMAIN` paths continue to reach `muvee-server`.
 :::
 
 ## Public Projects

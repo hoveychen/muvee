@@ -40,7 +40,7 @@ Move-Item muveectl.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\muveectl.exe"
 
 ```bash
 # 首次登录（打开浏览器进行 Google OAuth）
-muveectl login --server https://www.example.com
+muveectl login --server https://example.com
 
 # 验证会话
 muveectl whoami

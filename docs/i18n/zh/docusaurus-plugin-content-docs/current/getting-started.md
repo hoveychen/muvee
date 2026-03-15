@@ -67,7 +67,7 @@ docker compose up -d
 ```
 
 此命令将启动：
-- **muvee-server** — API + 内嵌 Web UI，访问地址 `https://www.BASE_DOMAIN`
+- **muvee-server** — API + 内嵌 Web UI，访问地址 `https://BASE_DOMAIN`
 - **muvee-authservice** — Traefik ForwardAuth 边车服务（`:4181`）
 - **PostgreSQL** — 元数据存储
 - **Traefik** — 支持自动 HTTPS 的反向代理；控制台地址 `https://traefik.BASE_DOMAIN`（仅管理员可访问）
@@ -101,7 +101,7 @@ docker run -d --name muvee-agent \
 
 ### 5. 创建第一个项目
 
-1. 打开 `https://www.example.com`，使用 Google 账号登录
+1. 打开 `https://example.com`，使用 Google 账号登录
 2. 点击 **New Project**（新建项目）
 3. 填写 Git URL、分支、域名前缀
 4. 点击 **Deploy**（部署）——muvee 将会：
