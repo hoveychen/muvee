@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { ExternalLink, Lock, Globe, LayoutDashboard, Sun, Moon, Languages } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { ExternalLink, Lock, Globe, LayoutDashboard, Sun, Moon, Languages, Bot, Copy, Check } from 'lucide-react'
 import type { PublicProject } from './lib/types'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from './lib/theme'
@@ -203,6 +203,102 @@ function Header() {
 
 // ─── Hero ─────────────────────────────────────────────────────────────────────
 
+function SkillCopyBox() {
+  const { t } = useTranslation()
+  const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const skillUrl = `${getApiBase()}/api/skill`
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(skillUrl).then(() => {
+      setCopied(true)
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  return (
+    <div style={{
+      display: 'inline-flex',
+      flexDirection: 'column',
+      alignItems: 'stretch',
+      gap: '8px',
+      marginTop: '1.75rem',
+      maxWidth: '520px',
+      width: '100%',
+      textAlign: 'left',
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        fontSize: '0.72rem',
+        fontFamily: MONO,
+        color: 'var(--fg-muted)',
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+      }}>
+        <Bot size={12} style={{ color: 'var(--accent)' }} />
+        {t('community.skillLabel')}
+      </div>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border)',
+        borderRadius: '8px',
+        overflow: 'hidden',
+      }}>
+        <span style={{
+          flex: 1,
+          fontFamily: MONO,
+          fontSize: '0.78rem',
+          color: 'var(--accent)',
+          padding: '0.55rem 0.85rem',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {skillUrl}
+        </span>
+        <button
+          onClick={handleCopy}
+          title={copied ? t('community.skillCopied') : t('community.skillCopy')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+            padding: '0.55rem 0.85rem',
+            background: copied ? 'rgba(63,185,80,0.1)' : 'var(--bg-hover)',
+            border: 'none',
+            borderLeft: '1px solid var(--border)',
+            cursor: 'pointer',
+            color: copied ? '#3fb950' : 'var(--fg-muted)',
+            fontFamily: MONO,
+            fontSize: '0.72rem',
+            fontWeight: 600,
+            transition: 'color 0.15s, background 0.15s',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          {copied ? t('community.skillCopied') : t('community.skillCopy')}
+        </button>
+      </div>
+      <p style={{
+        margin: 0,
+        fontSize: '0.75rem',
+        color: 'var(--fg-muted)',
+        lineHeight: 1.6,
+        fontFamily: MONO,
+      }}>
+        {t('community.skillDesc')}
+      </p>
+    </div>
+  )
+}
+
 function Hero({ projectCount }: { projectCount: number }) {
   const { t } = useTranslation()
   return (
@@ -236,6 +332,9 @@ function Hero({ projectCount }: { projectCount: number }) {
           margin: '0 auto',
           padding: '4.5rem 1.5rem 3.5rem',
           textAlign: 'center',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
         }}
       >
         {/* Platform chip */}
@@ -271,11 +370,13 @@ function Hero({ projectCount }: { projectCount: number }) {
           fontSize: '1rem',
           color: 'var(--fg-muted)',
           maxWidth: '460px',
-          margin: '0 auto 1.75rem',
+          margin: '0 auto 0',
           lineHeight: 1.7,
         }}>
           {t('community.heroDesc')}
         </p>
+
+        <SkillCopyBox />
 
         {projectCount > 0 && (
           <div style={{
@@ -289,6 +390,7 @@ function Hero({ projectCount }: { projectCount: number }) {
             fontFamily: MONO,
             fontSize: '0.75rem',
             color: '#3fb950',
+            marginTop: '1.25rem',
           }}>
             <span style={{
               width: '6px', height: '6px',

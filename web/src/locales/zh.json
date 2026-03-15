@@ -291,6 +291,10 @@
     "noPreview": "预览不可用",
     "emptyTitle": "暂无在线应用",
     "emptyDesc": "当有项目部署并运行后，它们将出现在这里",
+    "skillLabel": "AI SKILL 地址",
+    "skillDesc": "将此地址添加到 Cursor / Claude Code / Copilot — AI 会自动学习 muveectl，一键完成部署。",
+    "skillCopy": "复制",
+    "skillCopied": "已复制！",
     "authModal": {
       "label": "访问限制",
       "desc": "此应用需要登录才能访问，点击「前往访问」将跳转到登录页面。",

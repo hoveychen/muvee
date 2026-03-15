@@ -8,6 +8,43 @@ sidebar_position: 4
 
 `muveectl` is the command-line client for Muvee. It lets you manage projects, datasets, and API tokens from your local machine without opening the web UI.
 
+## Load the Skill into Your AI (Recommended)
+
+muvee ships a built-in **Agent Skill** that teaches Cursor, Claude Code, Copilot, and other AI coding assistants everything they need to deploy your apps via `muveectl`. Once loaded, your AI can create projects, trigger deployments, and manage the platform — no manual commands required.
+
+**Live skill URL** (pre-configured with your server address, no login needed):
+
+```
+https://YOUR_MUVEE_SERVER/api/skill
+```
+
+Copy this URL from the **Community page** of your muvee instance, or replace `YOUR_MUVEE_SERVER` with your domain.
+
+**Install from GitHub** (available before you have a running server):
+
+```bash
+# macOS / Linux — global install for Cursor
+curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
+  -o ~/.cursor/skills/muveectl/SKILL.md --create-dirs
+
+# Claude Code
+curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
+  -o ~/.claude/skills/muveectl/SKILL.md --create-dirs
+```
+
+The skill works across Cursor, Claude Code, GitHub Copilot, Windsurf, and any AI assistant that supports the [Agent Skills standard](https://skill.md/).
+
+| Platform | Global directory | Project directory |
+|----------|-----------------|-------------------|
+| Cursor | `~/.cursor/skills/` | `.cursor/skills/` |
+| Claude Code | `~/.claude/skills/` | `.claude/skills/` |
+| Copilot | `~/.copilot/skills/` | `.github/skills/` |
+| Windsurf | `~/.windsurf/skills/` | `.windsurf/skills/` |
+
+:::tip One-shot deployment
+After adding the skill, just tell your AI: *"Deploy my app at github.com/me/repo to my muvee server"* — it will install `muveectl`, log in, create the project, and deploy, all in one go.
+:::
+
 ## Installation
 
 Download the latest binary from the [Releases page](https://github.com/hoveychen/muvee/releases/latest):

@@ -241,13 +241,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSkill serves a Markdown skill document that teaches Claude how to use muveectl.
-// The server URL is inferred from the request so the login example is always correct.
+// The server URL is derived from the BASE_DOMAIN environment variable so the example
+// is always correct regardless of proxy headers.
 func (s *Server) handleSkill(w http.ResponseWriter, r *http.Request) {
-	scheme := "https"
-	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
-		scheme = "http"
-	}
-	serverURL := scheme + "://" + r.Host
+	serverURL := "https://" + s.baseDomain
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	fmt.Fprint(w, strings.ReplaceAll(muveectlSkill, "YOUR_SERVER_URL", serverURL))
 }

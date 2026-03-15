@@ -291,6 +291,10 @@
     "noPreview": "Preview unavailable",
     "emptyTitle": "No apps running",
     "emptyDesc": "Projects will appear here once they are deployed and running",
+    "skillLabel": "AI SKILL URL",
+    "skillDesc": "Add this URL to Cursor / Claude Code / Copilot — the AI will learn muveectl and deploy your app in one shot.",
+    "skillCopy": "Copy",
+    "skillCopied": "Copied!",
     "authModal": {
       "label": "ACCESS RESTRICTED",
       "desc": "This app requires authentication. Clicking proceed will redirect you to the login page.",

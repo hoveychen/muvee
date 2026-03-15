@@ -33,6 +33,41 @@
 
 ---
 
+## 🤖 Deploy with AI — One-Click via Agent Skill
+
+muvee ships a built-in **Agent Skill** (`SKILL.md`) that teaches Cursor, Claude Code, Copilot, and other AI coding assistants how to use `muveectl`. Once the AI reads the skill, it can create projects, trigger deployments, and manage your cloud — all from a single instruction.
+
+**Load the skill into your AI assistant:**
+
+```
+https://YOUR_MUVEE_SERVER/api/skill
+```
+
+> Replace `YOUR_MUVEE_SERVER` with the domain of your muvee instance (e.g. `https://example.com`).  
+> You can also find the live URL on the Community page of your muvee deployment.
+
+**Install the static skill from GitHub** (works before you have a server):
+
+```bash
+# Cursor / Claude Code (global — available in all projects)
+curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
+  -o ~/.cursor/skills/muveectl/SKILL.md --create-dirs
+
+# Claude Code
+curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
+  -o ~/.claude/skills/muveectl/SKILL.md --create-dirs
+```
+
+Or tell your AI directly:
+
+```
+Install the muveectl skill from https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md
+```
+
+The live `/api/skill` endpoint is **public** (no login required) and always returns a skill pre-configured with your server's URL.
+
+---
+
 ## English
 
 ### What is muvee?
@@ -201,6 +236,41 @@ See the [muveectl CLI reference](https://hoveychen.github.io/muvee/docs/muveectl
 - [Dataset Monitor](https://hoveychen.github.io/muvee/docs/dataset-monitor)
 - [ForwardAuth & Access Control](https://hoveychen.github.io/muvee/docs/forward-auth)
 - [muveectl CLI](https://hoveychen.github.io/muvee/docs/muveectl)
+
+---
+
+## 🤖 用 AI 一键部署 — Agent Skill
+
+muvee 内置一份 **Agent Skill**（`SKILL.md`），让 Cursor、Claude Code、Copilot 等 AI 编程助手自动学会使用 `muveectl`。AI 读取 Skill 后，仅凭一句话即可创建项目、触发部署、管理整个私有云。
+
+**将 Skill 地址添加到你的 AI 助手：**
+
+```
+https://YOUR_MUVEE_SERVER/api/skill
+```
+
+> 把 `YOUR_MUVEE_SERVER` 替换为你的 muvee 实例域名（如 `https://example.com`）。  
+> 也可以在 muvee 部署的 Community 页面直接复制该地址。
+
+**从 GitHub 安装静态 Skill**（适用于尚未部署服务器时）：
+
+```bash
+# Cursor / Claude Code（全局安装，所有项目可用）
+curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
+  -o ~/.cursor/skills/muveectl/SKILL.md --create-dirs
+
+# Claude Code
+curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
+  -o ~/.claude/skills/muveectl/SKILL.md --create-dirs
+```
+
+或者直接告诉 AI：
+
+```
+帮我从 https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md 安装 muveectl skill
+```
+
+`/api/skill` 接口**无需登录**，始终返回包含你服务器地址的 Skill 文档，AI 可直接使用。
 
 ---
 

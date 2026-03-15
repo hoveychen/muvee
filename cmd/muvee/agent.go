@@ -675,14 +675,15 @@ func collectMemory() (total, used int64) {
 }
 
 // collectDisk returns disk total/used bytes for the filesystem containing dataDir.
+// Uses POSIX-compatible `df -Pk` which works on BusyBox (Alpine), GNU coreutils, and macOS.
+// Output columns: Filesystem, 1K-blocks, Used, Available, Capacity%, Mounted-on
 func collectDisk(dataDir string) (total, used int64) {
 	if dataDir == "" {
 		dataDir = "/"
 	}
-	out, err := exec.Command("df", "-B1", "--output=size,used", dataDir).Output()
+	out, err := exec.Command("df", "-Pk", dataDir).Output()
 	if err != nil {
-		// Fallback: try root
-		out, err = exec.Command("df", "-B1", "--output=size,used", "/").Output()
+		out, err = exec.Command("df", "-Pk", "/").Output()
 		if err != nil {
 			return 0, 0
 		}
@@ -692,12 +693,12 @@ func collectDisk(dataDir string) (total, used int64) {
 		return 0, 0
 	}
 	fields := strings.Fields(lines[len(lines)-1])
-	if len(fields) < 2 {
+	if len(fields) < 3 {
 		return 0, 0
 	}
-	t, _ := strconv.ParseInt(fields[0], 10, 64)
-	u, _ := strconv.ParseInt(fields[1], 10, 64)
-	return t, u
+	t, _ := strconv.ParseInt(fields[1], 10, 64)
+	u, _ := strconv.ParseInt(fields[2], 10, 64)
+	return t * 1024, u * 1024
 }
 
 // collectLoadAvg reads load averages from /proc/loadavg.
