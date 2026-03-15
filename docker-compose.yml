@@ -84,6 +84,12 @@ services:
       PORT: "4181"
     networks:
       - muvee-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.muvee-authservice.rule=Host(`www.${BASE_DOMAIN}`) && Path(`/_oauth`)"
+      - "traefik.http.routers.muvee-authservice.entrypoints=websecure"
+      - "traefik.http.routers.muvee-authservice.tls.certresolver=letsencrypt"
+      - "traefik.http.services.muvee-authservice.loadbalancer.server.port=4181"
 
   traefik:
     image: traefik:v3.3

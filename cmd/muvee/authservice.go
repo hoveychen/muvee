@@ -125,6 +125,11 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
+	// Clear state cookie immediately after validation.
+	http.SetCookie(w, &http.Cookie{
+		Name: "fwd_oauth_state", Value: "", MaxAge: -1,
+		HttpOnly: true, Path: "/", Domain: cookieDomain,
+	})
 	token, err := oauth2Cfg.Exchange(ctx, r.URL.Query().Get("code"))
 	if err != nil {
 		http.Error(w, "exchange error", http.StatusInternalServerError)
@@ -170,7 +175,13 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	state := fmt.Sprintf("%d", time.Now().UnixNano())
-	http.SetCookie(w, &http.Cookie{Name: "fwd_oauth_state", Value: state, MaxAge: 300, HttpOnly: true, Path: "/"})
+	// Domain must be set so the cookie is available on www.BASE_DOMAIN when Google
+	// redirects back to /_oauth (the browser may currently be on a different subdomain
+	// such as traefik.BASE_DOMAIN or myapp.BASE_DOMAIN).
+	http.SetCookie(w, &http.Cookie{
+		Name: "fwd_oauth_state", Value: state,
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+	})
 	// Reconstruct the full original URL from Traefik forward headers so we can
 	// redirect back to the correct host (e.g. traefik.example.com) after auth,
 	// not just the path on www.example.com.
