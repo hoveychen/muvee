@@ -103,6 +103,9 @@ func (s *Server) Router() http.Handler {
 	// Traefik HTTP provider – no auth, consumed only by Traefik on the internal network
 	r.Get("/api/traefik/config", s.handleTraefikConfig)
 
+	// Public community feed – no auth required
+	r.Get("/api/public/projects", s.handlePublicProjects)
+
 	// Protected
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
@@ -492,6 +495,41 @@ func validateProject(p *store.Project) error {
 		return nil
 	}
 	return validateDomainPrefix(p.DomainPrefix)
+}
+
+// handlePublicProjects returns all currently running projects with owner info.
+// This endpoint requires no authentication and is used by the community homepage.
+// Each project URL is computed from s.baseDomain so the frontend can build links.
+func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := s.store.ListPublicRunningProjects(r.Context())
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	type publicProjectOut struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		DomainPrefix   string `json:"domain_prefix"`
+		URL            string `json:"url"`
+		AuthRequired   bool   `json:"auth_required"`
+		OwnerName      string `json:"owner_name"`
+		OwnerAvatarURL string `json:"owner_avatar_url"`
+		UpdatedAt      int64  `json:"updated_at"`
+	}
+	out := make([]publicProjectOut, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, publicProjectOut{
+			ID:             p.ID.String(),
+			Name:           p.Name,
+			DomainPrefix:   p.DomainPrefix,
+			URL:            fmt.Sprintf("https://%s.%s", p.DomainPrefix, s.baseDomain),
+			AuthRequired:   p.AuthRequired,
+			OwnerName:      p.OwnerName,
+			OwnerAvatarURL: p.OwnerAvatarURL,
+			UpdatedAt:      p.UpdatedAt.Unix(),
+		})
+	}
+	jsonOK(w, out)
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {

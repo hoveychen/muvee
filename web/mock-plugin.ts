@@ -560,6 +560,29 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
       return {}
     }),
 
+    // ---------- /api/public/projects ----------
+    defineRoute('GET', '/api/public/projects', () => {
+      const BASE_DOMAIN = 'mock.example.com'
+      return state.projects
+        .filter((p) => {
+          const dep = state.deployments.find((d) => d.project_id === p.id && d.status === 'running')
+          return !!dep
+        })
+        .map((p) => {
+          const owner = state.users.find((u) => u.id === p.owner_id)
+          return {
+            id: p.id,
+            name: p.name,
+            domain_prefix: p.domain_prefix,
+            url: `https://${p.domain_prefix}.${BASE_DOMAIN}`,
+            auth_required: p.auth_required,
+            owner_name: owner?.name ?? 'Unknown',
+            owner_avatar_url: owner?.avatar_url ?? '',
+            updated_at: Math.floor(new Date(p.updated_at).getTime() / 1000),
+          }
+        })
+    }),
+
     // ---------- /api/projects ----------
     defineRoute('GET', '/api/projects', () => state.projects),
     defineRoute('POST', '/api/projects', ({ body }) => {

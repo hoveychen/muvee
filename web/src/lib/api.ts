@@ -91,4 +91,10 @@ export const api = {
     list: () => request<import('./types').User[]>('/api/users'),
     setRole: (id: string, role: string) => request(`/api/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) }),
   },
+
+  public: {
+    projects: () => fetch('/api/public/projects')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+      .then(data => Array.isArray(data) ? data : []) as Promise<import('./types').PublicProject[]>,
+  },
 }

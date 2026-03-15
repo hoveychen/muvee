@@ -155,6 +155,37 @@ func (s *Store) DeleteProject(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+// ListPublicRunningProjects returns a minimal view of all projects that currently
+// have a running deployment. No authentication is required to call this; the
+// returned fields are safe to expose publicly.
+func (s *Store) ListPublicRunningProjects(ctx context.Context) ([]*PublicProjectInfo, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT ON (p.id)
+		       p.id, p.name, p.domain_prefix, p.auth_required, p.updated_at,
+		       u.name AS owner_name, u.avatar_url AS owner_avatar_url
+		FROM projects p
+		JOIN deployments d ON d.project_id = p.id AND d.status = 'running'
+		JOIN users u ON u.id = p.owner_id
+		ORDER BY p.id, p.updated_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*PublicProjectInfo, 0)
+	for rows.Next() {
+		var info PublicProjectInfo
+		if err := rows.Scan(
+			&info.ID, &info.Name, &info.DomainPrefix, &info.AuthRequired, &info.UpdatedAt,
+			&info.OwnerName, &info.OwnerAvatarURL,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &info)
+	}
+	return items, nil
+}
+
 func (s *Store) CanAccessProject(ctx context.Context, userID, projectID uuid.UUID, isAdmin bool) (bool, error) {
 	if isAdmin {
 		return true, nil

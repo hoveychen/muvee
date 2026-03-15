@@ -6,6 +6,7 @@ import './lib/i18n'
 import { AuthProvider, useAuth } from './lib/auth'
 import { ThemeProvider } from './lib/theme'
 import LoginPage from './pages/Login'
+import Community from './pages/Community'
 import Projects from './pages/Projects'
 import NewProject from './pages/NewProject'
 import ProjectDetail from './pages/ProjectDetail'
@@ -32,16 +33,16 @@ function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
-          <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>
-            <Route index element={<Navigate to="/projects" replace />} />
-            <Route path="projects" element={<Projects />} />
-            <Route path="projects/new" element={<NewProject />} />
-            <Route path="projects/:id" element={<ProjectDetail />} />
-            <Route path="datasets" element={<Datasets />} />
-            <Route path="datasets/new" element={<NewDataset />} />
-            <Route path="secrets" element={<SecretsPage />} />
-            <Route path="nodes" element={<NodesPage />} />
-            <Route path="users" element={<UsersPage />} />
+          <Route path="/" element={<Community />} />
+          <Route element={<RequireAuth><Layout /></RequireAuth>}>
+            <Route path="/projects" element={<Projects />} />
+            <Route path="/projects/new" element={<NewProject />} />
+            <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/datasets" element={<Datasets />} />
+            <Route path="/datasets/new" element={<NewDataset />} />
+            <Route path="/secrets" element={<SecretsPage />} />
+            <Route path="/nodes" element={<NodesPage />} />
+            <Route path="/users" element={<UsersPage />} />
           </Route>
         </Routes>
       </AuthProvider>

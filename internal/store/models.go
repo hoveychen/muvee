@@ -100,6 +100,17 @@ type Deployment struct {
 	UpdatedAt    time.Time        `db:"updated_at"    json:"updated_at"`
 }
 
+// PublicProjectInfo is a minimal view of a running project exposed to unauthenticated users.
+type PublicProjectInfo struct {
+	ID             uuid.UUID `db:"id"              json:"id"`
+	Name           string    `db:"name"            json:"name"`
+	DomainPrefix   string    `db:"domain_prefix"   json:"domain_prefix"`
+	AuthRequired   bool      `db:"auth_required"   json:"auth_required"`
+	OwnerName      string    `db:"owner_name"      json:"owner_name"`
+	OwnerAvatarURL string    `db:"owner_avatar_url" json:"owner_avatar_url"`
+	UpdatedAt      time.Time `db:"updated_at"      json:"updated_at"`
+}
+
 // RunningDeploymentInfo is a denormalized view of a running deployment
 // used to generate Traefik HTTP provider configuration.
 type RunningDeploymentInfo struct {
