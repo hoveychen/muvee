@@ -171,10 +171,24 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	state := fmt.Sprintf("%d", time.Now().UnixNano())
 	http.SetCookie(w, &http.Cookie{Name: "fwd_oauth_state", Value: state, MaxAge: 300, HttpOnly: true, Path: "/"})
-	// Store original destination in a cookie so redirect_uri stays clean (no query params).
-	originalURI := r.Header.Get("X-Forwarded-Uri")
+	// Reconstruct the full original URL from Traefik forward headers so we can
+	// redirect back to the correct host (e.g. traefik.example.com) after auth,
+	// not just the path on www.example.com.
+	host := r.Header.Get("X-Forwarded-Host")
+	proto := r.Header.Get("X-Forwarded-Proto")
+	uri := r.Header.Get("X-Forwarded-Uri")
+	if proto == "" {
+		proto = "https"
+	}
+	originalURL := uri
+	if host != "" {
+		originalURL = proto + "://" + host + uri
+	}
+	if originalURL == "" {
+		originalURL = "/"
+	}
 	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_redirect", Value: originalURI,
+		Name: "fwd_oauth_redirect", Value: originalURL,
 		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
 	})
 	authURL := oauth2Cfg.AuthCodeURL(state)
