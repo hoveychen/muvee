@@ -89,10 +89,10 @@ muvee requires at least one identity provider. You can enable multiple simultane
 
 | Provider | Env vars to set |
 |---|---|
-| [Google](https://hoveychen.github.io/muvee/docs/auth/google) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
-| [Feishu / Lark](https://hoveychen.github.io/muvee/docs/auth/feishu) | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` |
-| [WeCom 企业微信](https://hoveychen.github.io/muvee/docs/auth/wecom) | `WECOM_CORP_ID`, `WECOM_CORP_SECRET`, `WECOM_AGENT_ID` |
-| [DingTalk 钉钉](https://hoveychen.github.io/muvee/docs/auth/dingtalk) | `DINGTALK_CLIENT_ID`, `DINGTALK_CLIENT_SECRET` |
+| [Google](https://hoveychen.github.io/muvee/docs/auth/auth-google) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
+| [Feishu / Lark](https://hoveychen.github.io/muvee/docs/auth/auth-feishu) | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` |
+| [WeCom 企业微信](https://hoveychen.github.io/muvee/docs/auth/auth-wecom) | `WECOM_CORP_ID`, `WECOM_CORP_SECRET`, `WECOM_AGENT_ID` |
+| [DingTalk 钉钉](https://hoveychen.github.io/muvee/docs/auth/auth-dingtalk) | `DINGTALK_CLIENT_ID`, `DINGTALK_CLIENT_SECRET` |
 
 **2 — Configure**
 
@@ -249,14 +249,14 @@ See the [muveectl CLI reference](https://hoveychen.github.io/muvee/docs/muveectl
 | Worker nodes | Linux, Docker + Buildx, rsync, `git` |
 | NFS share | Mounted at the same path on all deploy nodes |
 | PostgreSQL 16+ | Can use the bundled Docker Compose service |
-| Identity provider | At least one of: [Google](https://hoveychen.github.io/muvee/docs/auth/google), [Feishu/Lark](https://hoveychen.github.io/muvee/docs/auth/feishu), [WeCom](https://hoveychen.github.io/muvee/docs/auth/wecom), [DingTalk](https://hoveychen.github.io/muvee/docs/auth/dingtalk) |
+| Identity provider | At least one of: [Google](https://hoveychen.github.io/muvee/docs/auth/auth-google), [Feishu/Lark](https://hoveychen.github.io/muvee/docs/auth/auth-feishu), [WeCom](https://hoveychen.github.io/muvee/docs/auth/auth-wecom), [DingTalk](https://hoveychen.github.io/muvee/docs/auth/auth-dingtalk) |
 
 ## Documentation
 
 - [Getting Started](https://hoveychen.github.io/muvee/docs/getting-started)
 - [Installation](https://hoveychen.github.io/muvee/docs/installation)
 - [Configuration Reference](https://hoveychen.github.io/muvee/docs/configuration)
-- **Authentication** — [Google](https://hoveychen.github.io/muvee/docs/auth/google) · [Feishu/Lark](https://hoveychen.github.io/muvee/docs/auth/feishu) · [WeCom](https://hoveychen.github.io/muvee/docs/auth/wecom) · [DingTalk](https://hoveychen.github.io/muvee/docs/auth/dingtalk)
+- **Authentication** — [Google](https://hoveychen.github.io/muvee/docs/auth/auth-google) · [Feishu/Lark](https://hoveychen.github.io/muvee/docs/auth/auth-feishu) · [WeCom](https://hoveychen.github.io/muvee/docs/auth/auth-wecom) · [DingTalk](https://hoveychen.github.io/muvee/docs/auth/auth-dingtalk)
 - [Architecture](https://hoveychen.github.io/muvee/docs/architecture)
 - [Scheduler & Affinity](https://hoveychen.github.io/muvee/docs/scheduler)
 - [Dataset Monitor](https://hoveychen.github.io/muvee/docs/dataset-monitor)
