@@ -66,8 +66,8 @@ letsencrypt/
 tmp/
 
 # binary
-muvee
-agent
-authservice
-muveectl
-server
+/muvee
+/agent
+/authservice
+/muveectl
+/server

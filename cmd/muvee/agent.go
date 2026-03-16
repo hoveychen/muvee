@@ -684,18 +684,4 @@ func boolVal(m map[string]interface{}, key string) bool {
 	return v
 }
 
-func jsonReader(b []byte) *jsonBuf { return &jsonBuf{b: b} }
-
-type jsonBuf struct {
-	b   []byte
-	pos int
-}
-
-func (j *jsonBuf) Read(p []byte) (int, error) {
-	n := copy(p, j.b[j.pos:])
-	j.pos += n
-	if j.pos >= len(j.b) {
-		return n, fmt.Errorf("EOF")
-	}
-	return n, nil
-}
+func jsonReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }

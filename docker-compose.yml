@@ -212,6 +212,8 @@ volumes:
 
 networks:
   # Standalone mode: the network is created by this Compose file.
-  # (docker-compose.yml uses `external: true` and requires `docker network create muvee-net` first.)
+  # explicit `name` prevents Docker Compose from prepending the project prefix (muvee_muvee-net),
+  # keeping it as `muvee-net` to match the Traefik provider config in traefik/traefik.yml.
   muvee-net:
     driver: bridge
+    name: muvee-net
