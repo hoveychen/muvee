@@ -196,7 +196,7 @@ See the **[full documentation →](https://hoveychen.github.io/muvee)**
 
 ## Architecture at a Glance
 
-![muvee system architecture overview](docs/static/img/arch-overview.png)
+![muvee system architecture overview](docs/static/img/arch-overview-en.png)
 
 ```
 Control Plane (single host)

@@ -8,7 +8,7 @@ sidebar_position: 4
 
 ## Overview
 
-![muvee system architecture overview](/img/arch-overview.png)
+![muvee system architecture overview](/img/arch-overview-en.png)
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -110,7 +110,7 @@ Traefik HTTP provider polls GET /api/traefik/config (every 5s)
 
 ## Affinity Scoring & Dataset Modes
 
-![dataset scheduling and mount modes](/img/dataset-scheduling.png)
+![dataset scheduling and mount modes](/img/dataset-scheduling-en.png)
 
 When scheduling a deploy task, each active deploy node receives a score:
 
