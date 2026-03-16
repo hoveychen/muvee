@@ -46,26 +46,6 @@ https://YOUR_MUVEE_SERVER/api/skill
 > Replace `YOUR_MUVEE_SERVER` with the domain of your muvee instance (e.g. `https://example.com`).  
 > You can also find the live URL on the Community page of your muvee deployment.
 
-**Install the static skill from GitHub** (works before you have a server):
-
-```bash
-# Cursor / Claude Code (global — available in all projects)
-curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
-  -o ~/.cursor/skills/muveectl/SKILL.md --create-dirs
-
-# Claude Code
-curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
-  -o ~/.claude/skills/muveectl/SKILL.md --create-dirs
-```
-
-Or tell your AI directly:
-
-```
-Install the muveectl skill from https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md
-```
-
-The live `/api/skill` endpoint is **public** (no login required) and always returns a skill pre-configured with your server's URL.
-
 ---
 
 ## English
@@ -147,6 +127,13 @@ Run the following on each worker machine. Registry credentials and `BASE_DOMAIN`
 
 > `CONTROL_PLANE_URL` must be the **internal network address** of the control plane (e.g. `http://10.0.0.1:8080`), not the public domain. The agent uses this to detect the correct network interface for Traefik routing.
 
+> **Using an AI assistant?** Load the install-agent skill and let your AI walk you through the setup:
+> ```
+> https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/install-agent/SKILL.md
+> ```
+
+**Linux (Docker)**
+
 ```bash
 # Builder node
 docker run -d --name muvee-agent --restart unless-stopped \
@@ -167,7 +154,40 @@ docker run -d --name muvee-agent --restart unless-stopped \
   ghcr.io/hoveychen/muvee:latest agent
 ```
 
-> **No Docker?** Download the binary and run `muvee agent` directly — see [Release Binaries](#release-binaries).
+**macOS (binary — recommended)**
+
+Docker Desktop on macOS runs containers inside a Linux VM, so `docker.sock` inside a container points to the VM rather than your Mac. Use the native binary instead:
+
+```bash
+# Download (Apple Silicon)
+curl -Lo muvee https://github.com/hoveychen/muvee/releases/latest/download/muvee_darwin_arm64
+chmod +x muvee && sudo mv muvee /usr/local/bin/
+
+# Builder node
+NODE_ROLE=builder CONTROL_PLANE_URL=http://10.0.0.1:8080 AGENT_SECRET=<secret> \
+  muvee agent
+
+# Deploy node
+NODE_ROLE=deploy CONTROL_PLANE_URL=http://10.0.0.1:8080 AGENT_SECRET=<secret> \
+  DATA_DIR=/Users/Shared/muvee/data muvee agent
+```
+
+**Windows (binary via WSL2 — recommended)**
+
+Run the agent inside WSL2 so it has access to `docker.sock`, `rsync`, and Linux paths:
+
+```bash
+# Inside WSL2 shell
+curl -Lo muvee https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_amd64
+chmod +x muvee
+
+NODE_ROLE=deploy CONTROL_PLANE_URL=http://10.0.0.1:8080 AGENT_SECRET=<secret> \
+  DATA_DIR=/mnt/c/muvee/data ./muvee agent
+```
+
+> Ensure Docker Desktop → Settings → **Use the WSL 2 based engine** is enabled, and the WSL2 distro is allowed under **Resources → WSL Integration**.
+
+See the **[Agent Installation Guide →](https://hoveychen.github.io/muvee/docs/install-agent)** for full step-by-step instructions including dependency setup.
 
 See the **[full documentation →](https://hoveychen.github.io/muvee)**
 
@@ -252,26 +272,6 @@ https://YOUR_MUVEE_SERVER/api/skill
 > 把 `YOUR_MUVEE_SERVER` 替换为你的 muvee 实例域名（如 `https://example.com`）。  
 > 也可以在 muvee 部署的 Community 页面直接复制该地址。
 
-**从 GitHub 安装静态 Skill**（适用于尚未部署服务器时）：
-
-```bash
-# Cursor / Claude Code（全局安装，所有项目可用）
-curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
-  -o ~/.cursor/skills/muveectl/SKILL.md --create-dirs
-
-# Claude Code
-curl -fsSL https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md \
-  -o ~/.claude/skills/muveectl/SKILL.md --create-dirs
-```
-
-或者直接告诉 AI：
-
-```
-帮我从 https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/muveectl/SKILL.md 安装 muveectl skill
-```
-
-`/api/skill` 接口**无需登录**，始终返回包含你服务器地址的 Skill 文档，AI 可直接使用。
-
 ---
 
 ## 中文
@@ -353,6 +353,13 @@ Traefik 开始监听 443 端口。在浏览器中打开 `https://BASE_DOMAIN`，
 
 > `CONTROL_PLANE_URL` 必须填写控制平面的**内网地址**（如 `http://10.0.0.1:8080`），不要使用公网域名。Agent 通过该地址自动探测正确的出网接口，确保 Traefik 能路由到已部署的容器。
 
+> **用 AI 助手来操作？** 加载 install-agent skill，让 AI 帮你完成全套安装：
+> ```
+> https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/install-agent/SKILL.md
+> ```
+
+**Linux（Docker）**
+
 ```bash
 # Builder 节点
 docker run -d --name muvee-agent --restart unless-stopped \
@@ -373,7 +380,40 @@ docker run -d --name muvee-agent --restart unless-stopped \
   ghcr.io/hoveychen/muvee:latest agent
 ```
 
-> **不用 Docker？** 直接下载二进制运行 `muvee agent`，详见[下载预编译二进制](#下载预编译二进制)。
+**macOS（二进制，推荐）**
+
+Docker Desktop 在 macOS 上将容器跑在 Linux 虚拟机内，容器里的 `docker.sock` 指向虚拟机，无法正确控制宿主机。建议使用原生二进制：
+
+```bash
+# 下载（Apple Silicon）
+curl -Lo muvee https://github.com/hoveychen/muvee/releases/latest/download/muvee_darwin_arm64
+chmod +x muvee && sudo mv muvee /usr/local/bin/
+
+# Builder 节点
+NODE_ROLE=builder CONTROL_PLANE_URL=http://10.0.0.1:8080 AGENT_SECRET=<密钥> \
+  muvee agent
+
+# Deploy 节点
+NODE_ROLE=deploy CONTROL_PLANE_URL=http://10.0.0.1:8080 AGENT_SECRET=<密钥> \
+  DATA_DIR=/Users/Shared/muvee/data muvee agent
+```
+
+**Windows（WSL2 内运行，推荐）**
+
+在 WSL2 环境中运行 Linux 二进制，可以直接使用 `docker.sock`、`rsync` 和 Linux 路径：
+
+```bash
+# 在 WSL2 Shell 中执行
+curl -Lo muvee https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_amd64
+chmod +x muvee
+
+NODE_ROLE=deploy CONTROL_PLANE_URL=http://10.0.0.1:8080 AGENT_SECRET=<密钥> \
+  DATA_DIR=/mnt/c/muvee/data ./muvee agent
+```
+
+> 确保 Docker Desktop → 设置 → **使用 WSL 2 引擎**已开启，并在 **资源 → WSL 集成** 中允许当前 WSL2 发行版访问 Docker。
+
+完整的分步安装指南（含依赖安装）见 **[Agent 安装指引 →](https://hoveychen.github.io/muvee/docs/install-agent)**。
 
 ### 整体架构
 

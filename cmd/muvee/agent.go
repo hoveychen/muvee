@@ -20,6 +20,10 @@ import (
 	"github.com/hoveychen/muvee/internal/datacache"
 	"github.com/hoveychen/muvee/internal/deployer"
 	"github.com/hoveychen/muvee/internal/store"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/load"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 func runAgent() {
@@ -606,115 +610,48 @@ func reportNodeMetrics(ctx context.Context, baseURL, secret string, nodeID uuid.
 	}
 }
 
-// collectCPUPercent returns overall CPU usage percentage by reading /proc/stat twice
-// with a 500 ms gap and computing the idle-time delta.
+// collectCPUPercent returns overall CPU usage percentage averaged over 500 ms.
+// Uses gopsutil for cross-platform support (Linux, macOS, Windows).
 func collectCPUPercent() float64 {
-	read := func() (idle, total uint64) {
-		data, err := os.ReadFile("/proc/stat")
-		if err != nil {
-			return 0, 0
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if !strings.HasPrefix(line, "cpu ") {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) < 8 {
-				break
-			}
-			vals := make([]uint64, len(fields)-1)
-			for i, f := range fields[1:] {
-				v, _ := strconv.ParseUint(f, 10, 64)
-				vals[i] = v
-			}
-			// user nice system idle iowait irq softirq steal …
-			idle = vals[3] + vals[4] // idle + iowait
-			for _, v := range vals {
-				total += v
-			}
-			break
-		}
-		return
-	}
-	idle1, total1 := read()
-	time.Sleep(500 * time.Millisecond)
-	idle2, total2 := read()
-	if total2 <= total1 {
+	pcts, err := cpu.Percent(500*time.Millisecond, false)
+	if err != nil || len(pcts) == 0 {
 		return 0
 	}
-	idleDelta := float64(idle2 - idle1)
-	totalDelta := float64(total2 - total1)
-	return (1 - idleDelta/totalDelta) * 100
+	return pcts[0]
 }
 
-// collectMemory parses /proc/meminfo for MemTotal and MemAvailable (bytes).
+// collectMemory returns total and used physical memory in bytes.
 func collectMemory() (total, used int64) {
-	data, err := os.ReadFile("/proc/meminfo")
+	v, err := mem.VirtualMemory()
 	if err != nil {
 		return 0, 0
 	}
-	var memTotal, memAvail int64
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		val, _ := strconv.ParseInt(fields[1], 10, 64)
-		val *= 1024 // kB → bytes
-		switch fields[0] {
-		case "MemTotal:":
-			memTotal = val
-		case "MemAvailable:":
-			memAvail = val
-		}
-	}
-	if memTotal == 0 {
-		return 0, 0
-	}
-	return memTotal, memTotal - memAvail
+	return int64(v.Total), int64(v.Used)
 }
 
 // collectDisk returns disk total/used bytes for the filesystem containing dataDir.
-// Uses POSIX-compatible `df -Pk` which works on BusyBox (Alpine), GNU coreutils, and macOS.
-// Output columns: Filesystem, 1K-blocks, Used, Available, Capacity%, Mounted-on
 func collectDisk(dataDir string) (total, used int64) {
 	if dataDir == "" {
 		dataDir = "/"
 	}
-	out, err := exec.Command("df", "-Pk", dataDir).Output()
+	usage, err := disk.Usage(dataDir)
 	if err != nil {
-		out, err = exec.Command("df", "-Pk", "/").Output()
+		usage, err = disk.Usage("/")
 		if err != nil {
 			return 0, 0
 		}
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) < 2 {
-		return 0, 0
-	}
-	fields := strings.Fields(lines[len(lines)-1])
-	if len(fields) < 3 {
-		return 0, 0
-	}
-	t, _ := strconv.ParseInt(fields[1], 10, 64)
-	u, _ := strconv.ParseInt(fields[2], 10, 64)
-	return t * 1024, u * 1024
+	return int64(usage.Total), int64(usage.Used)
 }
 
-// collectLoadAvg reads load averages from /proc/loadavg.
+// collectLoadAvg returns 1/5/15-minute load averages.
+// On Windows, gopsutil returns 0 for all values (not supported by the OS).
 func collectLoadAvg() (load1, load5, load15 float64) {
-	data, err := os.ReadFile("/proc/loadavg")
+	avg, err := load.Avg()
 	if err != nil {
 		return 0, 0, 0
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) < 3 {
-		return 0, 0, 0
-	}
-	l1, _ := strconv.ParseFloat(fields[0], 64)
-	l5, _ := strconv.ParseFloat(fields[1], 64)
-	l15, _ := strconv.ParseFloat(fields[2], 64)
-	return l1, l5, l15
+	return avg.Load1, avg.Load5, avg.Load15
 }
 
 func str(m map[string]interface{}, key string) string {
