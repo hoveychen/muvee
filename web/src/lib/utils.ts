@@ -23,7 +23,7 @@ export function timeAgo(dateStr: string): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-const RESERVED_DOMAIN_PREFIXES = new Set(['www', 'registry', 'traefik', 'muvee'])
+const RESERVED_DOMAIN_PREFIXES = new Set(['registry', 'traefik', 'muvee'])
 const VALID_DOMAIN_PREFIX_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
 export function isValidDomainPrefix(s: string): boolean {
