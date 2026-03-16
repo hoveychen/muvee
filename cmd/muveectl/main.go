@@ -894,7 +894,7 @@ func cmdProjectSecretsList(projectID string, c *client, jsonMode bool) error {
 		fmt.Println("No secrets bound to this project.")
 		return nil
 	}
-	printTable(items, []string{"secret_id", "secret_name", "secret_type", "env_var_name", "use_for_git"})
+	printTable(items, []string{"secret_id", "secret_name", "secret_type", "env_var_name", "use_for_git", "use_for_build", "build_secret_id"})
 	return nil
 }
 
@@ -902,6 +902,8 @@ func cmdProjectBindSecret(projectID string, args []string, c *client, jsonMode b
 	secretID := ""
 	envVar := ""
 	useForGit := false
+	useForBuild := false
+	buildSecretID := ""
 	gitUsername := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -917,6 +919,13 @@ func cmdProjectBindSecret(projectID string, args []string, c *client, jsonMode b
 			}
 		case "--use-for-git":
 			useForGit = true
+		case "--use-for-build":
+			useForBuild = true
+		case "--build-secret-id":
+			if i+1 < len(args) {
+				buildSecretID = args[i+1]
+				i++
+			}
 		case "--git-username":
 			if i+1 < len(args) {
 				gitUsername = args[i+1]
@@ -932,6 +941,30 @@ func cmdProjectBindSecret(projectID string, args []string, c *client, jsonMode b
 		gitUsername = "x-access-token"
 	}
 
+	// Default build_secret_id from secret name when --use-for-build is set.
+	// Example: "GITHUB_TOKEN" -> "github_token".
+	if useForBuild && strings.TrimSpace(buildSecretID) == "" {
+		secrets, err := c.doArray("GET", "/api/secrets", nil)
+		if err != nil {
+			return fmt.Errorf("resolve default --build-secret-id: %w", err)
+		}
+		var secretName string
+		for _, item := range secrets {
+			m, _ := item.(map[string]interface{})
+			if m != nil && str(m, "id") == secretID {
+				secretName = str(m, "name")
+				break
+			}
+		}
+		if secretName == "" {
+			return fmt.Errorf("cannot infer --build-secret-id: secret %s not found", secretID)
+		}
+		buildSecretID = normalizeBuildSecretID(secretName)
+		if buildSecretID == "" {
+			return fmt.Errorf("cannot infer --build-secret-id from secret name %q; please pass --build-secret-id explicitly", secretName)
+		}
+	}
+
 	// Fetch current bindings, replace or add the target one, and PUT.
 	current, err := c.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
 	if err != nil {
@@ -944,17 +977,21 @@ func cmdProjectBindSecret(projectID string, args []string, c *client, jsonMode b
 			continue
 		}
 		bindings = append(bindings, map[string]interface{}{
-			"secret_id":    str(m, "secret_id"),
-			"env_var_name": str(m, "env_var_name"),
-			"use_for_git":  m["use_for_git"],
-			"git_username": str(m, "git_username"),
+			"secret_id":       str(m, "secret_id"),
+			"env_var_name":    str(m, "env_var_name"),
+			"use_for_git":     m["use_for_git"],
+			"use_for_build":   m["use_for_build"],
+			"build_secret_id": str(m, "build_secret_id"),
+			"git_username":    str(m, "git_username"),
 		})
 	}
 	bindings = append(bindings, map[string]interface{}{
-		"secret_id":    secretID,
-		"env_var_name": envVar,
-		"use_for_git":  useForGit,
-		"git_username": gitUsername,
+		"secret_id":       secretID,
+		"env_var_name":    envVar,
+		"use_for_git":     useForGit,
+		"use_for_build":   useForBuild,
+		"build_secret_id": buildSecretID,
+		"git_username":    gitUsername,
 	})
 	result, err := c.do("PUT", "/api/projects/"+projectID+"/secrets", bindings)
 	if err != nil {
@@ -964,9 +1001,32 @@ func cmdProjectBindSecret(projectID string, args []string, c *client, jsonMode b
 		printJSON(result)
 		return nil
 	}
-	fmt.Printf("Secret %s bound to project %s (env_var: %q, use_for_git: %v, git_username: %q)\n",
-		secretID, projectID, envVar, useForGit, gitUsername)
+	fmt.Printf("Secret %s bound to project %s (env_var: %q, use_for_git: %v, use_for_build: %v, build_secret_id: %q, git_username: %q)\n",
+		secretID, projectID, envVar, useForGit, useForBuild, buildSecretID, gitUsername)
 	return nil
+}
+
+func normalizeBuildSecretID(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range s {
+		isAlphaNum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlphaNum {
+			b.WriteRune(r)
+			prevUnderscore = false
+			continue
+		}
+		if !prevUnderscore {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	return out
 }
 
 func cmdProjectUnbindSecret(projectID, secretID string, c *client) error {
@@ -981,10 +1041,12 @@ func cmdProjectUnbindSecret(projectID, secretID string, c *client) error {
 			continue
 		}
 		bindings = append(bindings, map[string]interface{}{
-			"secret_id":    str(m, "secret_id"),
-			"env_var_name": str(m, "env_var_name"),
-			"use_for_git":  m["use_for_git"],
-			"git_username": str(m, "git_username"),
+			"secret_id":       str(m, "secret_id"),
+			"env_var_name":    str(m, "env_var_name"),
+			"use_for_git":     m["use_for_git"],
+			"use_for_build":   m["use_for_build"],
+			"build_secret_id": str(m, "build_secret_id"),
+			"git_username":    str(m, "git_username"),
 		})
 	}
 	if _, err := c.do("PUT", "/api/projects/"+projectID+"/secrets", bindings); err != nil {
@@ -1055,6 +1117,8 @@ Project Secret Bindings:
     --secret-id ID              Secret ID to bind (required)
     --env-var NAME              Environment variable name to inject (e.g. GITHUB_TOKEN)
     --use-for-git               Use this secret for git clone during build
+    --use-for-build             Use this secret for docker buildx --secret during image build
+    --build-secret-id ID        Secret ID exposed as /run/secrets/<ID> inside Dockerfile (optional; defaults from secret name)
     --git-username NAME         HTTPS git username (default: x-access-token for GitHub PATs)
                                 Only relevant for password-type secrets with --use-for-git
   projects unbind-secret PROJECT_ID SECRET_ID
@@ -1187,7 +1251,7 @@ func main() {
 			runErr = cmdProjectSecretsList(subArgs[0], c, jsonMode)
 		case "bind-secret":
 			if len(subArgs) == 0 {
-				fmt.Fprintln(os.Stderr, "Usage: muveectl projects bind-secret <PROJECT_ID> --secret-id ID [--env-var NAME] [--use-for-git]")
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects bind-secret <PROJECT_ID> --secret-id ID [--env-var NAME] [--use-for-git] [--git-username NAME] [--use-for-build --build-secret-id ID]")
 				os.Exit(1)
 			}
 			runErr = cmdProjectBindSecret(subArgs[0], subArgs[1:], c, jsonMode)

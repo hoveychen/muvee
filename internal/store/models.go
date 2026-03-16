@@ -77,12 +77,12 @@ type DatasetMember struct {
 type DeploymentStatus string
 
 const (
-	DeploymentStatusPending  DeploymentStatus = "pending"
-	DeploymentStatusBuilding DeploymentStatus = "building"
+	DeploymentStatusPending   DeploymentStatus = "pending"
+	DeploymentStatusBuilding  DeploymentStatus = "building"
 	DeploymentStatusDeploying DeploymentStatus = "deploying"
-	DeploymentStatusRunning  DeploymentStatus = "running"
-	DeploymentStatusFailed   DeploymentStatus = "failed"
-	DeploymentStatusStopped  DeploymentStatus = "stopped"
+	DeploymentStatusRunning   DeploymentStatus = "running"
+	DeploymentStatusFailed    DeploymentStatus = "failed"
+	DeploymentStatusStopped   DeploymentStatus = "stopped"
 )
 
 type Deployment struct {
@@ -224,10 +224,14 @@ type Secret struct {
 }
 
 type ProjectSecret struct {
-	ProjectID   uuid.UUID `db:"project_id"`
-	SecretID    uuid.UUID `db:"secret_id"`
-	EnvVarName  string    `db:"env_var_name"`
-	UseForGit   bool      `db:"use_for_git"`
+	ProjectID  uuid.UUID `db:"project_id"`
+	SecretID   uuid.UUID `db:"secret_id"`
+	EnvVarName string    `db:"env_var_name"`
+	UseForGit  bool      `db:"use_for_git"`
+	// UseForBuild controls whether this secret is passed to docker buildx as a build secret.
+	UseForBuild bool `db:"use_for_build"`
+	// BuildSecretID is exposed in Dockerfile as /run/secrets/<build_secret_id>.
+	BuildSecretID string `db:"build_secret_id"`
 	// GitUsername is the HTTPS username used when UseForGit=true and the secret type is password.
 	// The builder rewrites the git URL as https://GitUsername:SECRET@host/...
 	// For GitHub fine-grained PATs, use "x-access-token" or "oauth2".

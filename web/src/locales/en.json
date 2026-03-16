@@ -116,7 +116,7 @@
       "total": "total"
     },
     "secrets": {
-      "hint": "Attach secrets to inject as environment variables on next deploy.",
+      "hint": "Attach secrets for runtime env vars, git clone auth, or docker build secrets.",
       "saving": "Saving…",
       "empty": "No secrets found. Create secrets in the",
       "emptyLink": "Secrets",
@@ -125,6 +125,9 @@
       "detach": "Detach",
       "envVar": "ENV VAR",
       "username": "USERNAME",
+      "useForBuild": "Use for docker build secret",
+      "buildSecretId": "BUILD SECRET ID",
+      "buildSecretHint": "Used as /run/secrets/<id> in Dockerfile RUN steps.",
       "useForGitSsh": "Use for git clone (SSH)",
       "useForGitHttps": "Use for git clone (HTTPS)",
       "githubPat": "(GitHub PAT → x-access-token)",

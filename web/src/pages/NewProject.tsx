@@ -373,6 +373,8 @@ export default function NewProject() {
           secret_id: sec.id,
           env_var_name: '',
           use_for_git: true,
+          use_for_build: false,
+          build_secret_id: '',
           git_username: cred.patGitUsername || 'x-access-token',
         }])
       } else if (cred.mode === 'new_ssh') {
@@ -382,6 +384,8 @@ export default function NewProject() {
           secret_id: sec.id,
           env_var_name: '',
           use_for_git: true,
+          use_for_build: false,
+          build_secret_id: '',
           git_username: '',
         }])
       } else if (cred.mode === 'existing' && cred.existingSecretId) {
@@ -391,6 +395,8 @@ export default function NewProject() {
           secret_id: cred.existingSecretId,
           env_var_name: '',
           use_for_git: true,
+          use_for_build: false,
+          build_secret_id: '',
           git_username: sec?.type === 'password' ? (cred.patGitUsername || 'x-access-token') : '',
         }])
       }

@@ -13,10 +13,11 @@ Muvee 内置密钥（Secrets）存储，用于安全管理密码、API 令牌和
 ```
 用户创建密钥 → 加密后存入数据库（AES-256-GCM）
        ↓
-用户将密钥绑定到项目（env_var_name, use_for_git）
+用户将密钥绑定到项目（env_var_name, use_for_git, use_for_build, build_secret_id）
        ↓
 部署时，调度器解密密钥并：
   • SSH 密钥（use_for_git=true） → 构建节点用于 git clone
+  • use_for_build=true 且配置了 build_secret_id 的密钥 → 构建节点通过 docker buildx --secret 注入
   • 设置了 env_var_name 的密钥 → 以 docker run -e KEY=VALUE 注入
 ```
 
@@ -61,6 +62,7 @@ SECRET_ENCRYPTION_KEY=a3f4e1b2c8d7...
 - 为项目附加 / 解除密钥绑定
 - 设置每个密钥注入时使用的**环境变量名**（如 `GITHUB_TOKEN`、`DATABASE_PASSWORD`）
 - 对于 SSH 密钥类型，启用 **"Use for git clone"**（用于 git 克隆）——构建节点在克隆 git 仓库时将使用该密钥
+- 启用 **"Use for docker build secret"** 并设置 **Build Secret ID**（如 `github_token`），即可在 Dockerfile 构建阶段通过 `/run/secrets/github_token` 读取
 
 :::note
 环境变量注入将在**下次部署**时生效。更新密钥绑定后，请重新部署项目。
@@ -100,6 +102,12 @@ muveectl projects bind-secret PROJECT_ID \
   --secret-id SSH_KEY_SECRET_ID \
   --use-for-git
 
+# 将密钥绑定为 docker buildx 构建密钥
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
+
 # 移除密钥绑定
 muveectl projects unbind-secret PROJECT_ID SECRET_ID
 ```
@@ -125,3 +133,32 @@ muveectl projects unbind-secret PROJECT_ID SECRET_ID
 - 密钥值在存入数据库前以 **AES-256-GCM** 加密。
 - 解密后的值会包含在控制平面发送给 Agent 节点的任务载荷中，通过内网传输。请确保该网络是受信任的。
 - 密钥归属于**创建它的用户**。其他用户无法查看或使用你的密钥，除非你授权共享。
+
+## 构建阶段密钥示例（私有 Go 依赖）
+
+当你的仓库需要拉取私有 Go module 时，可以把 PAT 密钥绑定为构建密钥：
+
+```bash
+# 1）创建 PAT 密钥
+muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
+
+# 2）绑定为 docker build secret
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
+
+# 3）触发部署
+muveectl projects deploy PROJECT_ID
+```
+
+Dockerfile 示例：
+
+```dockerfile
+# syntax=docker/dockerfile:1.7
+RUN --mount=type=secret,id=github_token \
+    TOKEN="$(cat /run/secrets/github_token)" && \
+    git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/" && \
+    GOPRIVATE=github.com/your-org/* GONOSUMDB=github.com/your-org/* \
+    go mod download
+```

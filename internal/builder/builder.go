@@ -26,6 +26,9 @@ type BuildConfig struct {
 	// For GitHub fine-grained PATs, set GitUsername to "x-access-token".
 	GitUsername string
 	GitToken    string
+	// BuildSecrets are passed to docker buildx via --secret id=<key>,src=<tempfile>.
+	// Inside Dockerfile they are available at /run/secrets/<key>.
+	BuildSecrets map[string]string
 }
 
 func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, error) {
@@ -95,8 +98,28 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 		"-f", dockerfilePath,
 		"-t", imageTag,
 		"--push",
-		workDir,
 	}
+	var secretFiles []string
+	for id, value := range cfg.BuildSecrets {
+		if id == "" {
+			continue
+		}
+		secretFile, err := os.CreateTemp("", "muvee-build-secret-*")
+		if err != nil {
+			return "", fmt.Errorf("create build secret file: %w", err)
+		}
+		secretFiles = append(secretFiles, secretFile.Name())
+		if err := os.WriteFile(secretFile.Name(), []byte(value), 0600); err != nil {
+			return "", fmt.Errorf("write build secret file: %w", err)
+		}
+		buildArgs = append(buildArgs, "--secret", fmt.Sprintf("id=%s,src=%s", id, secretFile.Name()))
+	}
+	defer func() {
+		for _, f := range secretFiles {
+			_ = os.Remove(f)
+		}
+	}()
+	buildArgs = append(buildArgs, workDir)
 	if err := runCmd(ctx, logFn, "docker", buildArgs...); err != nil {
 		return "", fmt.Errorf("docker build: %w", err)
 	}

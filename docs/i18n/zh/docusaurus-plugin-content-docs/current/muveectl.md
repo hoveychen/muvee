@@ -157,6 +157,52 @@ muveectl tokens create [--name 名称]   # 令牌值仅在创建时显示一次
 muveectl tokens delete TOKEN_ID
 ```
 
+## 密钥管理
+
+```bash
+# 列出密钥（不会返回值）
+muveectl secrets list
+
+# 创建 password 密钥
+muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
+
+# 创建 SSH 密钥
+muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_ed25519
+
+# 删除密钥
+muveectl secrets delete SECRET_ID
+```
+
+### 项目密钥绑定
+
+```bash
+# 查看项目绑定
+muveectl projects secrets PROJECT_ID
+
+# 作为运行时环境变量注入
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --env-var GITHUB_TOKEN
+
+# 用于 git clone（HTTPS token）
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-git \
+  --git-username x-access-token
+
+# 用于构建阶段 secret（docker buildx --secret）
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
+
+# --build-secret-id 可省略；省略时 muveectl 会根据密钥名自动推导
+# 例如 "GITHUB_TOKEN" -> "github_token"
+
+# 解绑
+muveectl projects unbind-secret PROJECT_ID SECRET_ID
+```
+
 ## 全局参数
 
 | 参数 | 说明 |
@@ -169,10 +215,11 @@ muveectl tokens delete TOKEN_ID
 项目要成功部署，仓库必须满足以下条件：
 
 ### 构建阶段
-- 可通过 HTTPS（公开仓库）或 SSH（构建节点必须有对应密钥）进行 `git clone --depth=1`
+- 可通过 HTTPS（公开仓库或 token 密钥）或 SSH（SSH 密钥）进行 `git clone --depth=1`
 - 配置的分支必须存在（默认：`main`）
 - 配置路径下必须存在 `Dockerfile`（默认：仓库根目录的 `Dockerfile`）
 - 镜像必须为 **`linux/amd64`** 平台构建（`docker buildx build --platform linux/amd64`）
+- 若构建阶段需要私有依赖，可通过 `--use-for-build --build-secret-id <id>` 绑定密钥，并在 Dockerfile 中通过 `/run/secrets/<id>` 读取
 
 ### 运行阶段
 - 容器必须在 **8080** 端口上提供 **HTTP** 服务——Traefik 负责 TLS 终止

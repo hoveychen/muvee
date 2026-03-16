@@ -23,18 +23,18 @@ import (
 )
 
 type Server struct {
-	store              *store.Store
-	auth               *auth.Service
-	sched              *scheduler.Scheduler
-	monitor            *monitor.Monitor
-	baseDomain         string
-	authServiceURL     string // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
-	agentSecret        string // shared secret for agent ↔ server authentication
-	registryAddr       string // address of the Docker registry distributed to agents
-	registryUser       string // registry basic-auth username distributed to agents
-	registryPassword   string // registry basic-auth password distributed to agents
-	volumeNFSBasePath  string // base NFS path for project workspace volumes
-	cliPending         sync.Map // state -> cli_port (string)
+	store             *store.Store
+	auth              *auth.Service
+	sched             *scheduler.Scheduler
+	monitor           *monitor.Monitor
+	baseDomain        string
+	authServiceURL    string   // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
+	agentSecret       string   // shared secret for agent ↔ server authentication
+	registryAddr      string   // address of the Docker registry distributed to agents
+	registryUser      string   // registry basic-auth username distributed to agents
+	registryPassword  string   // registry basic-auth password distributed to agents
+	volumeNFSBasePath string   // base NFS path for project workspace volumes
+	cliPending        sync.Map // state -> cli_port (string)
 }
 
 type ServerConfig struct {
@@ -382,6 +382,28 @@ muveectl tokens create [--name NAME]   # token value shown once on creation
 muveectl tokens delete TOKEN_ID
 ` + "```" + `
 
+## Secrets
+
+` + "```" + `bash
+muveectl secrets list
+muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
+muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_ed25519
+muveectl secrets delete SECRET_ID
+` + "```" + `
+
+### Project Secret Bindings
+
+` + "```" + `bash
+# Runtime env var
+muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID --env-var GITHUB_TOKEN
+
+# Git clone auth
+muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID --use-for-git --git-username x-access-token
+
+# Build-time secret
+muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID --use-for-build --build-secret-id github_token
+` + "```" + `
+
 ## Global Flags
 
 | Flag | Description |
@@ -394,10 +416,11 @@ muveectl tokens delete TOKEN_ID
 For a project to deploy successfully the repository must satisfy:
 
 ### Build
-- Accessible via ` + "`git clone --depth=1`" + ` over HTTPS (public) or SSH (builder node must have the key)
+- Accessible via ` + "`git clone --depth=1`" + ` over HTTPS (public or token secret) or SSH (SSH key secret)
 - The configured branch must exist (default: ` + "`main`" + `)
 - A ` + "`Dockerfile`" + ` must exist at the configured path (default: ` + "`Dockerfile`" + ` in repo root)
 - Image must build for **` + "`linux/amd64`" + `** (` + "`docker buildx build --platform linux/amd64`" + `)
+- For private dependencies during build, bind a secret with ` + "`--use-for-build --build-secret-id <id>`" + ` and read ` + "`/run/secrets/<id>`" + ` in Dockerfile
 
 ### Runtime
 - Container must serve **HTTP** on port **8080** — Traefik handles TLS termination
@@ -920,10 +943,10 @@ func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
 // with the control plane's own configuration (registry credentials, base domain, etc.).
 func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{
-		"registry_addr":       s.registryAddr,
-		"registry_user":       s.registryUser,
-		"registry_password":   s.registryPassword,
-		"base_domain":         s.baseDomain,
+		"registry_addr":        s.registryAddr,
+		"registry_user":        s.registryUser,
+		"registry_password":    s.registryPassword,
+		"base_domain":          s.baseDomain,
 		"volume_nfs_base_path": s.volumeNFSBasePath,
 	})
 }
@@ -1163,10 +1186,10 @@ type traefikHTTP struct {
 }
 
 type traefikRouter struct {
-	Rule        string   `json:"rule"`
-	EntryPoints []string `json:"entryPoints"`
-	Service     string   `json:"service"`
-	Middlewares []string `json:"middlewares,omitempty"`
+	Rule        string      `json:"rule"`
+	EntryPoints []string    `json:"entryPoints"`
+	Service     string      `json:"service"`
+	Middlewares []string    `json:"middlewares,omitempty"`
 	TLS         *traefikTLS `json:"tls,omitempty"`
 }
 
@@ -1367,22 +1390,26 @@ func (s *Server) getProjectSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type item struct {
-		SecretID    string `json:"secret_id"`
-		SecretName  string `json:"secret_name"`
-		SecretType  string `json:"secret_type"`
-		EnvVarName  string `json:"env_var_name"`
-		UseForGit   bool   `json:"use_for_git"`
-		GitUsername string `json:"git_username"`
+		SecretID      string `json:"secret_id"`
+		SecretName    string `json:"secret_name"`
+		SecretType    string `json:"secret_type"`
+		EnvVarName    string `json:"env_var_name"`
+		UseForGit     bool   `json:"use_for_git"`
+		UseForBuild   bool   `json:"use_for_build"`
+		BuildSecretID string `json:"build_secret_id"`
+		GitUsername   string `json:"git_username"`
 	}
 	out := make([]item, 0, len(bindings))
 	for _, b := range bindings {
 		out = append(out, item{
-			SecretID:    b.SecretID.String(),
-			SecretName:  b.SecretName,
-			SecretType:  string(b.SecretType),
-			EnvVarName:  b.EnvVarName,
-			UseForGit:   b.UseForGit,
-			GitUsername: b.GitUsername,
+			SecretID:      b.SecretID.String(),
+			SecretName:    b.SecretName,
+			SecretType:    string(b.SecretType),
+			EnvVarName:    b.EnvVarName,
+			UseForGit:     b.UseForGit,
+			UseForBuild:   b.UseForBuild,
+			BuildSecretID: b.BuildSecretID,
+			GitUsername:   b.GitUsername,
 		})
 	}
 	jsonOK(w, out)
@@ -1391,10 +1418,12 @@ func (s *Server) getProjectSecrets(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setProjectSecrets(w http.ResponseWriter, r *http.Request) {
 	projectID := mustParseUUID(chi.URLParam(r, "id"))
 	var body []struct {
-		SecretID    string `json:"secret_id"`
-		EnvVarName  string `json:"env_var_name"`
-		UseForGit   bool   `json:"use_for_git"`
-		GitUsername string `json:"git_username"`
+		SecretID      string `json:"secret_id"`
+		EnvVarName    string `json:"env_var_name"`
+		UseForGit     bool   `json:"use_for_git"`
+		UseForBuild   bool   `json:"use_for_build"`
+		BuildSecretID string `json:"build_secret_id"`
+		GitUsername   string `json:"git_username"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, err, 400)
@@ -1403,11 +1432,13 @@ func (s *Server) setProjectSecrets(w http.ResponseWriter, r *http.Request) {
 	var bindings []store.ProjectSecret
 	for _, b := range body {
 		bindings = append(bindings, store.ProjectSecret{
-			ProjectID:   projectID,
-			SecretID:    mustParseUUID(b.SecretID),
-			EnvVarName:  b.EnvVarName,
-			UseForGit:   b.UseForGit,
-			GitUsername: b.GitUsername,
+			ProjectID:     projectID,
+			SecretID:      mustParseUUID(b.SecretID),
+			EnvVarName:    b.EnvVarName,
+			UseForGit:     b.UseForGit,
+			UseForBuild:   b.UseForBuild,
+			BuildSecretID: strings.TrimSpace(b.BuildSecretID),
+			GitUsername:   b.GitUsername,
 		})
 	}
 	if err := s.store.SetProjectSecrets(r.Context(), projectID, bindings); err != nil {

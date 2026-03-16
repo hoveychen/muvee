@@ -923,6 +923,8 @@ function SecretsTab({
           secret_id: b.secret_id,
           env_var_name: b.env_var_name,
           use_for_git: b.use_for_git,
+          use_for_build: b.use_for_build,
+          build_secret_id: b.build_secret_id,
           git_username: b.git_username,
         })),
       )
@@ -946,6 +948,8 @@ function SecretsTab({
           secret_type: sec.type,
           env_var_name: sec.name.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
           use_for_git: false,
+          use_for_build: false,
+          build_secret_id: sec.name.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
           git_username: sec.type === 'password' ? 'x-access-token' : '',
         },
       ])
@@ -1034,6 +1038,39 @@ function SecretsTab({
                             onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
                           />
                         </div>
+
+                        {/* Build secret (all types) */}
+                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontFamily: mono, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>
+                          <input
+                            type="checkbox"
+                            checked={binding.use_for_build}
+                            onChange={() => updateField(sec.id, { use_for_build: !binding.use_for_build, build_secret_id: binding.build_secret_id || sec.name.toLowerCase().replace(/[^a-z0-9_]/g, '_') })}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          {t('projectDetail.secrets.useForBuild')}
+                        </label>
+                        {binding.use_for_build && (
+                          <div className="flex items-center gap-2">
+                            <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
+                              {t('projectDetail.secrets.buildSecretId')}
+                            </span>
+                            <input
+                              value={binding.build_secret_id}
+                              onChange={e => updateField(sec.id, { build_secret_id: e.target.value })}
+                              placeholder="github_token"
+                              style={{
+                                background: 'var(--bg-base)', border: '1px solid var(--border)',
+                                color: 'var(--fg-primary)', fontFamily: mono, fontSize: '0.8rem',
+                                padding: '2px 8px', borderRadius: '2px', outline: 'none', width: '180px',
+                              }}
+                              onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
+                              onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
+                            />
+                            <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                              {t('projectDetail.secrets.buildSecretHint')}
+                            </span>
+                          </div>
+                        )}
 
                         {/* SSH key: use for git clone */}
                         {sec.type === 'ssh_key' && (

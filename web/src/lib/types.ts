@@ -108,6 +108,8 @@ export interface ProjectSecretBinding {
   secret_type: 'password' | 'ssh_key'
   env_var_name: string
   use_for_git: boolean
+  use_for_build: boolean
+  build_secret_id: string
   // git_username is used with password-type secrets for HTTPS git authentication.
   // e.g. "x-access-token" for GitHub fine-grained PATs.
   git_username: string

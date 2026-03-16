@@ -993,7 +993,7 @@ func (s *Store) DeleteSecret(ctx context.Context, id, userID uuid.UUID) error {
 // Encrypted values are NOT decrypted — use GetProjectSecretsDecrypted for runtime injection.
 func (s *Store) GetProjectSecretsWithMeta(ctx context.Context, projectID uuid.UUID) ([]*ProjectSecretWithMeta, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT ps.project_id, ps.secret_id, ps.env_var_name, ps.use_for_git, ps.git_username,
+		SELECT ps.project_id, ps.secret_id, ps.env_var_name, ps.use_for_git, ps.use_for_build, ps.build_secret_id, ps.git_username,
 		       sec.name AS secret_name, sec.type AS secret_type
 		FROM project_secrets ps
 		JOIN secrets sec ON sec.id = ps.secret_id
@@ -1007,7 +1007,7 @@ func (s *Store) GetProjectSecretsWithMeta(ctx context.Context, projectID uuid.UU
 	result := make([]*ProjectSecretWithMeta, 0)
 	for rows.Next() {
 		var ps ProjectSecretWithMeta
-		if err := rows.Scan(&ps.ProjectID, &ps.SecretID, &ps.EnvVarName, &ps.UseForGit, &ps.GitUsername, &ps.SecretName, &ps.SecretType); err != nil {
+		if err := rows.Scan(&ps.ProjectID, &ps.SecretID, &ps.EnvVarName, &ps.UseForGit, &ps.UseForBuild, &ps.BuildSecretID, &ps.GitUsername, &ps.SecretName, &ps.SecretType); err != nil {
 			return nil, err
 		}
 		result = append(result, &ps)
@@ -1016,13 +1016,15 @@ func (s *Store) GetProjectSecretsWithMeta(ctx context.Context, projectID uuid.UU
 }
 
 type DecryptedProjectSecret struct {
-	SecretID    uuid.UUID
-	SecretName  string
-	SecretType  SecretType
-	EnvVarName  string
-	UseForGit   bool
-	GitUsername string // HTTPS username for git clone (password type with use_for_git=true)
-	PlainValue  string
+	SecretID      uuid.UUID
+	SecretName    string
+	SecretType    SecretType
+	EnvVarName    string
+	UseForGit     bool
+	UseForBuild   bool
+	BuildSecretID string
+	GitUsername   string // HTTPS username for git clone (password type with use_for_git=true)
+	PlainValue    string
 }
 
 // GetProjectSecretsDecrypted returns all secrets for a project with decrypted values.
@@ -1032,7 +1034,7 @@ func (s *Store) GetProjectSecretsDecrypted(ctx context.Context, projectID uuid.U
 		return nil, nil
 	}
 	rows, err := s.db.Query(ctx, `
-		SELECT ps.secret_id, ps.env_var_name, ps.use_for_git, ps.git_username,
+		SELECT ps.secret_id, ps.env_var_name, ps.use_for_git, ps.use_for_build, ps.build_secret_id, ps.git_username,
 		       sec.name, sec.type, sec.encrypted_value
 		FROM project_secrets ps
 		JOIN secrets sec ON sec.id = ps.secret_id
@@ -1046,7 +1048,7 @@ func (s *Store) GetProjectSecretsDecrypted(ctx context.Context, projectID uuid.U
 	for rows.Next() {
 		var d DecryptedProjectSecret
 		var encVal string
-		if err := rows.Scan(&d.SecretID, &d.EnvVarName, &d.UseForGit, &d.GitUsername, &d.SecretName, &d.SecretType, &encVal); err != nil {
+		if err := rows.Scan(&d.SecretID, &d.EnvVarName, &d.UseForGit, &d.UseForBuild, &d.BuildSecretID, &d.GitUsername, &d.SecretName, &d.SecretType, &encVal); err != nil {
 			return nil, err
 		}
 		plain, err := crypto.Decrypt(s.encryptionKey, encVal)
@@ -1071,9 +1073,9 @@ func (s *Store) SetProjectSecrets(ctx context.Context, projectID uuid.UUID, bind
 	}
 	for _, b := range bindings {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO project_secrets (project_id, secret_id, env_var_name, use_for_git, git_username)
-			VALUES ($1, $2, $3, $4, $5)
-		`, projectID, b.SecretID, b.EnvVarName, b.UseForGit, b.GitUsername); err != nil {
+			INSERT INTO project_secrets (project_id, secret_id, env_var_name, use_for_git, use_for_build, build_secret_id, git_username)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, projectID, b.SecretID, b.EnvVarName, b.UseForGit, b.UseForBuild, b.BuildSecretID, b.GitUsername); err != nil {
 			return err
 		}
 	}

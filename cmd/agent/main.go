@@ -228,6 +228,7 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn 
 		SSHKey:         str(p, "git_ssh_key"),
 		GitUsername:    str(p, "git_username"),
 		GitToken:       str(p, "git_token"),
+		BuildSecrets:   mapStrStr(p, "build_secrets"),
 	}
 	imageTag, err := builder.Build(ctx, cfg, logFn)
 	if err != nil {
@@ -354,6 +355,20 @@ func intVal(m map[string]interface{}, key string) int {
 func boolVal(m map[string]interface{}, key string) bool {
 	v, _ := m[key].(bool)
 	return v
+}
+
+func mapStrStr(m map[string]interface{}, key string) map[string]string {
+	out := make(map[string]string)
+	raw, ok := m[key].(map[string]interface{})
+	if !ok {
+		return out
+	}
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 func jsonReader(b []byte) *jsonBuf { return &jsonBuf{b: b} }

@@ -157,7 +157,10 @@ muveectl secrets delete SECRET_ID
 
 ### Binding Secrets to Projects
 
-Secrets are injected as environment variables into the container at runtime. They can also be used for git authentication during build (`--use-for-git`).
+Secrets can be used in three ways:
+- Runtime env vars (`--env-var`)
+- Git clone auth (`--use-for-git`)
+- Docker build-time secret mounts (`--use-for-build --build-secret-id`)
 
 ```bash
 # List secrets bound to a project
@@ -173,6 +176,15 @@ muveectl projects bind-secret PROJECT_ID \
   --secret-id TOKEN_SECRET_ID \
   --use-for-git \
   --git-username x-access-token   # default; for GitLab use "oauth2"
+
+# Bind a secret for docker buildx secret mount
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id TOKEN_SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
+
+# --build-secret-id is optional; muveectl auto-derives it from secret name
+# e.g. "GITHUB_TOKEN" -> "github_token"
 
 # Bind an SSH key for git clone
 muveectl projects bind-secret PROJECT_ID \
@@ -219,6 +231,27 @@ The builder rewrites the git URL to `https://x-access-token:TOKEN@github.com/...
 | GitHub | `x-access-token` (default) |
 | GitLab | `oauth2` |
 | Bitbucket | your Bitbucket username |
+
+### Private Build Dependencies (e.g. private Go modules)
+
+If your Docker build needs secrets (for `go mod download`, private package registries, etc.), bind a secret with build flags:
+
+```bash
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
+```
+
+In Dockerfile:
+
+```dockerfile
+# syntax=docker/dockerfile:1.7
+RUN --mount=type=secret,id=github_token \
+    TOKEN="$(cat /run/secrets/github_token)" && \
+    # ... use token for private deps ...
+    go mod download
+```
 
 ### Private Git Repository — SSH Deploy Key
 

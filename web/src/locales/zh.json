@@ -116,7 +116,7 @@
       "total": "累计"
     },
     "secrets": {
-      "hint": "绑定密钥，在下次部署时注入为环境变量。",
+      "hint": "绑定密钥，可用于运行时环境变量、git clone 鉴权或 docker build secret。",
       "saving": "保存中…",
       "empty": "暂无密钥，请先在",
       "emptyLink": "密钥",
@@ -125,6 +125,9 @@
       "detach": "解绑",
       "envVar": "环境变量名",
       "username": "用户名",
+      "useForBuild": "用于 docker build secret",
+      "buildSecretId": "BUILD SECRET ID",
+      "buildSecretHint": "在 Dockerfile RUN 中可通过 /run/secrets/<id> 读取。",
       "useForGitSsh": "用于 git clone（SSH）",
       "useForGitHttps": "用于 git clone（HTTPS）",
       "githubPat": "（GitHub PAT → x-access-token）",

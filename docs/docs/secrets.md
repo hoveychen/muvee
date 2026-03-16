@@ -13,10 +13,11 @@ Muvee provides a built-in Secrets store for safely managing passwords, API token
 ```
 User creates Secret → encrypted in DB (AES-256-GCM)
        ↓
-User binds Secret to Project (env_var_name, use_for_git)
+User binds Secret to Project (env_var_name, use_for_git, use_for_build, build_secret_id)
        ↓
 On deploy, scheduler decrypts secrets and:
   • SSH key (use_for_git=true) → builder uses for git clone
+  • Any secret with use_for_build=true + build_secret_id → builder passes docker buildx --secret id=build_secret_id
   • Any secret with env_var_name → injected as docker run -e KEY=VALUE
 ```
 
@@ -61,6 +62,7 @@ Open a project and click the **Secrets** tab to:
 - Attach / detach secrets from the project
 - Set the **environment variable name** each secret is injected as (e.g. `GITHUB_TOKEN`, `DATABASE_PASSWORD`)
 - For SSH key secrets, enable **"Use for git clone"** — this makes the builder use the key when cloning the git repository
+- Enable **"Use for docker build secret"** and set **Build Secret ID** (e.g. `github_token`) so Dockerfile can read `/run/secrets/github_token` during build
 
 :::note
 Environment variable injection takes effect on the **next deployment**. Redeploy the project after updating secret bindings.
@@ -99,6 +101,12 @@ muveectl projects bind-secret PROJECT_ID \
 muveectl projects bind-secret PROJECT_ID \
   --secret-id SSH_KEY_SECRET_ID \
   --use-for-git
+
+# Bind a secret for docker buildx secret mount
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
 
 # Remove a secret binding
 muveectl projects unbind-secret PROJECT_ID SECRET_ID
@@ -179,3 +187,32 @@ Use this method when your provider requires SSH, or when you prefer key-based au
 - Secret values are encrypted with **AES-256-GCM** before being stored in the database.
 - Decrypted values are included in task payloads sent from the control plane to agent nodes over the internal network. Ensure this network is trusted.
 - Secrets are scoped to the **user** who created them. Other users cannot see or use your secrets unless you share access.
+
+## Build-Time Secret Example (Private Go Modules)
+
+When your repository needs private Go modules, you can bind a PAT secret for build-time use:
+
+```bash
+# 1) Create PAT secret
+muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
+
+# 2) Bind for docker build secret
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
+
+# 3) Deploy
+muveectl projects deploy PROJECT_ID
+```
+
+In your Dockerfile:
+
+```dockerfile
+# syntax=docker/dockerfile:1.7
+RUN --mount=type=secret,id=github_token \
+    TOKEN="$(cat /run/secrets/github_token)" && \
+    git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/" && \
+    GOPRIVATE=github.com/your-org/* GONOSUMDB=github.com/your-org/* \
+    go mod download
+```

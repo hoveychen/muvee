@@ -19,9 +19,9 @@ func New(st *store.Store) *Scheduler {
 }
 
 type nodeScore struct {
-	node          *store.Node
-	score         float64
-	missingBytes  int64
+	node           *store.Node
+	score          float64
+	missingBytes   int64
 	cachedDatasets map[uuid.UUID]bool
 }
 
@@ -149,16 +149,19 @@ func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deploym
 	// Collect decrypted secrets; find git credentials (SSH key or HTTPS token).
 	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
 	var gitSSHKey, gitUsername, gitToken string
+	buildSecrets := make(map[string]string)
 	for _, sec := range secrets {
-		if !sec.UseForGit {
-			continue
+		if sec.UseForBuild && sec.BuildSecretID != "" {
+			buildSecrets[sec.BuildSecretID] = sec.PlainValue
 		}
-		switch sec.SecretType {
-		case store.SecretTypeSSHKey:
-			gitSSHKey = sec.PlainValue
-		case store.SecretTypePassword:
-			gitUsername = sec.GitUsername
-			gitToken = sec.PlainValue
+		if sec.UseForGit {
+			switch sec.SecretType {
+			case store.SecretTypeSSHKey:
+				gitSSHKey = sec.PlainValue
+			case store.SecretTypePassword:
+				gitUsername = sec.GitUsername
+				gitToken = sec.PlainValue
+			}
 		}
 	}
 
@@ -176,6 +179,9 @@ func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deploym
 	if gitUsername != "" && gitToken != "" {
 		payload["git_username"] = gitUsername
 		payload["git_token"] = gitToken
+	}
+	if len(buildSecrets) > 0 {
+		payload["build_secrets"] = buildSecrets
 	}
 
 	task := &store.Task{

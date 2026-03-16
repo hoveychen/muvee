@@ -174,6 +174,8 @@ interface MockProjectSecretBinding {
   secret_type: 'password' | 'ssh_key'
   env_var_name: string
   use_for_git: boolean
+  use_for_build: boolean
+  build_secret_id: string
   git_username: string
 }
 
@@ -356,6 +358,8 @@ function buildInitialState() {
       secret_type: 'password',
       env_var_name: 'GITHUB_TOKEN',
       use_for_git: true,
+      use_for_build: true,
+      build_secret_id: 'github_token',
       git_username: 'x-access-token',
     },
   ]
@@ -650,6 +654,8 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
           const sec = state.secrets.find((s) => s.id === item.secret_id)
           return {
             ...item,
+            use_for_build: Boolean(item.use_for_build),
+            build_secret_id: (item.build_secret_id as string) || '',
             secret_name: sec?.name ?? item.secret_id,
             secret_type: sec?.type ?? 'password',
           }

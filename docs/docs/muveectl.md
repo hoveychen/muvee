@@ -194,6 +194,52 @@ muveectl tokens create [--name NAME]   # token value is shown once on creation
 muveectl tokens delete TOKEN_ID
 ```
 
+## Secrets
+
+```bash
+# List secrets (values never returned)
+muveectl secrets list
+
+# Create a password secret
+muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
+
+# Create an SSH key secret
+muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_ed25519
+
+# Delete a secret
+muveectl secrets delete SECRET_ID
+```
+
+### Project Secret Bindings
+
+```bash
+# List project bindings
+muveectl projects secrets PROJECT_ID
+
+# Runtime env var injection
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --env-var GITHUB_TOKEN
+
+# Git clone auth (HTTPS token)
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-git \
+  --git-username x-access-token
+
+# Build-time secret (docker buildx --secret)
+muveectl projects bind-secret PROJECT_ID \
+  --secret-id SECRET_ID \
+  --use-for-build \
+  --build-secret-id github_token
+
+# --build-secret-id is optional; when omitted, muveectl derives it from the secret name
+# e.g. "GITHUB_TOKEN" -> "github_token"
+
+# Unbind
+muveectl projects unbind-secret PROJECT_ID SECRET_ID
+```
+
 ## Global Flags
 
 | Flag | Description |
@@ -206,10 +252,11 @@ muveectl tokens delete TOKEN_ID
 For a project to deploy successfully, the repository must satisfy:
 
 ### Build
-- Accessible via `git clone --depth=1` over HTTPS (public) or SSH (builder node must have the key)
+- Accessible via `git clone --depth=1` over HTTPS (public or with token secret) or SSH (SSH key secret)
 - The configured branch must exist (default: `main`)
 - A `Dockerfile` must exist at the configured path (default: `Dockerfile` in repo root)
 - Image must build for **`linux/amd64`** (`docker buildx build --platform linux/amd64`)
+- If private dependencies are required during build, bind a secret with `--use-for-build --build-secret-id <id>` and read it in Dockerfile via `/run/secrets/<id>`
 
 ### Runtime
 - Container must serve **HTTP** on port **8080** — Traefik handles TLS termination
