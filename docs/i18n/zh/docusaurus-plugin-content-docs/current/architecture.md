@@ -8,6 +8,8 @@ sidebar_position: 4
 
 ## 总览
 
+![muvee 系统架构总览](/img/arch-overview.png)
+
 ```
 ┌─────────────────────────────────────────────┐
 │              控制平面                         │
@@ -61,6 +63,8 @@ sidebar_position: 4
 
 ## 数据流：部署过程
 
+![muvee 部署流程](/img/deploy-flow.png)
+
 ```
 用户点击"部署"
     │
@@ -104,7 +108,9 @@ Traefik HTTP provider 每 5 秒轮询 GET /api/traefik/config
   → {project}.domain.com → http://{node_ip}:{host_port}
 ```
 
-## 亲和性评分
+## 亲和性评分与数据集挂载模式
+
+![数据集智能调度与挂载模式](/img/dataset-scheduling.png)
 
 在调度部署任务时，每个活跃的部署节点会获得一个评分：
 

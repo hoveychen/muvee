@@ -89,13 +89,16 @@ func (s *Server) Router() http.Handler {
 		AllowCredentials: true,
 	}))
 
-	// Auth
-	r.Get("/auth/google/login", s.handleGoogleLogin)
-	r.Get("/auth/google/callback", s.handleGoogleCallback)
+	// Auth – provider-agnostic routes (/auth/{provider}/login and /auth/{provider}/callback)
+	r.Get("/auth/{provider}/login", s.handleProviderLogin)
+	r.Get("/auth/{provider}/callback", s.handleProviderCallback)
 	r.Post("/auth/logout", s.handleLogout)
 
 	// CLI device-flow auth
 	r.Get("/auth/cli/login", s.handleCLILogin)
+
+	// Public: list enabled auth providers (used by frontend to render login buttons)
+	r.Get("/api/auth/providers", s.handleListProviders)
 
 	// Public skill document for Claude
 	r.Get("/api/skill", s.handleSkill)
@@ -177,35 +180,69 @@ func (s *Server) Router() http.Handler {
 
 // ─── Auth Handlers ───────────────────────────────────────────────────────────
 
-func (s *Server) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, s.auth.ListProviders())
+}
+
+func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
+	providerName := chi.URLParam(r, "provider")
 	state := uuid.New().String()
-	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: state, MaxAge: 300, HttpOnly: true, Path: "/"})
-	http.Redirect(w, r, s.auth.AuthCodeURL(state), http.StatusFound)
+	authURL, err := s.auth.AuthCodeURL(providerName, state)
+	if err != nil {
+		http.Error(w, "unknown provider", http.StatusNotFound)
+		return
+	}
+	// Encode provider into the state cookie name so the callback knows which provider to use.
+	http.SetCookie(w, &http.Cookie{
+		Name: "oauth_state", Value: providerName + ":" + state,
+		MaxAge: 300, HttpOnly: true, Path: "/",
+	})
+	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 // handleCLILogin initiates the device-flow OAuth for muveectl.
-// The CLI passes ?port=PORT; we store the port keyed by state so the callback
-// can redirect the token back to the local CLI server.
+// The CLI passes ?port=PORT and an optional ?provider=NAME.
+// Defaults to the first configured provider when provider is omitted.
 func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 	port := r.URL.Query().Get("port")
 	if port == "" {
 		http.Error(w, "port required", http.StatusBadRequest)
 		return
 	}
+	providerName := r.URL.Query().Get("provider")
+	if providerName == "" {
+		providerName = s.auth.DefaultProvider()
+	}
 	state := uuid.New().String()
+	authURL, err := s.auth.AuthCodeURL(providerName, state)
+	if err != nil {
+		http.Error(w, "unknown provider", http.StatusNotFound)
+		return
+	}
 	s.cliPending.Store(state, port)
-	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: state, MaxAge: 300, HttpOnly: true, Path: "/"})
-	http.Redirect(w, r, s.auth.AuthCodeURL(state), http.StatusFound)
+	http.SetCookie(w, &http.Cookie{
+		Name: "oauth_state", Value: providerName + ":" + state,
+		MaxAge: 300, HttpOnly: true, Path: "/",
+	})
+	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) {
+	providerName := chi.URLParam(r, "provider")
 	cookie, err := r.Cookie("oauth_state")
-	if err != nil || cookie.Value != r.URL.Query().Get("state") {
+	if err != nil {
+		http.Error(w, "missing state cookie", http.StatusBadRequest)
+		return
+	}
+	// Cookie value format: "{provider}:{state}"
+	cookieParts := strings.SplitN(cookie.Value, ":", 2)
+	if len(cookieParts) != 2 || cookieParts[0] != providerName || cookieParts[1] != r.URL.Query().Get("state") {
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
-	state := cookie.Value
-	user, jwtToken, err := s.auth.HandleCallback(r.Context(), r.URL.Query().Get("code"))
+	state := cookieParts[1]
+
+	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, r.URL.Query().Get("code"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return

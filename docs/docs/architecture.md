@@ -8,6 +8,8 @@ sidebar_position: 4
 
 ## Overview
 
+![muvee system architecture overview](/img/arch-overview.png)
+
 ```
 ┌─────────────────────────────────────────────┐
 │              Control Plane                   │
@@ -61,6 +63,8 @@ Standalone HTTP service that Traefik calls via ForwardAuth middleware to enforce
 
 ## Data Flow: Deployment
 
+![muvee deployment flow](/img/deploy-flow-en.png)
+
 ```
 User clicks "Deploy"
     │
@@ -104,7 +108,9 @@ Traefik HTTP provider polls GET /api/traefik/config (every 5s)
   → {project}.domain.com → http://{node_ip}:{host_port}
 ```
 
-## Affinity Scoring
+## Affinity Scoring & Dataset Modes
+
+![dataset scheduling and mount modes](/img/dataset-scheduling.png)
 
 When scheduling a deploy task, each active deploy node receives a score:
 

@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # 快速入门
 
-muvee 是一款轻量级自托管 PaaS，可将任意私有云转变为容器部署平台——内置数据仓库集成、LRU 缓存数据集注入以及基于项目的 Google 身份验证。
+muvee 是一款轻量级自托管 PaaS，可将任意私有云转变为容器部署平台——内置数据仓库集成、LRU 缓存数据集注入，以及灵活的身份认证 Provider 支持。
 
 ## 前置条件
 
@@ -16,7 +16,7 @@ muvee 是一款轻量级自托管 PaaS，可将任意私有云转变为容器部
 | Docker + Docker Buildx | 所有节点均需安装 |
 | NFS 共享 | 在所有部署节点挂载到相同路径 |
 | PostgreSQL 16+ | 可在 Docker 中运行（`docker-compose.yml` 中已包含） |
-| Google OAuth2 凭据 | 从 [Google Cloud Console](https://console.cloud.google.com/apis/credentials) 获取 |
+| 身份认证 Provider | 至少配置一个：[Google](./auth/google)、[飞书/Lark](./auth/feishu)、[企业微信](./auth/wecom)、[钉钉](./auth/dingtalk) |
 
 ## 5 分钟快速启动
 
@@ -28,7 +28,7 @@ cd muvee
 cp .env.example .env
 ```
 
-编辑 `.env`：
+编辑 `.env`，配置至少一个身份认证 Provider。以 Google 为例：
 
 ```env
 GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
@@ -43,7 +43,9 @@ REGISTRY_PASSWORD=a-strong-password
 AGENT_SECRET=your-agent-secret   # 服务器与所有 Agent 之间的共享密钥
 ```
 
-`ADMIN_EMAILS` 是以逗号分隔的 Google 账号列表，这些账号在登录时会自动获得 `admin` 角色，并可访问 `https://traefik.BASE_DOMAIN` 的 Traefik 控制台。
+各 Provider 的配置指引见 [Authentication](./auth/google) 章节。多个 Provider 可同时启用——登录页会为每个已配置的 Provider 显示一个登录按钮。
+
+`ADMIN_EMAILS` 是以逗号分隔的邮箱列表，这些账号在登录时会自动获得 `admin` 角色，并可访问 `https://traefik.BASE_DOMAIN` 的 Traefik 控制台。
 
 `AGENT_SECRET` 用于保护 `/api/agent/*` 端点。使用 `openssl rand -hex 32` 生成，并在服务器和所有 Agent 节点上使用相同的值。
 
@@ -101,7 +103,7 @@ docker run -d --name muvee-agent \
 
 ### 5. 创建第一个项目
 
-1. 打开 `https://example.com`，使用 Google 账号登录
+1. 打开 `https://example.com`，使用已配置的身份认证 Provider 登录
 2. 点击 **New Project**（新建项目）
 3. 填写 Git URL、分支、域名前缀
 4. 点击 **Deploy**（部署）——muvee 将会：

@@ -20,7 +20,7 @@
     "feat3": "Traefik 路由",
     "signIn": "登录",
     "authorizedOnly": "仅限授权人员",
-    "continueWithGoogle": "使用 Google 继续",
+    "continueWith": "使用 {{provider}} 继续",
     "accessRestricted": "仅限授权域名访问"
   },
   "projects": {

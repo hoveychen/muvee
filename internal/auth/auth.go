@@ -11,17 +11,13 @@ import (
 	"strings"
 	"time"
 
-	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/store"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 )
 
 type Service struct {
-	oauth2Config   *oauth2.Config
-	verifier       *gooidc.IDTokenVerifier
+	providers      map[string]Provider
 	jwtSecret      []byte
 	allowedDomains []string
 	adminEmails    map[string]struct{}
@@ -39,18 +35,13 @@ type contextKey string
 
 const CtxUserKey contextKey = "user"
 
+// ProviderInfo is returned by ListProviders for the frontend to render login buttons.
+type ProviderInfo struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
 func New(st *store.Store) (*Service, error) {
-	ctx := context.Background()
-	provider, err := gooidc.NewProvider(ctx, "https://accounts.google.com")
-	if err != nil {
-		return nil, fmt.Errorf("oidc provider: %w", err)
-	}
-	clientID := os.Getenv("GOOGLE_CLIENT_ID")
-	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-	redirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
-	if redirectURL == "" {
-		redirectURL = "http://localhost:8080/auth/google/callback"
-	}
 	allowedDomains := strings.Split(os.Getenv("ALLOWED_DOMAINS"), ",")
 	var filtered []string
 	for _, d := range allowedDomains {
@@ -70,66 +61,131 @@ func New(st *store.Store) (*Service, error) {
 	if secret == "" {
 		secret = "change-me-in-production"
 	}
-	return &Service{
-		oauth2Config: &oauth2.Config{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			RedirectURL:  redirectURL,
-			Endpoint:     google.Endpoint,
-			Scopes:       []string{gooidc.ScopeOpenID, "email", "profile"},
-		},
-		verifier:       provider.Verifier(&gooidc.Config{ClientID: clientID}),
+
+	svc := &Service{
+		providers:      make(map[string]Provider),
 		jwtSecret:      []byte(secret),
 		allowedDomains: filtered,
 		adminEmails:    adminEmails,
 		store:          st,
-	}, nil
-}
-
-func (s *Service) AuthCodeURL(state string) string {
-	return s.oauth2Config.AuthCodeURL(state, oauth2.AccessTypeOnline)
-}
-
-func (s *Service) HandleCallback(ctx context.Context, code string) (*store.User, string, error) {
-	token, err := s.oauth2Config.Exchange(ctx, code)
-	if err != nil {
-		return nil, "", fmt.Errorf("exchange code: %w", err)
 	}
-	rawIDToken, ok := token.Extra("id_token").(string)
+
+	// Register all configured providers.
+	googleP, err := newGoogleProvider()
+	if err != nil {
+		return nil, fmt.Errorf("google provider: %w", err)
+	}
+	if googleP != nil {
+		svc.providers[googleP.Name()] = googleP
+	}
+
+	feishuP, err := newFeishuProvider()
+	if err != nil {
+		return nil, fmt.Errorf("feishu provider: %w", err)
+	}
+	if feishuP != nil {
+		svc.providers[feishuP.Name()] = feishuP
+	}
+
+	wecomP, err := newWeComProvider()
+	if err != nil {
+		return nil, fmt.Errorf("wecom provider: %w", err)
+	}
+	if wecomP != nil {
+		svc.providers[wecomP.Name()] = wecomP
+	}
+
+	dingtalkP, err := newDingTalkProvider()
+	if err != nil {
+		return nil, fmt.Errorf("dingtalk provider: %w", err)
+	}
+	if dingtalkP != nil {
+		svc.providers[dingtalkP.Name()] = dingtalkP
+	}
+
+	if len(svc.providers) == 0 {
+		return nil, fmt.Errorf("no auth provider configured; set at least one of GOOGLE_CLIENT_ID, FEISHU_APP_ID, WECOM_CORP_ID, DINGTALK_CLIENT_ID")
+	}
+	return svc, nil
+}
+
+// ListProviders returns the list of enabled identity providers for the frontend.
+func (s *Service) ListProviders() []ProviderInfo {
+	// Return in a stable order: google, feishu, wecom, dingtalk, others
+	order := []string{"google", "feishu", "wecom", "dingtalk"}
+	var result []ProviderInfo
+	seen := make(map[string]bool)
+	for _, name := range order {
+		if p, ok := s.providers[name]; ok {
+			result = append(result, ProviderInfo{ID: p.Name(), DisplayName: p.DisplayName()})
+			seen[name] = true
+		}
+	}
+	for name, p := range s.providers {
+		if !seen[name] {
+			result = append(result, ProviderInfo{ID: p.Name(), DisplayName: p.DisplayName()})
+		}
+	}
+	return result
+}
+
+// DefaultProvider returns the name of the first available provider (used for CLI auth).
+func (s *Service) DefaultProvider() string {
+	for _, name := range []string{"google", "feishu", "wecom", "dingtalk"} {
+		if _, ok := s.providers[name]; ok {
+			return name
+		}
+	}
+	for name := range s.providers {
+		return name
+	}
+	return ""
+}
+
+func (s *Service) AuthCodeURL(providerName, state string) (string, error) {
+	p, ok := s.providers[providerName]
 	if !ok {
-		return nil, "", fmt.Errorf("no id_token")
+		return "", fmt.Errorf("unknown provider %q", providerName)
 	}
-	idToken, err := s.verifier.Verify(ctx, rawIDToken)
+	return p.AuthCodeURL(state), nil
+}
+
+func (s *Service) HandleCallback(ctx context.Context, providerName, code string) (*store.User, string, error) {
+	p, ok := s.providers[providerName]
+	if !ok {
+		return nil, "", fmt.Errorf("unknown provider %q", providerName)
+	}
+
+	email, name, avatarURL, err := p.UserInfo(ctx, code)
 	if err != nil {
-		return nil, "", fmt.Errorf("verify token: %w", err)
+		return nil, "", fmt.Errorf("user info: %w", err)
 	}
-	var claims struct {
-		Email   string `json:"email"`
-		Name    string `json:"name"`
-		Picture string `json:"picture"`
+
+	// Only enforce domain restrictions for providers that produce real email addresses.
+	// Synthetic emails (*.local) bypass the check since the provider itself is already
+	// scoped to a specific organisation.
+	if !strings.HasSuffix(email, ".local") {
+		if err := s.checkDomain(email); err != nil {
+			return nil, "", err
+		}
 	}
-	if err := idToken.Claims(&claims); err != nil {
-		return nil, "", fmt.Errorf("parse claims: %w", err)
-	}
-	if err := s.checkDomain(claims.Email); err != nil {
-		return nil, "", err
-	}
-	user, err := s.store.UpsertUser(ctx, claims.Email, claims.Name, claims.Picture)
+
+	user, err := s.store.UpsertUser(ctx, email, name, avatarURL)
 	if err != nil {
 		return nil, "", fmt.Errorf("upsert user: %w", err)
 	}
 	// Auto-promote users listed in ADMIN_EMAILS on every login.
-	if _, isAdmin := s.adminEmails[claims.Email]; isAdmin && user.Role != store.UserRoleAdmin {
+	if _, isAdmin := s.adminEmails[email]; isAdmin && user.Role != store.UserRoleAdmin {
 		if err := s.store.SetUserRole(ctx, user.ID, store.UserRoleAdmin); err != nil {
 			return nil, "", fmt.Errorf("promote admin: %w", err)
 		}
 		user.Role = store.UserRoleAdmin
 	}
-	jwt, err := s.signJWT(user)
+	jwtToken, err := s.signJWT(user)
 	if err != nil {
 		return nil, "", err
 	}
-	return user, jwt, nil
+	return user, jwtToken, nil
 }
 
 func (s *Service) checkDomain(email string) error {

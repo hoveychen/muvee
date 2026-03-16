@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # Getting Started
 
-muvee is a lightweight self-hosted PaaS that turns any private cloud into a container deployment platform — with built-in data warehouse integration, LRU-cached dataset injection, and per-project Google authentication.
+muvee is a lightweight self-hosted PaaS that turns any private cloud into a container deployment platform — with built-in data warehouse integration, LRU-cached dataset injection, and flexible identity provider support.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ muvee is a lightweight self-hosted PaaS that turns any private cloud into a cont
 | Docker + Docker Buildx | On all nodes |
 | NFS share | Mounted at the same path on all deploy nodes |
 | PostgreSQL 16+ | Can run in Docker (included in `docker-compose.yml`) |
-| Google OAuth2 credentials | From [Google Cloud Console](https://console.cloud.google.com/apis/credentials) |
+| Identity provider | At least one of: [Google](./auth/google), [Feishu/Lark](./auth/feishu), [WeCom](./auth/wecom), [DingTalk](./auth/dingtalk) |
 
 ## 5-Minute Quickstart
 
@@ -28,7 +28,7 @@ cd muvee
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` and configure at least one identity provider. Example with Google:
 
 ```env
 GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
@@ -43,7 +43,9 @@ REGISTRY_PASSWORD=a-strong-password
 AGENT_SECRET=your-agent-secret   # shared secret between server and all agents
 ```
 
-`ADMIN_EMAILS` is a comma-separated list of Google accounts that receive the `admin` role on login and can access the Traefik dashboard at `https://traefik.BASE_DOMAIN`.
+See the [Authentication](./auth/google) section for setup guides for each supported provider. Multiple providers can be enabled simultaneously — the login page shows a button for each one.
+
+`ADMIN_EMAILS` is a comma-separated list of email addresses that receive the `admin` role on login and can access the Traefik dashboard at `https://traefik.BASE_DOMAIN`.
 
 `AGENT_SECRET` protects the `/api/agent/*` endpoints. Generate with `openssl rand -hex 32` and use the same value on the server and all agent nodes.
 
@@ -101,7 +103,7 @@ docker run -d --name muvee-agent \
 
 ### 5. Create your first project
 
-1. Open `https://example.com` and sign in with Google
+1. Open `https://example.com` and sign in with your configured identity provider
 2. Click **New Project**
 3. Fill in Git URL, branch, domain prefix
 4. Click **Deploy** — muvee will:

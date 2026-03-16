@@ -16,11 +16,22 @@ All configuration is via environment variables.
 | `MIGRATIONS_DIR` | `./db/migrations` | Path to SQL migration files |
 | `PORT` | `8080` | HTTP listen port |
 | `BASE_DOMAIN` | `localhost` | Root domain; projects are served at `{prefix}.BASE_DOMAIN`. Also distributed to agents via `/api/agent/config`. |
-| `GOOGLE_CLIENT_ID` | — | Google OAuth2 client ID |
+| `GOOGLE_CLIENT_ID` | — | Google OAuth2 client ID. If set, enables Google login. See [Google OAuth2](./auth/google). |
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth2 client secret |
-| `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | OAuth2 callback URL |
-| `ALLOWED_DOMAINS` | _(allow all)_ | Comma-separated email domains allowed to sign in (e.g. `company.com`) |
-| `ADMIN_EMAILS` | — | Comma-separated Google accounts that are auto-promoted to `admin` on login and can access `traefik.BASE_DOMAIN` |
+| `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Google OAuth2 callback URL |
+| `FEISHU_APP_ID` | — | Feishu / Lark App ID. If set, enables Feishu login. See [Feishu / Lark](./auth/feishu). |
+| `FEISHU_APP_SECRET` | — | Feishu / Lark App Secret |
+| `FEISHU_REDIRECT_URL` | `http://localhost:8080/auth/feishu/callback` | Feishu OAuth2 callback URL |
+| `FEISHU_BASE_URL` | `https://open.feishu.cn` | Feishu API base URL. Set to `https://open.larksuite.com` for international Lark. |
+| `WECOM_CORP_ID` | — | WeCom (企业微信) Corp ID. If set, enables WeCom login. See [WeCom](./auth/wecom). |
+| `WECOM_CORP_SECRET` | — | WeCom App Secret |
+| `WECOM_AGENT_ID` | — | WeCom Agent ID of the internal app |
+| `WECOM_REDIRECT_URL` | `http://localhost:8080/auth/wecom/callback` | WeCom OAuth2 callback URL |
+| `DINGTALK_CLIENT_ID` | — | DingTalk (钉钉) App Key. If set, enables DingTalk login. See [DingTalk](./auth/dingtalk). |
+| `DINGTALK_CLIENT_SECRET` | — | DingTalk App Secret |
+| `DINGTALK_REDIRECT_URL` | `http://localhost:8080/auth/dingtalk/callback` | DingTalk OAuth2 callback URL |
+| `ALLOWED_DOMAINS` | _(allow all)_ | Comma-separated email domains allowed to sign in (e.g. `company.com`). Applied to Google; enterprise SSO providers (Feishu, WeCom, DingTalk) bypass this check when no real email is available and a synthetic `*.local` address is used instead. |
+| `ADMIN_EMAILS` | — | Comma-separated email addresses that are auto-promoted to `admin` on login and can access `traefik.BASE_DOMAIN` |
 | `JWT_SECRET` | `change-me-in-production` | Secret for signing JWT session tokens |
 | `AGENT_SECRET` | — | Shared secret for agent ↔ server authentication (set the same value on all agents). If unset, agent endpoints are unauthenticated (dev only). |
 | `AUTH_SERVICE_URL` | `http://muvee-authservice:4181` | Internal URL of `muvee-authservice`; used when generating per-project ForwardAuth config for Traefik |

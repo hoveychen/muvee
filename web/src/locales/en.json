@@ -20,7 +20,7 @@
     "feat3": "Traefik Routing",
     "signIn": "Sign in",
     "authorizedOnly": "Authorized personnel only",
-    "continueWithGoogle": "Continue with Google",
+    "continueWith": "Continue with {{provider}}",
     "accessRestricted": "Access restricted to authorized domains"
   },
   "projects": {

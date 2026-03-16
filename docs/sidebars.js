@@ -12,6 +12,16 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Authentication',
+      items: [
+        'auth/google',
+        'auth/feishu',
+        'auth/wecom',
+        'auth/dingtalk',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Architecture',
       items: [
         'architecture',
