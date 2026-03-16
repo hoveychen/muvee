@@ -62,7 +62,7 @@ muvee is a **self-hosted PaaS** designed for private clouds with many lightweigh
 
 Key features:
 
-- **Git → Docker → Deploy** — point at a repo with a `Dockerfile`, click Deploy. muvee builds the image on a builder node, pushes to its internal registry, and runs the container on a deploy node, wired to `{project}.yourdomain.com` automatically via Traefik.
+- **Git → Docker → Deploy** — point at a repo with a `Dockerfile`, click Deploy. muvee builds the image on a builder node, pushes to its internal registry, and runs the container on a deploy node, wired to `{project}.example.com` automatically via Traefik.
 - **Data Warehouse Integration** — declare NFS-backed datasets as dependencies. muvee rsyncs them to the deploy node (LRU-cached, versioned) and mounts them into the container at `/data/{name}`. Or declare a dataset as `readwrite` for a direct NFS bind-mount.
 - **Smart Affinity Scheduling** — deploy nodes are scored by how many required datasets they already have cached, minimizing rsync time.
 - **File-level Dataset Tracking** — a background monitor scans NFS paths, diffs file trees, and records a `git log`–style history of every file change (added / modified / deleted), with per-file timelines in the UI.
