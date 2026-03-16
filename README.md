@@ -115,16 +115,28 @@ docker run --entrypoint htpasswd httpd:2 -Bbn <REGISTRY_USER> <REGISTRY_PASSWORD
 
 Use the same `REGISTRY_USER` / `REGISTRY_PASSWORD` values you set in `.env`.
 
-**4 — Start the control plane**
+**4 — Start**
+
+**Standalone** (single machine — default, recommended for getting started):
 
 ```bash
-docker network create muvee-net
 docker compose up -d
 ```
 
+This starts everything on one machine: server, agents (builder + deploy), Traefik, PostgreSQL, and the private registry.
+
+**Multi-node** (agents on separate worker machines):
+
+```bash
+# On the control-plane host — server only
+docker compose -f docker-compose.server.yml up -d
+```
+
+Then register each worker node separately (see step 5).
+
 Traefik is now listening on 443. Open `https://BASE_DOMAIN` and sign in with your configured identity provider. Admin accounts listed in `ADMIN_EMAILS` also gain access to `https://traefik.BASE_DOMAIN`.
 
-**5 — Register worker nodes**
+**5 — Register worker nodes** *(multi-node only — skip if using standalone)*
 
 Run the following on each worker machine. Registry credentials and `BASE_DOMAIN` are **automatically distributed** from the control plane — agents fetch them via `/api/agent/config` on startup, so you don't need to configure them per node.
 

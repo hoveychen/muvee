@@ -8,7 +8,7 @@ sidebar_position: 2
 
 ## Option A: Docker Compose (Recommended)
 
-The quickest way to run the control plane. All services are pre-wired.
+The quickest way to get up and running. All services are pre-wired.
 
 ```bash
 git clone https://github.com/hoveychen/muvee.git
@@ -21,8 +21,11 @@ cp .env.example .env
 docker run --entrypoint htpasswd httpd:2 -Bbn \
   "$REGISTRY_USER" "$REGISTRY_PASSWORD" > registry/htpasswd
 
-docker network create muvee-net
+# Standalone — starts server + agents on this machine (default, recommended)
 docker compose up -d
+
+# Multi-node — starts server only; register agents separately on worker machines
+# docker compose -f docker-compose.server.yml up -d
 ```
 
 ## Option B: Pre-built Binaries

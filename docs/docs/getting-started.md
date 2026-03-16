@@ -58,24 +58,33 @@ docker run --entrypoint htpasswd httpd:2 -Bbn \
   "$REGISTRY_USER" "$REGISTRY_PASSWORD" > registry/htpasswd
 ```
 
-### 3. Start the control plane
+### 3. Start
+
+**Standalone** (everything on one machine — recommended for getting started):
 
 ```bash
-# Create the Docker network first
-docker network create muvee-net
-
-# Start all services
 docker compose up -d
 ```
 
-This starts:
+This starts all components on a single host:
 - **muvee-server** — API + embedded web UI at `https://BASE_DOMAIN`
 - **muvee-authservice** — Traefik ForwardAuth sidecar (`:4181`)
 - **PostgreSQL** — metadata store
 - **Traefik** — reverse proxy with automatic HTTPS; dashboard at `https://traefik.BASE_DOMAIN` (admin only)
 - **Registry** — private Docker image registry at `https://registry.BASE_DOMAIN` (htpasswd auth)
+- **muvee-agent-builder** — build agent running on this machine
+- **muvee-agent-deploy** — deploy agent running on this machine
 
-### 4. Connect agent nodes
+**Multi-node** (agents on separate worker machines):
+
+```bash
+# On the control-plane host — server only
+docker compose -f docker-compose.server.yml up -d
+```
+
+Then follow step 4 to register worker nodes.
+
+### 4. Connect agent nodes *(multi-node only — skip if using standalone)*
 
 Registry credentials (`REGISTRY_ADDR`, `REGISTRY_USER`, `REGISTRY_PASSWORD`) and `BASE_DOMAIN` are **automatically distributed** from the control plane. Agents call `GET /api/agent/config` on startup and run `docker login` using the values returned — no per-node credential configuration needed.
 

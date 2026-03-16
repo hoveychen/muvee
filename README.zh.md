@@ -116,16 +116,28 @@ docker run --entrypoint htpasswd httpd:2 -Bbn <REGISTRY_USER> <REGISTRY_PASSWORD
 
 `REGISTRY_USER` / `REGISTRY_PASSWORD` 与 `.env` 中的配置保持一致。
 
-**第 4 步 — 启动控制平面**
+**第 4 步 — 启动**
+
+**单机 Standalone**（所有组件在一台机器上，推荐新用户使用）：
 
 ```bash
-docker network create muvee-net
 docker compose up -d
 ```
 
+此命令在同一台机器上启动所有组件：控制面板、Agent（builder + deploy）、Traefik、PostgreSQL 和私有镜像仓库。
+
+**多节点**（Agent 运行在独立的工作机器上）：
+
+```bash
+# 在控制平面主机上执行 — 仅启动控制面板
+docker compose -f docker-compose.server.yml up -d
+```
+
+然后分别在每台工作节点上注册 Agent（见第 5 步）。
+
 Traefik 开始监听 443 端口。在浏览器中打开 `https://BASE_DOMAIN`，使用已配置的身份认证 Provider 登录。`ADMIN_EMAILS` 中配置的管理员账号还可访问 `https://traefik.BASE_DOMAIN` Traefik 控制面板。
 
-**第 5 步 — 注册工作节点**
+**第 5 步 — 注册工作节点** *（仅多节点部署需要，Standalone 可跳过此步）*
 
 在每台工作机器上执行。Registry 凭证和 `BASE_DOMAIN` 由控制平面**自动下发** —— Agent 启动后会通过 `/api/agent/config` 接口拉取，无需在每个节点手动配置。
 

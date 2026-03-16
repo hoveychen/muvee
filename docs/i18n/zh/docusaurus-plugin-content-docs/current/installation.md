@@ -8,7 +8,7 @@ sidebar_position: 2
 
 ## 方式 A：Docker Compose（推荐）
 
-最快速的控制平面启动方式，所有服务均已预配置。
+最快速的启动方式，所有服务均已预配置。
 
 ```bash
 git clone https://github.com/hoveychen/muvee.git
@@ -21,8 +21,11 @@ cp .env.example .env
 docker run --entrypoint htpasswd httpd:2 -Bbn \
   "$REGISTRY_USER" "$REGISTRY_PASSWORD" > registry/htpasswd
 
-docker network create muvee-net
+# 单机 Standalone — 在本机同时启动控制面板和 Agent（默认，推荐）
 docker compose up -d
+
+# 多节点 — 仅启动控制面板，Agent 单独在工作节点上注册
+# docker compose -f docker-compose.server.yml up -d
 ```
 
 ## 方式 B：预构建二进制文件

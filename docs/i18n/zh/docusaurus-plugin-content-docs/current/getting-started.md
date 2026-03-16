@@ -58,24 +58,33 @@ docker run --entrypoint htpasswd httpd:2 -Bbn \
   "$REGISTRY_USER" "$REGISTRY_PASSWORD" > registry/htpasswd
 ```
 
-### 3. 启动控制平面
+### 3. 启动
+
+**单机 Standalone**（所有组件在一台机器上，推荐入门使用）：
 
 ```bash
-# 先创建 Docker 网络
-docker network create muvee-net
-
-# 启动所有服务
 docker compose up -d
 ```
 
-此命令将启动：
+此命令在同一台主机上启动所有组件：
 - **muvee-server** — API + 内嵌 Web UI，访问地址 `https://BASE_DOMAIN`
 - **muvee-authservice** — Traefik ForwardAuth 边车服务（`:4181`）
 - **PostgreSQL** — 元数据存储
 - **Traefik** — 支持自动 HTTPS 的反向代理；控制台地址 `https://traefik.BASE_DOMAIN`（仅管理员可访问）
 - **Registry** — 私有 Docker 镜像仓库，访问地址 `https://registry.BASE_DOMAIN`（htpasswd 认证）
+- **muvee-agent-builder** — 在本机运行的构建 Agent
+- **muvee-agent-deploy** — 在本机运行的部署 Agent
 
-### 4. 连接 Agent 节点
+**多节点**（Agent 运行在独立的工作机器上）：
+
+```bash
+# 在控制平面主机上执行 — 仅启动控制面板
+docker compose -f docker-compose.server.yml up -d
+```
+
+然后按照第 4 步注册工作节点。
+
+### 4. 连接 Agent 节点 *（仅多节点部署需要，Standalone 可跳过此步）*
 
 镜像仓库凭据（`REGISTRY_ADDR`、`REGISTRY_USER`、`REGISTRY_PASSWORD`）和 `BASE_DOMAIN` 会从控制平面**自动下发**。Agent 在启动时调用 `GET /api/agent/config`，并使用返回的值执行 `docker login`——无需在每个节点上单独配置凭据。
 

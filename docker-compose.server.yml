@@ -1,22 +1,13 @@
-# Default (standalone) deployment: all components on a single machine.
-# Starts: postgres, registry, muvee-server, muvee-authservice, traefik,
-#         muvee-agent-builder, and muvee-agent-deploy.
+# Server-only deployment: control plane without agents.
+# Use this when worker agents run on separate machines.
 #
 # Usage:
 #   cp .env.example .env   # then edit .env
 #   # Generate registry credentials (run once):
 #   docker run --entrypoint htpasswd httpd:2 -Bbn <user> <password> > registry/htpasswd
-#   docker compose up -d
-#
-# For multi-node deployments (agents on separate machines), use:
 #   docker compose -f docker-compose.server.yml up -d
-# then follow the agent setup guide in README.md.
 #
-# NOTE: The deploy agent mounts the host Docker socket so it can start
-# deployed-app containers on this machine. Those containers are attached to
-# muvee-net, which Traefik (also on muvee-net) uses to route traffic.
-# HOST_IP is auto-detected via a UDP probe toward muvee-server; override it
-# with HOST_IP=<ip> in .env if Traefik picks the wrong interface.
+# Then register worker nodes by following the agent setup guide in README.md.
 
 services:
   postgres:
@@ -167,51 +158,11 @@ services:
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.middlewares=muvee-forward-auth-admin@file"
 
-  # ── Builder agent — compiles Docker images and pushes to the registry ──────
-  muvee-agent-builder:
-    image: ghcr.io/hoveychen/muvee:latest
-    command: ["agent"]
-    restart: unless-stopped
-    environment:
-      NODE_ROLE: builder
-      CONTROL_PLANE_URL: http://muvee-server:8080
-      AGENT_SECRET: ${AGENT_SECRET}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - muvee-server
-    networks:
-      - muvee-net
-
-  # ── Deploy agent — runs application containers and registers them with Traefik
-  muvee-agent-deploy:
-    image: ghcr.io/hoveychen/muvee:latest
-    command: ["agent"]
-    restart: unless-stopped
-    environment:
-      NODE_ROLE: deploy
-      CONTROL_PLANE_URL: http://muvee-server:8080
-      AGENT_SECRET: ${AGENT_SECRET}
-      DATA_DIR: /muvee/data
-      # HOST_IP is auto-detected (UDP probe toward muvee-server).
-      # Override if Traefik cannot reach deployed containers:
-      #   HOST_IP: "10.0.0.1"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - muvee_data:/muvee/data
-    depends_on:
-      - muvee-server
-    networks:
-      - muvee-net
-
 volumes:
   postgres_data:
   registry_data:
   letsencrypt_data:
-  muvee_data:
 
 networks:
-  # Standalone mode: the network is created by this Compose file.
-  # (docker-compose.yml uses `external: true` and requires `docker network create muvee-net` first.)
   muvee-net:
     driver: bridge
