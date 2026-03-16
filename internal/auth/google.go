@@ -15,13 +15,15 @@ type googleProvider struct {
 	verifier *gooidc.IDTokenVerifier
 }
 
-func newGoogleProvider() (*googleProvider, error) {
+func newGoogleProvider(redirectURL string) (*googleProvider, error) {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
 	if clientID == "" {
 		return nil, nil
 	}
 	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-	redirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
+	if redirectURL == "" {
+		redirectURL = os.Getenv("GOOGLE_REDIRECT_URL")
+	}
 	if redirectURL == "" {
 		redirectURL = "http://localhost:8080/auth/google/callback"
 	}

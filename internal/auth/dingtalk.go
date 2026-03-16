@@ -19,12 +19,14 @@ type dingtalkProvider struct {
 	redirectURL  string
 }
 
-func newDingTalkProvider() (*dingtalkProvider, error) {
+func newDingTalkProvider(redirectURL string) (*dingtalkProvider, error) {
 	clientID := os.Getenv("DINGTALK_CLIENT_ID")
 	if clientID == "" {
 		return nil, nil
 	}
-	redirectURL := os.Getenv("DINGTALK_REDIRECT_URL")
+	if redirectURL == "" {
+		redirectURL = os.Getenv("DINGTALK_REDIRECT_URL")
+	}
 	if redirectURL == "" {
 		redirectURL = "http://localhost:8080/auth/dingtalk/callback"
 	}

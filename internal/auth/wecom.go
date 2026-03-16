@@ -19,12 +19,14 @@ type wecomProvider struct {
 	redirectURL string
 }
 
-func newWeComProvider() (*wecomProvider, error) {
+func newWeComProvider(redirectURL string) (*wecomProvider, error) {
 	corpID := os.Getenv("WECOM_CORP_ID")
 	if corpID == "" {
 		return nil, nil
 	}
-	redirectURL := os.Getenv("WECOM_REDIRECT_URL")
+	if redirectURL == "" {
+		redirectURL = os.Getenv("WECOM_REDIRECT_URL")
+	}
 	if redirectURL == "" {
 		redirectURL = "http://localhost:8080/auth/wecom/callback"
 	}

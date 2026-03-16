@@ -70,8 +70,8 @@ func New(st *store.Store) (*Service, error) {
 		store:          st,
 	}
 
-	// Register all configured providers.
-	googleP, err := newGoogleProvider()
+	// Register all configured providers (pass "" to use each provider's own *_REDIRECT_URL env var).
+	googleP, err := newGoogleProvider("")
 	if err != nil {
 		return nil, fmt.Errorf("google provider: %w", err)
 	}
@@ -79,7 +79,7 @@ func New(st *store.Store) (*Service, error) {
 		svc.providers[googleP.Name()] = googleP
 	}
 
-	feishuP, err := newFeishuProvider()
+	feishuP, err := newFeishuProvider("")
 	if err != nil {
 		return nil, fmt.Errorf("feishu provider: %w", err)
 	}
@@ -87,7 +87,7 @@ func New(st *store.Store) (*Service, error) {
 		svc.providers[feishuP.Name()] = feishuP
 	}
 
-	wecomP, err := newWeComProvider()
+	wecomP, err := newWeComProvider("")
 	if err != nil {
 		return nil, fmt.Errorf("wecom provider: %w", err)
 	}
@@ -95,7 +95,7 @@ func New(st *store.Store) (*Service, error) {
 		svc.providers[wecomP.Name()] = wecomP
 	}
 
-	dingtalkP, err := newDingTalkProvider()
+	dingtalkP, err := newDingTalkProvider("")
 	if err != nil {
 		return nil, fmt.Errorf("dingtalk provider: %w", err)
 	}

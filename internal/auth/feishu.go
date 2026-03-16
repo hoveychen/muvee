@@ -21,7 +21,7 @@ type feishuProvider struct {
 	baseURL     string // e.g. https://open.feishu.cn or https://open.larksuite.com
 }
 
-func newFeishuProvider() (*feishuProvider, error) {
+func newFeishuProvider(redirectURL string) (*feishuProvider, error) {
 	appID := os.Getenv("FEISHU_APP_ID")
 	if appID == "" {
 		return nil, nil
@@ -31,7 +31,9 @@ func newFeishuProvider() (*feishuProvider, error) {
 		baseURL = "https://open.feishu.cn"
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
-	redirectURL := os.Getenv("FEISHU_REDIRECT_URL")
+	if redirectURL == "" {
+		redirectURL = os.Getenv("FEISHU_REDIRECT_URL")
+	}
 	if redirectURL == "" {
 		redirectURL = "http://localhost:8080/auth/feishu/callback"
 	}
