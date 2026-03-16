@@ -14,10 +14,10 @@ const sidebars = {
       type: 'category',
       label: 'Authentication',
       items: [
-        'auth/google',
-        'auth/feishu',
-        'auth/wecom',
-        'auth/dingtalk',
+        'auth/auth-google',
+        'auth/auth-feishu',
+        'auth/auth-wecom',
+        'auth/auth-dingtalk',
       ],
     },
     {
