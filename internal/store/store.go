@@ -186,6 +186,18 @@ func (s *Store) ListPublicRunningProjects(ctx context.Context) ([]*PublicProject
 	return items, nil
 }
 
+func (s *Store) GetProjectByDomainPrefix(ctx context.Context, prefix string) (*Project, error) {
+	var p Project
+	err := s.db.QueryRow(ctx, `
+		SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at
+		FROM projects WHERE domain_prefix = $1
+	`, prefix).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return &p, err
+}
+
 func (s *Store) CanAccessProject(ctx context.Context, userID, projectID uuid.UUID, isAdmin bool) (bool, error) {
 	if isAdmin {
 		return true, nil

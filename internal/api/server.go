@@ -586,6 +586,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
+	if existing, err := s.store.GetProjectByDomainPrefix(r.Context(), p.DomainPrefix); err != nil {
+		jsonErr(w, err, 500)
+		return
+	} else if existing != nil {
+		jsonErr(w, fmt.Errorf("domain prefix %q is already in use by another project", p.DomainPrefix), 409)
+		return
+	}
 	p.OwnerID = user.ID
 	created, err := s.store.CreateProject(r.Context(), &p)
 	if err != nil {
@@ -626,6 +633,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateProject(&p); err != nil {
 		jsonErr(w, err, 400)
+		return
+	}
+	if existing, err := s.store.GetProjectByDomainPrefix(r.Context(), p.DomainPrefix); err != nil {
+		jsonErr(w, err, 500)
+		return
+	} else if existing != nil && existing.ID != id {
+		jsonErr(w, fmt.Errorf("domain prefix %q is already in use by another project", p.DomainPrefix), 409)
 		return
 	}
 	p.ID = id

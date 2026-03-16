@@ -25,6 +25,7 @@ export default function ProjectDetail() {
   const [deploying, setDeploying] = useState(false)
   const [editForm, setEditForm] = useState<Partial<Project>>({})
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval>>(null)
 
   useEffect(() => {
@@ -56,9 +57,12 @@ export default function ProjectDetail() {
   const handleSave = async () => {
     if (!id) return
     setSaving(true)
+    setSaveError(null)
     try {
       const updated = await api.projects.update(id, editForm)
       setProject(updated)
+    } catch (err) {
+      setSaveError((err as Error).message)
     } finally {
       setSaving(false)
     }
@@ -207,6 +211,7 @@ export default function ProjectDetail() {
             onSave={handleSave}
             onDelete={handleDelete}
             saving={saving}
+            saveError={saveError}
           />
         )}
         {tab === 'datasets' && (
@@ -449,12 +454,13 @@ function MetricsPanel({ metrics }: { metrics: ContainerMetric[] }) {
   )
 }
 
-function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
+function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
   form: Partial<Project>
   onChange: (f: Partial<Project>) => void
   onSave: () => void
   onDelete: () => void
   saving: boolean
+  saveError?: string | null
 }) {
   const { t } = useTranslation()
   const inputStyle = {
@@ -555,6 +561,10 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving }: {
       </div>
 
       {form.auth_required && field(t('projectDetail.config.allowedDomains'), 'auth_allowed_domains')}
+
+      {saveError && (
+        <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--danger)' }}>{saveError}</p>
+      )}
 
       <div className="flex gap-3 pt-2">
         <button
