@@ -16,7 +16,7 @@ muvee is a lightweight self-hosted PaaS that turns any private cloud into a cont
 | Docker + Docker Buildx | On all nodes |
 | NFS share | Mounted at the same path on all deploy nodes |
 | PostgreSQL 16+ | Can run in Docker (included in `docker-compose.yml`) |
-| Identity provider | At least one of: [Google](./auth/google), [Feishu/Lark](./auth/feishu), [WeCom](./auth/wecom), [DingTalk](./auth/dingtalk) |
+| Identity provider | At least one of: [Google](./auth/auth-google), [Feishu/Lark](./auth/auth-feishu), [WeCom](./auth/auth-wecom), [DingTalk](./auth/auth-dingtalk) |
 
 ## 5-Minute Quickstart
 
@@ -43,7 +43,7 @@ REGISTRY_PASSWORD=a-strong-password
 AGENT_SECRET=your-agent-secret   # shared secret between server and all agents
 ```
 
-See the [Authentication](./auth/google) section for setup guides for each supported provider. Multiple providers can be enabled simultaneously — the login page shows a button for each one.
+See the [Authentication](./auth/auth-google) section for setup guides for each supported provider. Multiple providers can be enabled simultaneously — the login page shows a button for each one.
 
 `ADMIN_EMAILS` is a comma-separated list of email addresses that receive the `admin` role on login and can access the Traefik dashboard at `https://traefik.BASE_DOMAIN`.
 

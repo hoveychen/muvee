@@ -16,7 +16,7 @@ muvee 是一款轻量级自托管 PaaS，可将任意私有云转变为容器部
 | Docker + Docker Buildx | 所有节点均需安装 |
 | NFS 共享 | 在所有部署节点挂载到相同路径 |
 | PostgreSQL 16+ | 可在 Docker 中运行（`docker-compose.yml` 中已包含） |
-| 身份认证 Provider | 至少配置一个：[Google](./auth/google)、[飞书/Lark](./auth/feishu)、[企业微信](./auth/wecom)、[钉钉](./auth/dingtalk) |
+| 身份认证 Provider | 至少配置一个：[Google](./auth/auth-google)、[飞书/Lark](./auth/auth-feishu)、[企业微信](./auth/auth-wecom)、[钉钉](./auth/auth-dingtalk) |
 
 ## 5 分钟快速启动
 
@@ -43,7 +43,7 @@ REGISTRY_PASSWORD=a-strong-password
 AGENT_SECRET=your-agent-secret   # 服务器与所有 Agent 之间的共享密钥
 ```
 
-各 Provider 的配置指引见 [Authentication](./auth/google) 章节。多个 Provider 可同时启用——登录页会为每个已配置的 Provider 显示一个登录按钮。
+各 Provider 的配置指引见 [Authentication](./auth/auth-google) 章节。多个 Provider 可同时启用——登录页会为每个已配置的 Provider 显示一个登录按钮。
 
 `ADMIN_EMAILS` 是以逗号分隔的邮箱列表，这些账号在登录时会自动获得 `admin` 角色，并可访问 `https://traefik.BASE_DOMAIN` 的 Traefik 控制台。
 

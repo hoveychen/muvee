@@ -16,18 +16,18 @@ sidebar_position: 3
 | `MIGRATIONS_DIR` | `./db/migrations` | SQL 迁移文件路径 |
 | `PORT` | `8080` | HTTP 监听端口 |
 | `BASE_DOMAIN` | `localhost` | 根域名；项目以 `{prefix}.BASE_DOMAIN` 的形式对外提供服务。同时通过 `/api/agent/config` 下发给 Agent。 |
-| `GOOGLE_CLIENT_ID` | — | Google OAuth2 客户端 ID。设置后启用 Google 登录。详见 [Google OAuth2](./auth/google)。 |
+| `GOOGLE_CLIENT_ID` | — | Google OAuth2 客户端 ID。设置后启用 Google 登录。详见 [Google OAuth2](./auth/auth-google)。 |
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth2 客户端密钥 |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Google OAuth2 回调地址 |
-| `FEISHU_APP_ID` | — | 飞书 / Lark App ID。设置后启用飞书登录。详见 [飞书 / Lark](./auth/feishu)。 |
+| `FEISHU_APP_ID` | — | 飞书 / Lark App ID。设置后启用飞书登录。详见 [飞书 / Lark](./auth/auth-feishu)。 |
 | `FEISHU_APP_SECRET` | — | 飞书 / Lark App Secret |
 | `FEISHU_REDIRECT_URL` | `http://localhost:8080/auth/feishu/callback` | 飞书 OAuth2 回调地址 |
 | `FEISHU_BASE_URL` | `https://open.feishu.cn` | 飞书 API 基础地址。国际版 Lark 设置为 `https://open.larksuite.com`。 |
-| `WECOM_CORP_ID` | — | 企业微信 CorpId（企业ID）。设置后启用企业微信登录。详见 [企业微信](./auth/wecom)。 |
+| `WECOM_CORP_ID` | — | 企业微信 CorpId（企业ID）。设置后启用企业微信登录。详见 [企业微信](./auth/auth-wecom)。 |
 | `WECOM_CORP_SECRET` | — | 企业微信自建应用的 App Secret |
 | `WECOM_AGENT_ID` | — | 企业微信自建应用的 AgentId |
 | `WECOM_REDIRECT_URL` | `http://localhost:8080/auth/wecom/callback` | 企业微信 OAuth2 回调地址 |
-| `DINGTALK_CLIENT_ID` | — | 钉钉 AppKey。设置后启用钉钉登录。详见 [钉钉](./auth/dingtalk)。 |
+| `DINGTALK_CLIENT_ID` | — | 钉钉 AppKey。设置后启用钉钉登录。详见 [钉钉](./auth/auth-dingtalk)。 |
 | `DINGTALK_CLIENT_SECRET` | — | 钉钉 AppSecret |
 | `DINGTALK_REDIRECT_URL` | `http://localhost:8080/auth/dingtalk/callback` | 钉钉 OAuth2 回调地址 |
 | `ALLOWED_DOMAINS` | _（允许所有）_ | 允许登录的邮箱域名，逗号分隔（如 `company.com`）。仅对 Google 生效；飞书/企微/钉钉在无法获取真实邮箱时会生成合成地址（`*.local`），这类地址会自动跳过域名校验。 |
