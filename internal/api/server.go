@@ -23,28 +23,30 @@ import (
 )
 
 type Server struct {
-	store             *store.Store
-	auth              *auth.Service
-	sched             *scheduler.Scheduler
-	monitor           *monitor.Monitor
-	baseDomain        string
-	authServiceURL    string   // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
-	agentSecret       string   // shared secret for agent ↔ server authentication
-	registryAddr      string   // address of the Docker registry distributed to agents
-	registryUser      string   // registry basic-auth username distributed to agents
-	registryPassword  string   // registry basic-auth password distributed to agents
-	volumeNFSBasePath string   // base NFS path for project workspace volumes
-	cliPending        sync.Map // state -> cli_port (string)
+	store              *store.Store
+	auth               *auth.Service
+	sched              *scheduler.Scheduler
+	monitor            *monitor.Monitor
+	baseDomain         string
+	authServiceURL     string   // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
+	agentSecret        string   // shared secret for agent ↔ server authentication
+	registryAddr       string   // address of the Docker registry distributed to agents
+	registryUser       string   // registry basic-auth username distributed to agents
+	registryPassword   string   // registry basic-auth password distributed to agents
+	volumeNFSBasePath  string   // base NFS path for project workspace volumes
+	datasetNFSBasePath string   // base NFS path for dataset files
+	cliPending         sync.Map // state -> cli_port (string)
 }
 
 type ServerConfig struct {
-	BaseDomain        string
-	AuthServiceURL    string
-	AgentSecret       string
-	RegistryAddr      string
-	RegistryUser      string
-	RegistryPassword  string
-	VolumeNFSBasePath string
+	BaseDomain         string
+	AuthServiceURL     string
+	AgentSecret        string
+	RegistryAddr       string
+	RegistryUser       string
+	RegistryPassword   string
+	VolumeNFSBasePath  string
+	DatasetNFSBasePath string
 }
 
 func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Scheduler, mon *monitor.Monitor, cfg ServerConfig) *Server {
@@ -52,17 +54,18 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		cfg.AuthServiceURL = "http://muvee-authservice:4181"
 	}
 	return &Server{
-		store:             st,
-		auth:              authSvc,
-		sched:             sched,
-		monitor:           mon,
-		baseDomain:        cfg.BaseDomain,
-		authServiceURL:    cfg.AuthServiceURL,
-		agentSecret:       cfg.AgentSecret,
-		registryAddr:      cfg.RegistryAddr,
-		registryUser:      cfg.RegistryUser,
-		registryPassword:  cfg.RegistryPassword,
-		volumeNFSBasePath: cfg.VolumeNFSBasePath,
+		store:              st,
+		auth:               authSvc,
+		sched:              sched,
+		monitor:            mon,
+		baseDomain:         cfg.BaseDomain,
+		authServiceURL:     cfg.AuthServiceURL,
+		agentSecret:        cfg.AgentSecret,
+		registryAddr:       cfg.RegistryAddr,
+		registryUser:       cfg.RegistryUser,
+		registryPassword:   cfg.RegistryPassword,
+		volumeNFSBasePath:  cfg.VolumeNFSBasePath,
+		datasetNFSBasePath: cfg.DatasetNFSBasePath,
 	}
 }
 
@@ -114,6 +117,7 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.auth.Middleware)
 
 		r.Get("/api/me", s.handleMe)
+		r.Get("/api/runtime/config", s.handleRuntimeConfig)
 
 		// API Tokens
 		r.Get("/api/tokens", s.listTokens)
@@ -182,6 +186,12 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, s.auth.ListProviders())
+}
+
+func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{
+		"dataset_nfs_base_path": s.datasetNFSBasePath,
+	})
 }
 
 func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
@@ -772,12 +782,22 @@ func (s *Server) listDatasets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createDataset(w http.ResponseWriter, r *http.Request) {
+	if s.datasetNFSBasePath == "" {
+		jsonErr(w, fmt.Errorf("DATASET_NFS_BASE_PATH is not configured"), 503)
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	var d store.Dataset
 	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
+	subPath, err := validateDatasetSubPath(d.NFSPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	d.NFSPath = subPath
 	d.OwnerID = user.ID
 	created, err := s.store.CreateDataset(r.Context(), &d)
 	if err != nil {
@@ -804,6 +824,10 @@ func (s *Server) getDataset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateDataset(w http.ResponseWriter, r *http.Request) {
+	if s.datasetNFSBasePath == "" {
+		jsonErr(w, fmt.Errorf("DATASET_NFS_BASE_PATH is not configured"), 503)
+		return
+	}
 	id := mustParseUUID(chi.URLParam(r, "id"))
 	user := auth.UserFromCtx(r.Context())
 	ok, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
@@ -816,12 +840,36 @@ func (s *Server) updateDataset(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
+	subPath, err := validateDatasetSubPath(d.NFSPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	d.NFSPath = subPath
 	d.ID = id
 	if err := s.store.UpdateDataset(r.Context(), &d); err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
 	jsonOK(w, d)
+}
+
+func validateDatasetSubPath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", fmt.Errorf("nfs_path is required")
+	}
+	if filepath.IsAbs(p) {
+		return "", fmt.Errorf("nfs_path must be a relative sub-path")
+	}
+	clean := filepath.Clean(p)
+	if clean == "." {
+		return "", fmt.Errorf("nfs_path is required")
+	}
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("nfs_path must be a relative sub-path")
+	}
+	return clean, nil
 }
 
 func (s *Server) deleteDataset(w http.ResponseWriter, r *http.Request) {
@@ -943,11 +991,12 @@ func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
 // with the control plane's own configuration (registry credentials, base domain, etc.).
 func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{
-		"registry_addr":        s.registryAddr,
-		"registry_user":        s.registryUser,
-		"registry_password":    s.registryPassword,
-		"base_domain":          s.baseDomain,
-		"volume_nfs_base_path": s.volumeNFSBasePath,
+		"registry_addr":         s.registryAddr,
+		"registry_user":         s.registryUser,
+		"registry_password":     s.registryPassword,
+		"base_domain":           s.baseDomain,
+		"volume_nfs_base_path":  s.volumeNFSBasePath,
+		"dataset_nfs_base_path": s.datasetNFSBasePath,
 	})
 }
 

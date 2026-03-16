@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, Secret, WorkspaceEntry } from '../lib/types'
-import { statusColor, timeAgo, formatBytes, isValidDomainPrefix } from '../lib/utils'
+import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
@@ -21,6 +21,7 @@ export default function ProjectDetail() {
   const [availableDatasets, setAvailableDatasets] = useState<Dataset[]>([])
   const [projectSecrets, setProjectSecrets] = useState<ProjectSecretBinding[]>([])
   const [allSecrets, setAllSecrets] = useState<Secret[]>([])
+  const [datasetBasePath, setDatasetBasePath] = useState('')
   const [tab, setTab] = useState<Tab>('deploy')
   const [deploying, setDeploying] = useState(false)
   const [editForm, setEditForm] = useState<Partial<Project>>({})
@@ -36,6 +37,9 @@ export default function ProjectDetail() {
     api.datasets.list().then(setAvailableDatasets)
     api.projects.secrets(id).then(setProjectSecrets)
     api.secrets.list().then(setAllSecrets)
+    api.runtime.config()
+      .then(cfg => setDatasetBasePath(cfg.dataset_nfs_base_path || ''))
+      .catch(() => setDatasetBasePath(''))
     pollRef.current = setInterval(() => {
       api.projects.deployments(id).then(setDeployments)
     }, 5000)
@@ -218,6 +222,7 @@ export default function ProjectDetail() {
           <DatasetsTab
             available={availableDatasets}
             selected={projectDatasets}
+            datasetBasePath={datasetBasePath}
             onToggle={toggleDataset}
             onUpdateMode={updateMountMode}
           />
@@ -594,9 +599,10 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
   )
 }
 
-function DatasetsTab({ available, selected, onToggle, onUpdateMode }: {
+function DatasetsTab({ available, selected, datasetBasePath, onToggle, onUpdateMode }: {
   available: Dataset[]
   selected: ProjectDataset[]
+  datasetBasePath: string
   onToggle: (id: string, mode: 'dependency' | 'readwrite') => void
   onUpdateMode: (id: string, mode: 'dependency' | 'readwrite') => void
 }) {
@@ -642,7 +648,7 @@ function DatasetsTab({ available, selected, onToggle, onUpdateMode }: {
               <div className="flex-1 min-w-0">
                 <div style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--fg-primary)' }}>{ds.name}</div>
                 <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
-                  {ds.nfs_path}
+                  {resolveDatasetPath(datasetBasePath, ds.nfs_path)}
                 </div>
               </div>
               <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', flexShrink: 0 }}>

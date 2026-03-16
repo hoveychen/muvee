@@ -22,16 +22,22 @@ type FileEntry struct {
 }
 
 type Monitor struct {
-	store    *store.Store
-	interval time.Duration
-	workers  int
+	store              *store.Store
+	datasetNFSBasePath string
+	interval           time.Duration
+	workers            int
 }
 
-func New(st *store.Store, interval time.Duration, workers int) *Monitor {
+func New(st *store.Store, datasetNFSBasePath string, interval time.Duration, workers int) *Monitor {
 	if workers <= 0 {
 		workers = 4
 	}
-	return &Monitor{store: st, interval: interval, workers: workers}
+	return &Monitor{
+		store:              st,
+		datasetNFSBasePath: datasetNFSBasePath,
+		interval:           interval,
+		workers:            workers,
+	}
 }
 
 func (m *Monitor) Start(ctx context.Context) {
@@ -48,6 +54,10 @@ func (m *Monitor) Start(ctx context.Context) {
 }
 
 func (m *Monitor) ScanAll(ctx context.Context) {
+	if m.datasetNFSBasePath == "" {
+		fmt.Println("monitor: DATASET_NFS_BASE_PATH is not set; dataset scan is disabled")
+		return
+	}
 	datasets, err := m.store.ListDatasetsForUser(ctx, uuid.Nil, true)
 	if err != nil {
 		return
@@ -60,10 +70,19 @@ func (m *Monitor) ScanAll(ctx context.Context) {
 }
 
 func (m *Monitor) ScanDataset(ctx context.Context, ds *store.Dataset) error {
+	if m.datasetNFSBasePath == "" {
+		fmt.Println("monitor: DATASET_NFS_BASE_PATH is not set; skipping dataset scan")
+		return nil
+	}
+	root := ds.NFSPath
+	if !filepath.IsAbs(ds.NFSPath) {
+		root = filepath.Join(m.datasetNFSBasePath, ds.NFSPath)
+	}
+
 	// Walk NFS path concurrently
-	current, err := m.walkDir(ds.NFSPath)
+	current, err := m.walkDir(root)
 	if err != nil {
-		return fmt.Errorf("walk %s: %w", ds.NFSPath, err)
+		return fmt.Errorf("walk %s: %w", root, err)
 	}
 
 	// Load previous snapshot files from history
@@ -174,8 +193,9 @@ func (m *Monitor) walkDir(root string) ([]FileEntry, error) {
 	}
 
 	type job struct {
-		path string
-		info os.FileInfo
+		absPath string
+		relPath string
+		info    os.FileInfo
 	}
 
 	var entries []FileEntry
@@ -190,7 +210,7 @@ func (m *Monitor) walkDir(root string) ([]FileEntry, error) {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				entry, err := m.processFile(j.path, j.info)
+				entry, err := m.processFile(j.absPath, j.relPath, j.info)
 				results <- result{entry: entry, err: err}
 			}
 		}()
@@ -202,7 +222,7 @@ func (m *Monitor) walkDir(root string) ([]FileEntry, error) {
 				return nil
 			}
 			rel, _ := filepath.Rel(root, path)
-			jobs <- job{path: rel, info: info}
+			jobs <- job{absPath: path, relPath: rel, info: info}
 			return nil
 		})
 		close(jobs)
@@ -221,14 +241,14 @@ func (m *Monitor) walkDir(root string) ([]FileEntry, error) {
 	return entries, nil
 }
 
-func (m *Monitor) processFile(relPath string, info os.FileInfo) (FileEntry, error) {
+func (m *Monitor) processFile(absPath, relPath string, info os.FileInfo) (FileEntry, error) {
 	entry := FileEntry{
 		Path:  relPath,
 		Size:  info.Size(),
 		Mtime: info.ModTime(),
 	}
 	// Always compute checksum for correctness
-	checksum, err := fileChecksum(relPath)
+	checksum, err := fileChecksum(absPath)
 	if err != nil {
 		return entry, err
 	}

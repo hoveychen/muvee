@@ -40,3 +40,12 @@ export function statusColor(status: string): string {
     default: return '#7d8590'
   }
 }
+
+export function resolveDatasetPath(basePath: string, subPath: string): string {
+  if (!subPath) return ''
+  if (subPath.startsWith('/')) return subPath
+  if (!basePath) return subPath
+  const base = basePath.replace(/\/+$/, '')
+  const sub = subPath.replace(/^\/+/, '')
+  return `${base}/${sub}`
+}

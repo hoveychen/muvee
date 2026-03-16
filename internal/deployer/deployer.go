@@ -33,6 +33,9 @@ type Config struct {
 	// VolumeNFSBasePath is the base NFS directory on the deploy node (e.g. /mnt/nfs/volumes).
 	// If set together with VolumeMountPath, a per-project subdirectory is bind-mounted.
 	VolumeNFSBasePath string
+	// DatasetNFSBasePath is the base NFS directory for dataset files (e.g. /mnt/nfs/datasets).
+	// DatasetSpec.NFSPath is treated as a sub-path under this base.
+	DatasetNFSBasePath string
 	// VolumeMountPath is the container-internal path where the workspace volume is mounted.
 	VolumeMountPath string
 }
@@ -67,13 +70,27 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 
 	// Prepare dataset mounts
 	var mounts []datacache.DatasetMount
+	needsDatasetBase := false
+	for _, ds := range cfg.Datasets {
+		if !filepath.IsAbs(ds.NFSPath) {
+			needsDatasetBase = true
+			break
+		}
+	}
+	if needsDatasetBase && cfg.DatasetNFSBasePath == "" {
+		return 0, fmt.Errorf("dataset NFS base path is not configured")
+	}
 	for _, ds := range cfg.Datasets {
 		dsID, _ := uuid.Parse(ds.ID)
+		datasetPath := ds.NFSPath
+		if !filepath.IsAbs(ds.NFSPath) {
+			datasetPath = filepath.Join(cfg.DatasetNFSBasePath, ds.NFSPath)
+		}
 		mounts = append(mounts, datacache.DatasetMount{
 			Dataset: &store.Dataset{
 				ID:        dsID,
 				Name:      ds.Name,
-				NFSPath:   ds.NFSPath,
+				NFSPath:   datasetPath,
 				Version:   ds.Version,
 				SizeBytes: ds.SizeBytes,
 			},

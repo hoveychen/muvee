@@ -118,7 +118,7 @@ On receiving a build task:
 Requires:
 - `docker` CLI
 - `rsync` (for dependency datasets)
-- NFS mounted at the same path as configured in each Dataset's `nfs_path`
+- `DATASET_NFS_BASE_PATH` mounted at the same absolute path as on the control plane, with each dataset stored under its relative `nfs_path` subdirectory
 - Network connectivity back to the control plane (for `CONTROL_PLANE_URL`)
 
 On receiving a deploy task:

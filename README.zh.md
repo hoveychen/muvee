@@ -139,14 +139,33 @@ Traefik 开始监听 443 端口。在浏览器中打开 `https://BASE_DOMAIN`，
 
 **第 5 步 — 注册工作节点** *（仅多节点部署需要，Standalone 可跳过此步）*
 
-在每台工作机器上执行。Registry 凭证和 `BASE_DOMAIN` 由控制平面**自动下发** —— Agent 启动后会通过 `/api/agent/config` 接口拉取，无需在每个节点手动配置。
+在每台工作机器上执行。Registry 凭证、`BASE_DOMAIN`、`VOLUME_NFS_BASE_PATH`、`DATASET_NFS_BASE_PATH` 都由控制平面**自动下发** —— Agent 启动后会通过 `/api/agent/config` 接口拉取，无需在每个节点手动配置这些值。
 
 > `CONTROL_PLANE_URL` 必须填写控制平面的**内网地址**（如 `http://10.0.0.1:8080`），不要使用公网域名。Agent 通过该地址自动探测正确的出网接口，确保 Traefik 能路由到已部署的容器。
+>
+> 若 Agent 运行在 Docker 容器中，仍需显式配置 volume 挂载：
+> - workspace：挂载 `VOLUME_NFS_BASE_PATH`（绝对路径需与控制平面一致）
+> - dataset：挂载 `DATASET_NFS_BASE_PATH`（绝对路径需与控制平面一致）
 
 > **用 AI 助手来操作？** 加载 install-agent skill，让 AI 帮你完成全套安装：
 > ```
 > https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/install-agent/SKILL.md
 > ```
+
+**Linux（Docker Compose）**
+
+```bash
+# Builder 节点
+cp .env.agent.example .env
+docker compose -f docker-compose.agent-builder.yml up -d
+
+# Deploy 节点
+cp .env.agent.example .env
+# 若控制平面启用了 workspace/dataset 功能：
+#   在 .env 中设置 VOLUME_NFS_BASE_PATH / DATASET_NFS_BASE_PATH
+#   并在 docker-compose.agent-deploy.yml 中取消对应 volume 注释
+docker compose -f docker-compose.agent-deploy.yml up -d
+```
 
 **Linux（Docker）**
 
@@ -166,7 +185,8 @@ docker run -d --name muvee-agent --restart unless-stopped \
   -e AGENT_SECRET=<your-agent-secret> \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /muvee/data:/muvee/data \
-  -v /nfs/warehouse:/nfs/warehouse \
+  -v /mnt/nfs/volumes:/mnt/nfs/volumes \
+  -v /mnt/nfs/datasets:/mnt/nfs/datasets \
   ghcr.io/hoveychen/muvee:latest agent
 ```
 

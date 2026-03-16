@@ -22,6 +22,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => request<import('./types').User>('/api/me'),
+  runtime: {
+    config: () => request<import('./types').RuntimeConfig>('/api/runtime/config'),
+  },
 
   projects: {
     list: () => request<import('./types').Project[]>('/api/projects'),

@@ -2,7 +2,7 @@
 # Use this when worker agents run on separate machines.
 #
 # Usage:
-#   cp .env.example .env   # then edit .env
+#   cp .env.server.example .env   # then edit .env
 #   # Generate registry credentials (run once):
 #   docker run --entrypoint htpasswd httpd:2 -Bbn <user> <password> > registry/htpasswd
 #   docker compose -f docker-compose.server.yml up -d
@@ -82,8 +82,21 @@ services:
       REGISTRY_USER: ${REGISTRY_USER}
       REGISTRY_PASSWORD: ${REGISTRY_PASSWORD}
       PORT: "8080"
+      # Workspace volume: set VOLUME_NFS_BASE_PATH in .env to enable per-project persistent storage.
+      # The NFS share must be mounted at this path on the control-plane host BEFORE starting Compose,
+      # and at the same absolute path on every deploy-agent node.
+      VOLUME_NFS_BASE_PATH: ${VOLUME_NFS_BASE_PATH}
+      # Dataset NFS base path:
+      # Dataset nfs_path values are relative sub-paths under this base.
+      DATASET_NFS_BASE_PATH: ${DATASET_NFS_BASE_PATH}
     volumes:
       - ./db/migrations:/app/db/migrations:ro
+      # Uncomment the line below (and set VOLUME_NFS_BASE_PATH in .env) to enable workspace file management.
+      # The NFS share must already be mounted on this host at that path.
+      # - ${VOLUME_NFS_BASE_PATH}:${VOLUME_NFS_BASE_PATH}:rw
+      # Uncomment to enable dataset monitor access (server scans dataset files directly).
+      # The NFS share must already be mounted on this host at DATASET_NFS_BASE_PATH.
+      # - ${DATASET_NFS_BASE_PATH}:${DATASET_NFS_BASE_PATH}:ro
     ports:
       - "8080:8080"
     depends_on:

@@ -138,14 +138,33 @@ Traefik is now listening on 443. Open `https://BASE_DOMAIN` and sign in with you
 
 **5 — Register worker nodes** *(multi-node only — skip if using standalone)*
 
-Run the following on each worker machine. Registry credentials and `BASE_DOMAIN` are **automatically distributed** from the control plane — agents fetch them via `/api/agent/config` on startup, so you don't need to configure them per node.
+Run the following on each worker machine. Registry credentials, `BASE_DOMAIN`, `VOLUME_NFS_BASE_PATH`, and `DATASET_NFS_BASE_PATH` are **automatically distributed** from the control plane — agents fetch them via `/api/agent/config` on startup, so you don't need to configure these values per node.
 
 > `CONTROL_PLANE_URL` must be the **internal network address** of the control plane (e.g. `http://10.0.0.1:8080`), not the public domain. The agent uses this to detect the correct network interface for Traefik routing.
+>
+> If you run agents in Docker, volume mounts are still required:
+> - Workspace: mount `VOLUME_NFS_BASE_PATH` (same absolute path as control plane)
+> - Datasets: mount `DATASET_NFS_BASE_PATH` (same absolute path as control plane)
 
 > **Using an AI assistant?** Load the install-agent skill and let your AI walk you through the setup:
 > ```
 > https://raw.githubusercontent.com/hoveychen/muvee/main/.cursor/skills/install-agent/SKILL.md
 > ```
+
+**Linux (Docker Compose)**
+
+```bash
+# Builder node
+cp .env.agent.example .env
+docker compose -f docker-compose.agent-builder.yml up -d
+
+# Deploy node
+cp .env.agent.example .env
+# If workspace/dataset features are enabled on control plane:
+#   set VOLUME_NFS_BASE_PATH / DATASET_NFS_BASE_PATH in .env
+#   then uncomment their volume lines in docker-compose.agent-deploy.yml
+docker compose -f docker-compose.agent-deploy.yml up -d
+```
 
 **Linux (Docker)**
 
@@ -165,7 +184,8 @@ docker run -d --name muvee-agent --restart unless-stopped \
   -e AGENT_SECRET=<your-agent-secret> \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /muvee/data:/muvee/data \
-  -v /nfs/warehouse:/nfs/warehouse \
+  -v /mnt/nfs/volumes:/mnt/nfs/volumes \
+  -v /mnt/nfs/datasets:/mnt/nfs/datasets \
   ghcr.io/hoveychen/muvee:latest agent
 ```
 

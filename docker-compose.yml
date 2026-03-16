@@ -91,8 +91,17 @@ services:
       REGISTRY_USER: ${REGISTRY_USER}
       REGISTRY_PASSWORD: ${REGISTRY_PASSWORD}
       PORT: "8080"
+      # Workspace volume: bind-mount the same local path into the server container so the
+      # file-management API can read/write workspace files directly on the host filesystem.
+      # Falls back to /opt/muvee/volumes when not set in .env.
+      VOLUME_NFS_BASE_PATH: ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}
+      # Dataset NFS base path: datasets use relative sub-paths under this base
+      # (e.g. "warehouse" -> /opt/muvee/datasets/warehouse in standalone mode).
+      DATASET_NFS_BASE_PATH: ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}
     volumes:
       - ./db/migrations:/app/db/migrations:ro
+      - ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:rw
+      - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:ro
     ports:
       - "8080:8080"
     depends_on:
@@ -199,6 +208,12 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - muvee_data:/muvee/data
+      # Workspace volume: the agent creates per-project subdirectories here, then passes the
+      # host path to `docker run -v`. Path must be identical inside the container and on the
+      # host so that Docker resolves it correctly when launching deployed containers.
+      - ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:rw
+      # Dataset NFS base path: agent reads datasets from this location for rsync/deploy mounts.
+      - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:ro
     depends_on:
       - muvee-server
     networks:

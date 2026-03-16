@@ -56,7 +56,8 @@ docker run -d --name muvee-agent --restart unless-stopped \
   -e AGENT_SECRET=<your-agent-secret> \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /muvee/data:/muvee/data \
-  -v /nfs/warehouse:/nfs/warehouse \
+  -v /mnt/nfs/volumes:/mnt/nfs/volumes \
+  -v /mnt/nfs/datasets:/mnt/nfs/datasets \
   ghcr.io/hoveychen/muvee:latest agent
 ```
 

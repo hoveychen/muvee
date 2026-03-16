@@ -1,0 +1,29 @@
+# Agent-only deployment: deploy node.
+#
+# Usage:
+#   cp .env.agent.example .env   # then edit .env
+#   docker compose -f docker-compose.agent-deploy.yml up -d
+
+services:
+  muvee-agent-deploy:
+    image: ghcr.io/hoveychen/muvee:latest
+    command: ["agent"]
+    restart: unless-stopped
+    environment:
+      NODE_ROLE: deploy
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
+      AGENT_SECRET: ${AGENT_SECRET}
+      DATA_DIR: ${DATA_DIR:-/muvee/data}
+      # HOST_IP is auto-detected by default.
+      # Set HOST_IP in .env only if auto-detection picks the wrong interface.
+      HOST_IP: ${HOST_IP}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_data:/muvee/data
+      # Workspace volume (optional): uncomment if VOLUME_NFS_BASE_PATH is set on control plane.
+      # - ${VOLUME_NFS_BASE_PATH}:${VOLUME_NFS_BASE_PATH}:rw
+      # Dataset NFS base (optional): uncomment if DATASET_NFS_BASE_PATH is set on control plane.
+      # - ${DATASET_NFS_BASE_PATH}:${DATASET_NFS_BASE_PATH}:ro
+
+volumes:
+  agent_data:

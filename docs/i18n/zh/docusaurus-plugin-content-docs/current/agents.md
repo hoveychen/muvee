@@ -118,7 +118,7 @@ sudo systemctl restart docker
 依赖：
 - `docker` 命令行工具
 - `rsync`（用于 dependency 数据集同步）
-- NFS 挂载在与每个数据集 `nfs_path` 配置相同的路径上
+- 挂载 `DATASET_NFS_BASE_PATH`，并与控制平面保持相同绝对路径；每个数据集位于其 `nfs_path` 相对子目录下
 - 能够访问控制平面的网络连接（`CONTROL_PLANE_URL`）
 
 收到部署任务后：

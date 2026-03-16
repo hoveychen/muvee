@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useTranslation } from 'react-i18next'
+import { resolveDatasetPath } from '../lib/utils'
 
 const MONO = 'DM Mono'
 
@@ -39,9 +40,16 @@ export default function NewDataset() {
   const [nfsPath, setNfsPath] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [datasetBasePath, setDatasetBasePath] = useState('')
   const { t } = useTranslation()
 
   const canSubmit = name.trim() !== '' && nfsPath.trim() !== ''
+
+  useEffect(() => {
+    api.runtime.config()
+      .then(cfg => setDatasetBasePath(cfg.dataset_nfs_base_path || ''))
+      .catch(() => setDatasetBasePath(''))
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -84,17 +92,25 @@ export default function NewDataset() {
 
             <div>
               <label style={labelStyle}>{t('newDataset.nfsPath')}</label>
+              <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', marginBottom: '0.35rem' }}>
+                {t('newDataset.datasetBasePath')}: <span style={{ color: 'var(--fg-primary)' }}>{datasetBasePath || t('newDataset.notConfigured')}</span>
+              </p>
               <input
                 style={inputStyle}
                 value={nfsPath}
                 onChange={e => setNfsPath(e.target.value)}
                 onFocus={focusAccent}
                 onBlur={blurBorder}
-                placeholder="/mnt/nfs/data"
+                placeholder="warehouse"
               />
               <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', marginTop: '0.4rem' }}>
                 {t('newDataset.nfsPathHint')}
               </p>
+              {nfsPath.trim() !== '' && (
+                <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', marginTop: '0.3rem' }}>
+                  {t('newDataset.fullPathPreview')}: <span style={{ color: 'var(--fg-primary)' }}>{resolveDatasetPath(datasetBasePath, nfsPath.trim())}</span>
+                </p>
+              )}
             </div>
           </div>
 

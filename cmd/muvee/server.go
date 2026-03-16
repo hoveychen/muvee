@@ -41,7 +41,8 @@ func runServer() {
 	}
 	sched := scheduler.New(st)
 	scanInterval := 5 * time.Minute
-	mon := monitor.New(st, scanInterval, 4)
+	datasetNFSBasePath := os.Getenv("DATASET_NFS_BASE_PATH")
+	mon := monitor.New(st, datasetNFSBasePath, scanInterval, 4)
 	go mon.Start(ctx)
 
 	baseDomain := os.Getenv("BASE_DOMAIN")
@@ -64,15 +65,21 @@ func runServer() {
 	} else {
 		log.Println("Warning: VOLUME_NFS_BASE_PATH is not set; project workspace volumes are disabled")
 	}
+	if datasetNFSBasePath != "" {
+		log.Printf("Dataset NFS base path: %s", datasetNFSBasePath)
+	} else {
+		log.Println("Warning: DATASET_NFS_BASE_PATH is not set; dataset feature is disabled")
+	}
 
 	srv := api.NewServer(st, authSvc, sched, mon, api.ServerConfig{
-		BaseDomain:        baseDomain,
-		AuthServiceURL:    authServiceURL,
-		AgentSecret:       agentSecret,
-		RegistryAddr:      registryAddr,
-		RegistryUser:      os.Getenv("REGISTRY_USER"),
-		RegistryPassword:  os.Getenv("REGISTRY_PASSWORD"),
-		VolumeNFSBasePath: volumeNFSBasePath,
+		BaseDomain:         baseDomain,
+		AuthServiceURL:     authServiceURL,
+		AgentSecret:        agentSecret,
+		RegistryAddr:       registryAddr,
+		RegistryUser:       os.Getenv("REGISTRY_USER"),
+		RegistryPassword:   os.Getenv("REGISTRY_PASSWORD"),
+		VolumeNFSBasePath:  volumeNFSBasePath,
+		DatasetNFSBasePath: datasetNFSBasePath,
 	})
 	handler := mountFrontend(srv.Router())
 
@@ -209,7 +216,9 @@ func checkBuildCompletions(ctx context.Context, st *store.Store, sched *schedule
 		rows2 = append(rows2, r)
 	}
 	for _, r := range rows2 {
-		var res struct{ ImageTag string `json:"image_tag"` }
+		var res struct {
+			ImageTag string `json:"image_tag"`
+		}
 		_ = json.Unmarshal([]byte(r.result), &res)
 		if res.ImageTag == "" {
 			continue

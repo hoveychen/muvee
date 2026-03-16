@@ -1,0 +1,17 @@
+# Agent-only deployment: builder node.
+#
+# Usage:
+#   cp .env.agent.example .env   # then edit .env
+#   docker compose -f docker-compose.agent-builder.yml up -d
+
+services:
+  muvee-agent-builder:
+    image: ghcr.io/hoveychen/muvee:latest
+    command: ["agent"]
+    restart: unless-stopped
+    environment:
+      NODE_ROLE: builder
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
+      AGENT_SECRET: ${AGENT_SECRET}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { PlusCircle, Scan, Trash2, ChevronRight, FileText, FolderOpen } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Dataset, DatasetSnapshot, FileHistory } from '../lib/types'
-import { formatBytes, timeAgo } from '../lib/utils'
+import { formatBytes, resolveDatasetPath, timeAgo } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
@@ -13,12 +13,16 @@ type View = 'list' | 'detail'
 export default function Datasets() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [loading, setLoading] = useState(true)
+  const [datasetBasePath, setDatasetBasePath] = useState('')
   const [selected, setSelected] = useState<Dataset | null>(null)
   const [view, setView] = useState<View>('list')
   const { t } = useTranslation()
 
   useEffect(() => {
     api.datasets.list().then(setDatasets).finally(() => setLoading(false))
+    api.runtime.config()
+      .then(cfg => setDatasetBasePath(cfg.dataset_nfs_base_path || ''))
+      .catch(() => setDatasetBasePath(''))
   }, [])
 
   const handleScan = async (ds: Dataset, e: React.MouseEvent) => {
@@ -39,7 +43,7 @@ export default function Datasets() {
   }
 
   if (view === 'detail' && selected) {
-    return <DatasetDetail dataset={selected} onBack={() => setView('list')} />
+    return <DatasetDetail dataset={selected} datasetBasePath={datasetBasePath} onBack={() => setView('list')} />
   }
 
   return (
@@ -101,7 +105,7 @@ export default function Datasets() {
                   </td>
                   <td style={{ padding: '0.75rem 1rem' }}>
                     <div style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {ds.nfs_path}
+                      {resolveDatasetPath(datasetBasePath, ds.nfs_path)}
                     </div>
                   </td>
                   <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
@@ -153,7 +157,7 @@ export default function Datasets() {
   )
 }
 
-function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => void }) {
+function DatasetDetail({ dataset, datasetBasePath, onBack }: { dataset: Dataset; datasetBasePath: string; onBack: () => void }) {
   const [snapshots, setSnapshots] = useState<DatasetSnapshot[]>([])
   const [history, setHistory] = useState<FileHistory[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -188,7 +192,9 @@ function DatasetDetail({ dataset, onBack }: { dataset: Dataset; onBack: () => vo
       <div className="flex items-start justify-between mb-8">
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2 }}>{dataset.name}</h1>
-          <div style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '0.3rem' }}>{dataset.nfs_path}</div>
+          <div style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '0.3rem' }}>
+            {resolveDatasetPath(datasetBasePath, dataset.nfs_path)}
+          </div>
         </div>
         <div className="text-right">
           <div style={{ fontFamily: MONO, fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent)' }}>v{dataset.version}</div>

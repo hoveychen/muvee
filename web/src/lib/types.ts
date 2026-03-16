@@ -42,6 +42,10 @@ export interface Dataset {
   updated_at: string
 }
 
+export interface RuntimeConfig {
+  dataset_nfs_base_path: string
+}
+
 export interface ProjectDataset {
   project_id: string
   dataset_id: string

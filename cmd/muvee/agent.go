@@ -62,6 +62,7 @@ func runAgent() {
 	registryAddr := agentCfg["registry_addr"]
 	baseDomain := agentCfg["base_domain"]
 	volumeNFSBasePath := agentCfg["volume_nfs_base_path"]
+	datasetNFSBasePath := agentCfg["dataset_nfs_base_path"]
 
 	if user, pass := agentCfg["registry_user"], agentCfg["registry_password"]; user != "" && pass != "" {
 		if err := dockerLogin(registryAddr, user, pass); err != nil {
@@ -91,7 +92,7 @@ func runAgent() {
 		case <-ticker.C:
 			tasks := pollTasks(ctx, controlPlaneURL, agentSecret, nodeID)
 			for _, task := range tasks {
-				go handleTask(ctx, task, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, baseDir, baseDomain, volumeNFSBasePath, cache)
+				go handleTask(ctx, task, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, baseDir, baseDomain, volumeNFSBasePath, datasetNFSBasePath, cache)
 			}
 		}
 	}
@@ -191,7 +192,7 @@ func pollTasks(ctx context.Context, baseURL, secret string, nodeID uuid.UUID) []
 	return tasks
 }
 
-func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, baseDir, baseDomain, volumeNFSBasePath string, cache *datacache.Cache) {
+func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, baseDir, baseDomain, volumeNFSBasePath, datasetNFSBasePath string, cache *datacache.Cache) {
 	log.Printf("Handling task %s (type=%s)", task.ID, task.Type)
 	completeTask(ctx, baseURL, secret, task.ID, store.TaskStatusRunning, nil)
 
@@ -211,7 +212,7 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		}
 
 	case store.TaskTypeDeploy:
-		hostPort, err := runDeploy(ctx, task, cache, baseDomain, volumeNFSBasePath, func(line string) {
+		hostPort, err := runDeploy(ctx, task, cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath, func(line string) {
 			appendLog(ctx, baseURL, secret, task.DeploymentID, line)
 		})
 		taskErr = err
@@ -248,7 +249,7 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn 
 	return map[string]interface{}{"image_tag": imageTag}, nil
 }
 
-func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, baseDomain, volumeNFSBasePath string, logFn func(string)) (int, error) {
+func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath string, logFn func(string)) (int, error) {
 	p := task.Payload
 	var datasets []deployer.DatasetSpec
 	if dsRaw, ok := p["datasets"].([]interface{}); ok {
@@ -268,18 +269,19 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 		}
 	}
 	cfg := deployer.Config{
-		DeploymentID:      str(p, "deployment_id"),
-		ProjectID:         str(p, "project_id"),
-		DomainPrefix:      str(p, "domain_prefix"),
-		ImageTag:          str(p, "image_tag"),
-		ContainerPort:     intVal(p, "container_port"),
-		AuthRequired:      boolVal(p, "auth_required"),
-		AuthDomains:       str(p, "auth_domains"),
-		MemoryLimit:       str(p, "memory_limit"),
-		VolumeMountPath:   str(p, "volume_mount_path"),
-		VolumeNFSBasePath: volumeNFSBasePath,
-		Datasets:          datasets,
-		BaseDomain:        baseDomain,
+		DeploymentID:       str(p, "deployment_id"),
+		ProjectID:          str(p, "project_id"),
+		DomainPrefix:       str(p, "domain_prefix"),
+		ImageTag:           str(p, "image_tag"),
+		ContainerPort:      intVal(p, "container_port"),
+		AuthRequired:       boolVal(p, "auth_required"),
+		AuthDomains:        str(p, "auth_domains"),
+		MemoryLimit:        str(p, "memory_limit"),
+		VolumeMountPath:    str(p, "volume_mount_path"),
+		VolumeNFSBasePath:  volumeNFSBasePath,
+		DatasetNFSBasePath: datasetNFSBasePath,
+		Datasets:           datasets,
+		BaseDomain:         baseDomain,
 	}
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }
