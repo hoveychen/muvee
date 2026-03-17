@@ -9,9 +9,13 @@ services:
     image: ghcr.io/hoveychen/muvee:latest
     command: ["agent"]
     restart: unless-stopped
+    hostname: muvee-agent-builder
     environment:
       NODE_ROLE: builder
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
       AGENT_SECRET: ${AGENT_SECRET}
+      # NODE_NAME pins the agent's identity across restarts/upgrades.
+      # Override in .env if you run multiple builder agents on different hosts.
+      NODE_NAME: ${NODE_NAME:-muvee-agent-builder}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

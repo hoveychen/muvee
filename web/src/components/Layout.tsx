@@ -1,8 +1,9 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages } from 'lucide-react'
+import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages, Settings } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
+import { useSettings } from '../lib/settings'
 import { api } from '../lib/api'
 import type { Node, NodeMetric } from '../lib/types'
 import { useTranslation } from 'react-i18next'
@@ -14,7 +15,15 @@ export default function Layout({ children }: { children?: ReactNode }) {
   const navigate = useNavigate()
   const { theme, toggleTheme } = useTheme()
   const { t, i18n } = useTranslation()
+  const { settings } = useSettings()
   const isAdmin = user?.role === 'admin'
+
+  // Redirect admin to onboarding if not yet completed
+  useEffect(() => {
+    if (isAdmin && settings.onboarded === 'false') {
+      navigate('/onboard', { replace: true })
+    }
+  }, [isAdmin, settings.onboarded, navigate])
 
   const ALL_NAV_ITEMS = [
     { to: '/projects', icon: LayoutGrid, label: t('nav.projects'), adminOnly: false },
@@ -22,6 +31,7 @@ export default function Layout({ children }: { children?: ReactNode }) {
     { to: '/secrets', icon: KeyRound, label: t('nav.secrets'), adminOnly: false },
     { to: '/nodes', icon: Server, label: t('nav.nodes'), adminOnly: true },
     { to: '/users', icon: Users, label: t('nav.users'), adminOnly: true },
+    { to: '/admin/settings', icon: Settings, label: t('nav.settings'), adminOnly: true },
   ]
   const navItems = ALL_NAV_ITEMS.filter(item => !item.adminOnly || isAdmin)
 
@@ -49,10 +59,14 @@ export default function Layout({ children }: { children?: ReactNode }) {
       >
         {/* Logo */}
         <div className="px-4 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
-          <img src="/icon.png" alt="muvee" style={{ width: '28px', height: '28px', borderRadius: '6px', flexShrink: 0 }} />
+          <img
+            src={settings.logo_url || '/icon.png'}
+            alt={settings.site_name || 'muvee'}
+            style={{ width: '28px', height: '28px', borderRadius: '6px', flexShrink: 0, objectFit: 'contain' }}
+          />
           <div>
             <div style={{ fontFamily: MONO, fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
-              muvee
+              {settings.site_name || 'muvee'}
             </div>
             <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', marginTop: '1px' }}>
               {t('nav.privateCloud')}

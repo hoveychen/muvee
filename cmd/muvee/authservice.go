@@ -20,10 +20,11 @@ type authClaims struct {
 }
 
 var (
-	fwdProviders map[string]auth.Provider
-	jwtSecret    []byte
-	adminEmails  map[string]struct{}
-	cookieDomain string
+	fwdProviders   map[string]auth.Provider
+	jwtSecret      []byte
+	adminEmails    map[string]struct{}
+	cookieDomain   string
+	forwardAuthBase string // e.g. "https://example.com"
 )
 
 func runAuthservice() {
@@ -38,6 +39,7 @@ func runAuthservice() {
 		baseURL = "http://localhost:4181"
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
+	forwardAuthBase = baseURL
 
 	cookieDomain = os.Getenv("BASE_DOMAIN")
 	secret := os.Getenv("JWT_SECRET")
@@ -257,7 +259,7 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 		Name: "fwd_oauth_redirect", Value: originalURL,
 		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
 	})
-	http.Redirect(w, r, "/_oauth/login", http.StatusFound)
+	http.Redirect(w, r, forwardAuthBase+"/_oauth/login", http.StatusFound)
 }
 
 func signForwardJWT(email string) (string, error) {

@@ -43,6 +43,12 @@ func runAgent() {
 	}
 
 	hostname, _ := os.Hostname()
+	// NODE_NAME lets operators pin a stable identity to the agent so that
+	// container restarts / image upgrades do not register a new node.
+	// Defaults to the OS hostname when not set.
+	if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
+		hostname = nodeName
+	}
 
 	hostIP := os.Getenv("HOST_IP")
 	if hostIP == "" {
@@ -81,6 +87,7 @@ func runAgent() {
 		go runContainerStatusReporter(ctx, controlPlaneURL, agentSecret)
 	}
 	go runNodeMetricsReporter(ctx, controlPlaneURL, agentSecret, nodeID, baseDir)
+	go runAgentHealthReporter(ctx, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, volumeNFSBasePath, datasetNFSBasePath)
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -687,3 +694,132 @@ func boolVal(m map[string]interface{}, key string) bool {
 }
 
 func jsonReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
+
+// ─── Agent Health Reporter ────────────────────────────────────────────────────
+
+type agentHealthCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`  // "ok" | "warning" | "error"
+	Message string `json:"message"`
+}
+
+// runAgentHealthReporter runs health checks on the agent and reports them to the control plane.
+func runAgentHealthReporter(ctx context.Context, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, volumeNFSBasePath, datasetNFSBasePath string) {
+	// Initial check shortly after startup.
+	time.Sleep(10 * time.Second)
+	reportAgentHealth(ctx, baseURL, secret, nodeID, role, registryAddr, volumeNFSBasePath, datasetNFSBasePath)
+
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reportAgentHealth(ctx, baseURL, secret, nodeID, role, registryAddr, volumeNFSBasePath, datasetNFSBasePath)
+		}
+	}
+}
+
+func reportAgentHealth(ctx context.Context, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, volumeNFSBasePath, datasetNFSBasePath string) {
+	checks := collectAgentHealthChecks(role, registryAddr, volumeNFSBasePath, datasetNFSBasePath)
+	body, _ := json.Marshal(checks)
+	resp, _ := agentPost(
+		fmt.Sprintf("%s/api/agent/health-report?node_id=%s", baseURL, nodeID),
+		secret, "application/json", jsonReader(body),
+	)
+	if resp != nil {
+		resp.Body.Close()
+	}
+}
+
+func collectAgentHealthChecks(role, registryAddr, volumeNFSBasePath, datasetNFSBasePath string) []agentHealthCheck {
+	var checks []agentHealthCheck
+
+	// 1. Docker daemon
+	out, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").Output()
+	if err != nil {
+		checks = append(checks, agentHealthCheck{
+			Name: "docker", Status: "error",
+			Message: fmt.Sprintf("docker daemon not reachable: %v", err),
+		})
+	} else {
+		checks = append(checks, agentHealthCheck{
+			Name: "docker", Status: "ok",
+			Message: fmt.Sprintf("docker %s", strings.TrimSpace(string(out))),
+		})
+	}
+
+	// 2. Registry connectivity
+	if registryAddr != "" {
+		scheme := "https"
+		addr := registryAddr
+		if strings.HasPrefix(addr, "http://") {
+			scheme = "http"
+			addr = strings.TrimPrefix(addr, "http://")
+		} else {
+			addr = strings.TrimPrefix(addr, "https://")
+		}
+		registryURL := scheme + "://" + addr + "/v2/"
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get(registryURL)
+		if err != nil {
+			checks = append(checks, agentHealthCheck{
+				Name: "registry", Status: "error",
+				Message: fmt.Sprintf("cannot reach registry %s: %v", registryURL, err),
+			})
+		} else {
+			resp.Body.Close()
+			if resp.StatusCode == 200 || resp.StatusCode == 401 {
+				checks = append(checks, agentHealthCheck{
+					Name: "registry", Status: "ok",
+					Message: fmt.Sprintf("registry reachable (HTTP %d)", resp.StatusCode),
+				})
+			} else {
+				checks = append(checks, agentHealthCheck{
+					Name: "registry", Status: "warning",
+					Message: fmt.Sprintf("registry returned HTTP %d", resp.StatusCode),
+				})
+			}
+		}
+	} else {
+		checks = append(checks, agentHealthCheck{
+			Name: "registry", Status: "warning",
+			Message: "REGISTRY_ADDR not configured",
+		})
+	}
+
+	// 3. NFS volume path (relevant for both roles)
+	checks = append(checks, agentCheckPath("nfs_volume", volumeNFSBasePath))
+
+	// 4. NFS dataset path
+	checks = append(checks, agentCheckPath("nfs_dataset", datasetNFSBasePath))
+
+	// 5. Docker build support (builder only)
+	if role == "builder" {
+		out, err := exec.Command("docker", "buildx", "version").Output()
+		if err != nil {
+			checks = append(checks, agentHealthCheck{
+				Name: "docker_buildx", Status: "warning",
+				Message: "docker buildx not available; builds may fail",
+			})
+		} else {
+			checks = append(checks, agentHealthCheck{
+				Name: "docker_buildx", Status: "ok",
+				Message: strings.TrimSpace(string(out)),
+			})
+		}
+	}
+
+	return checks
+}
+
+func agentCheckPath(name, path string) agentHealthCheck {
+	if path == "" {
+		return agentHealthCheck{Name: name, Status: "warning", Message: "path not configured"}
+	}
+	if _, err := os.Stat(path); err != nil {
+		return agentHealthCheck{Name: name, Status: "error", Message: fmt.Sprintf("cannot access %s: %v", path, err)}
+	}
+	return agentHealthCheck{Name: name, Status: "ok", Message: fmt.Sprintf("%s is accessible", path)}
+}

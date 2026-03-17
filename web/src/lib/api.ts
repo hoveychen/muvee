@@ -99,5 +99,14 @@ export const api = {
     projects: () => fetch('/api/public/projects')
       .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
       .then(data => Array.isArray(data) ? data : []) as Promise<import('./types').PublicProject[]>,
+    settings: () => fetch('/api/public/settings')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText))) as Promise<import('./types').SystemSettings>,
+  },
+
+  admin: {
+    getSettings: () => request<import('./types').SystemSettings>('/api/admin/settings'),
+    updateSettings: (data: Partial<import('./types').SystemSettings>) =>
+      request<import('./types').SystemSettings>('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) }),
+    health: () => request<import('./types').HealthReport>('/api/admin/health'),
   },
 }

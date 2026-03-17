@@ -5,12 +5,16 @@
     "secrets": "Secrets",
     "nodes": "Nodes",
     "users": "Users",
+    "settings": "Settings",
     "privateCloud": "private cloud",
     "logout": "Logout",
     "switchToLight": "Switch to light mode",
     "switchToDark": "Switch to dark mode",
     "switchToZh": "切换到中文",
     "switchToEn": "Switch to English"
+  },
+  "common": {
+    "loading": "Loading..."
   },
   "login": {
     "tagline": "Private Cloud Platform",
@@ -286,6 +290,91 @@
     },
     "makeAdmin": "Make Admin",
     "makeMember": "Make Member"
+  },
+  "onboard": {
+    "stepLabel": "Step {{current}} of {{total}}",
+    "next": "Next",
+    "back": "Back",
+    "skip": "Skip for now",
+    "steps": {
+      "0": {
+        "title": "Welcome to your Private Cloud",
+        "desc": "Let's get your platform set up. Start by customising the branding so it feels like yours."
+      },
+      "1": {
+        "title": "System Health Check",
+        "desc": "Running diagnostics to make sure all infrastructure components are working correctly."
+      },
+      "2": {
+        "title": "Connect Agents",
+        "desc": "At least one builder and one deployer agent are required. Follow the instructions below to start them."
+      },
+      "3": {
+        "title": "You're all set!",
+        "desc": "Your platform is ready. Head to the dashboard to create your first project."
+      }
+    },
+    "branding": {
+      "siteName": "SITE NAME",
+      "logoUrl": "LOGO URL",
+      "faviconUrl": "FAVICON URL",
+      "logoPreview": "Logo preview",
+      "save": "Save & Continue"
+    },
+    "health": {
+      "recheck": "Re-run checks",
+      "running": "Running checks...",
+      "hasErrors": "Some checks failed. You can still continue, but some features may not work correctly."
+    },
+    "checks": {
+      "internet": "Internet Connectivity",
+      "traefik": "Traefik Proxy",
+      "registry": "Docker Registry",
+      "nfs_volume": "NFS Volume Path",
+      "nfs_dataset": "NFS Dataset Path",
+      "builder_agents": "Builder Agents",
+      "deploy_agents": "Deploy Agents"
+    },
+    "agents": {
+      "instructions": "HOW TO START AGENTS",
+      "step1": "Start a builder agent",
+      "step2": "Start a deploy agent",
+      "builder": "Builder Agent",
+      "deployer": "Deploy Agent",
+      "waiting": "Waiting...",
+      "registered": "REGISTERED NODES",
+      "continue": "Continue anyway",
+      "orSkip": "(or wait for agents to connect)"
+    },
+    "done": {
+      "heading": "Setup Complete",
+      "desc": "Your platform is ready. You can adjust branding and settings any time from the admin panel.",
+      "feat1": "Deploy containerised apps from any Git repository",
+      "feat2": "Manage datasets on NFS with version tracking",
+      "feat3": "Monitor your infrastructure in real time",
+      "enter": "Go to Dashboard"
+    }
+  },
+  "adminSettings": {
+    "sectionLabel": "ADMINISTRATION",
+    "heading": "Admin Settings",
+    "branding": {
+      "title": "Branding",
+      "siteName": "SITE NAME",
+      "logoUrl": "LOGO URL",
+      "logoHint": "Displayed in the sidebar. Use a square image for best results.",
+      "faviconUrl": "FAVICON URL",
+      "preview": "Logo preview",
+      "save": "Save Changes",
+      "saving": "Saving...",
+      "saved": "Saved!"
+    },
+    "health": {
+      "title": "System Health",
+      "recheck": "Re-run",
+      "running": "Running checks...",
+      "updatedAt": "Updated at {{time}}"
+    }
   },
   "community": {
     "enterDashboard": "Dashboard",

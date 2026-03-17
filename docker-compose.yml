@@ -181,10 +181,12 @@ services:
     image: ghcr.io/hoveychen/muvee:latest
     command: ["agent"]
     restart: unless-stopped
+    hostname: muvee-agent-builder
     environment:
       NODE_ROLE: builder
       CONTROL_PLANE_URL: http://muvee-server:8080
       AGENT_SECRET: ${AGENT_SECRET}
+      NODE_NAME: muvee-agent-builder
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -197,10 +199,12 @@ services:
     image: ghcr.io/hoveychen/muvee:latest
     command: ["agent"]
     restart: unless-stopped
+    hostname: muvee-agent-deploy
     environment:
       NODE_ROLE: deploy
       CONTROL_PLANE_URL: http://muvee-server:8080
       AGENT_SECRET: ${AGENT_SECRET}
+      NODE_NAME: muvee-agent-deploy
       DATA_DIR: /muvee/data
       # HOST_IP is auto-detected (UDP probe toward muvee-server).
       # Override if Traefik cannot reach deployed containers:

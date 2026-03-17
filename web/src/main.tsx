@@ -5,6 +5,7 @@ import './index.css'
 import './lib/i18n'
 import { AuthProvider, useAuth } from './lib/auth'
 import { ThemeProvider } from './lib/theme'
+import { SettingsProvider } from './lib/settings'
 import LoginPage from './pages/Login'
 import Community from './pages/Community'
 import Projects from './pages/Projects'
@@ -13,6 +14,8 @@ import ProjectDetail from './pages/ProjectDetail'
 import Datasets from './pages/Datasets'
 import NewDataset from './pages/NewDataset'
 import SecretsPage from './pages/Secrets'
+import OnboardPage from './pages/Onboard'
+import AdminSettingsPage from './pages/AdminSettings'
 import Layout, { NodesPage, UsersPage } from './components/Layout'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -30,10 +33,13 @@ function App() {
   return (
     <BrowserRouter>
       <ThemeProvider>
+      <SettingsProvider>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<Community />} />
+          {/* Onboarding – requires auth but bypasses the normal layout */}
+          <Route path="/onboard" element={<RequireAuth><OnboardPage /></RequireAuth>} />
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/new" element={<NewProject />} />
@@ -43,9 +49,11 @@ function App() {
             <Route path="/secrets" element={<SecretsPage />} />
             <Route path="/nodes" element={<NodesPage />} />
             <Route path="/users" element={<UsersPage />} />
+            <Route path="/admin/settings" element={<AdminSettingsPage />} />
           </Route>
         </Routes>
       </AuthProvider>
+      </SettingsProvider>
       </ThemeProvider>
     </BrowserRouter>
   )

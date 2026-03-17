@@ -9,6 +9,7 @@ services:
     image: ghcr.io/hoveychen/muvee:latest
     command: ["agent"]
     restart: unless-stopped
+    hostname: muvee-agent-deploy
     environment:
       NODE_ROLE: deploy
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
@@ -17,6 +18,9 @@ services:
       # HOST_IP is auto-detected by default.
       # Set HOST_IP in .env only if auto-detection picks the wrong interface.
       HOST_IP: ${HOST_IP}
+      # NODE_NAME pins the agent's identity across restarts/upgrades.
+      # Override in .env if you run multiple deploy agents on different hosts.
+      NODE_NAME: ${NODE_NAME:-muvee-agent-deploy}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent_data:/muvee/data

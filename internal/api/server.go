@@ -112,6 +112,9 @@ func (s *Server) Router() http.Handler {
 	// Public community feed – no auth required
 	r.Get("/api/public/projects", s.handlePublicProjects)
 
+	// Public system settings (branding, onboarding state) – no auth required
+	r.Get("/api/public/settings", s.handleGetPublicSettings)
+
 	// Protected
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
@@ -157,13 +160,18 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/datasets/{id}/snapshots", s.listSnapshots)
 		r.Get("/api/datasets/{id}/history", s.listFileHistory)
 
-		// Nodes (admin only)
+		// Nodes & admin-only operations
 		r.Group(func(r chi.Router) {
 			r.Use(auth.AdminOnly)
 			r.Get("/api/nodes", s.listNodes)
 			r.Get("/api/nodes/{id}/metrics", s.getNodeMetrics)
 			r.Get("/api/users", s.listUsers)
 			r.Put("/api/users/{id}/role", s.setUserRole)
+			// System settings (admin-only read/write)
+			r.Get("/api/admin/settings", s.handleGetAdminSettings)
+			r.Put("/api/admin/settings", s.handleUpdateAdminSettings)
+			// Server-side health checks
+			r.Get("/api/admin/health", s.handleGetSystemHealth)
 		})
 	})
 
@@ -177,6 +185,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/agent/container-statuses", s.handleContainerStatuses)
 		r.Post("/api/agent/container-metrics", s.handleContainerMetrics)
 		r.Post("/api/agent/node-metrics", s.handleNodeMetrics)
+		r.Post("/api/agent/health-report", s.handleAgentHealthReport)
 	})
 
 	return r
@@ -1156,6 +1165,11 @@ func (s *Server) pollTasks(w http.ResponseWriter, r *http.Request) {
 	nodeID, err := uuid.Parse(nodeIDStr)
 	if err != nil {
 		jsonErr(w, err, 400)
+		return
+	}
+	// Update heartbeat so the node stays online.
+	if err := s.store.TouchNode(r.Context(), nodeID); err != nil {
+		jsonErr(w, err, 500)
 		return
 	}
 	tasks, err := s.store.PollTasksForNode(r.Context(), nodeID)

@@ -74,6 +74,8 @@ export interface Node {
   used_storage_bytes: number
   last_seen_at: string
   created_at: string
+  // health_report is the latest self-reported health checks from the agent (JSON bytes, base64-encoded).
+  health_report?: string | null
 }
 
 export interface DatasetSnapshot {
@@ -153,6 +155,26 @@ export interface PublicProject {
   owner_name: string
   owner_avatar_url: string
   updated_at: number // epoch seconds
+}
+
+export interface SystemSettings {
+  onboarded: string       // 'true' | 'false'
+  site_name: string
+  logo_url: string
+  favicon_url: string
+}
+
+export type HealthStatus = 'ok' | 'warning' | 'error'
+
+export interface HealthCheck {
+  name: string
+  status: HealthStatus
+  message: string
+}
+
+export interface HealthReport {
+  checks: HealthCheck[]
+  updated_at: string
 }
 
 export interface FileHistory {

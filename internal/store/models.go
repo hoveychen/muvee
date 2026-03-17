@@ -139,6 +139,9 @@ type Node struct {
 	UsedStorageBytes int64     `db:"used_storage_bytes" json:"used_storage_bytes"`
 	LastSeenAt       time.Time `db:"last_seen_at"       json:"last_seen_at"`
 	CreatedAt        time.Time `db:"created_at"         json:"created_at"`
+	// HealthReport is the latest self-reported health status from the agent.
+	// Stored as raw JSON (can be nil if no report received yet).
+	HealthReport []byte `db:"health_report" json:"health_report,omitempty"`
 }
 
 type NodeDataset struct {
@@ -155,6 +158,13 @@ type DatasetSnapshot struct {
 	TotalFiles     int64     `db:"total_files"     json:"total_files"`
 	TotalSizeBytes int64     `db:"total_size_bytes" json:"total_size_bytes"`
 	Version        int64     `db:"version"         json:"version"`
+}
+
+// SystemSetting is a single key-value pair in the system_settings table.
+type SystemSetting struct {
+	Key       string    `db:"key"        json:"key"`
+	Value     string    `db:"value"      json:"value"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type FileEventType string

@@ -500,7 +500,7 @@ func (s *Store) SetDeploymentNode(ctx context.Context, id, nodeID uuid.UUID) err
 func (s *Store) UpsertNode(ctx context.Context, n *Node) (*Node, error) {
 	n.LastSeenAt = time.Now()
 	var existing Node
-	err := s.db.QueryRow(ctx, `SELECT id FROM nodes WHERE hostname = $1`, n.Hostname).Scan(&existing.ID)
+	err := s.db.QueryRow(ctx, `SELECT id FROM nodes WHERE hostname = $1 AND role = $2`, n.Hostname, n.Role).Scan(&existing.ID)
 	if err == pgx.ErrNoRows {
 		n.ID = uuid.New()
 		n.CreatedAt = time.Now()
@@ -510,14 +510,14 @@ func (s *Store) UpsertNode(ctx context.Context, n *Node) (*Node, error) {
 		`, n.ID, n.Hostname, n.Role, n.HostIP, n.MaxStorageBytes, n.UsedStorageBytes, n.LastSeenAt, n.CreatedAt)
 	} else if err == nil {
 		n.ID = existing.ID
-		_, err = s.db.Exec(ctx, `UPDATE nodes SET role=$1, host_ip=$2, max_storage_bytes=$3, last_seen_at=$4 WHERE id=$5`,
-			n.Role, n.HostIP, n.MaxStorageBytes, n.LastSeenAt, n.ID)
+		_, err = s.db.Exec(ctx, `UPDATE nodes SET host_ip=$1, max_storage_bytes=$2, last_seen_at=$3 WHERE id=$4`,
+			n.HostIP, n.MaxStorageBytes, n.LastSeenAt, n.ID)
 	}
 	return n, err
 }
 
 func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, hostname, role, host_ip, max_storage_bytes, used_storage_bytes, last_seen_at, created_at FROM nodes ORDER BY created_at`)
+	rows, err := s.db.Query(ctx, `SELECT id, hostname, role, host_ip, max_storage_bytes, used_storage_bytes, last_seen_at, created_at, health_report FROM nodes ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +525,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 	nodes := make([]*Node, 0)
 	for rows.Next() {
 		var n Node
-		if err := rows.Scan(&n.ID, &n.Hostname, &n.Role, &n.HostIP, &n.MaxStorageBytes, &n.UsedStorageBytes, &n.LastSeenAt, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.Hostname, &n.Role, &n.HostIP, &n.MaxStorageBytes, &n.UsedStorageBytes, &n.LastSeenAt, &n.CreatedAt, &n.HealthReport); err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, &n)
@@ -534,7 +534,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 }
 
 func (s *Store) GetDeployNodes(ctx context.Context) ([]*Node, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, hostname, role, host_ip, max_storage_bytes, used_storage_bytes, last_seen_at, created_at FROM nodes WHERE role = 'deploy' ORDER BY created_at`)
+	rows, err := s.db.Query(ctx, `SELECT id, hostname, role, host_ip, max_storage_bytes, used_storage_bytes, last_seen_at, created_at, health_report FROM nodes WHERE role = 'deploy' ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -542,12 +542,17 @@ func (s *Store) GetDeployNodes(ctx context.Context) ([]*Node, error) {
 	nodes := make([]*Node, 0)
 	for rows.Next() {
 		var n Node
-		if err := rows.Scan(&n.ID, &n.Hostname, &n.Role, &n.HostIP, &n.MaxStorageBytes, &n.UsedStorageBytes, &n.LastSeenAt, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.Hostname, &n.Role, &n.HostIP, &n.MaxStorageBytes, &n.UsedStorageBytes, &n.LastSeenAt, &n.CreatedAt, &n.HealthReport); err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, &n)
 	}
 	return nodes, nil
+}
+
+func (s *Store) TouchNode(ctx context.Context, nodeID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `UPDATE nodes SET last_seen_at = $1 WHERE id = $2`, time.Now(), nodeID)
+	return err
 }
 
 // ─── Node Datasets ───────────────────────────────────────────────────────────
@@ -864,6 +869,55 @@ func (s *Store) GetContainerMetricsForProject(ctx context.Context, projectID uui
 		items = append(items, &m)
 	}
 	return items, nil
+}
+
+// ─── System Settings ──────────────────────────────────────────────────────────
+
+// GetSetting retrieves a single system setting by key.
+// Returns an empty string (not an error) if the key is not found.
+func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.db.QueryRow(ctx, `SELECT value FROM system_settings WHERE key = $1`, key).Scan(&value)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// SetSetting upserts a system setting.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+	`, key, value)
+	return err
+}
+
+// GetAllSettings returns all system settings as a map[key]value.
+func (s *Store) GetAllSettings(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT key, value FROM system_settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		result[k] = v
+	}
+	return result, nil
+}
+
+// SetNodeHealthReport stores the latest health report JSON from an agent node.
+func (s *Store) SetNodeHealthReport(ctx context.Context, nodeID uuid.UUID, reportJSON []byte) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE nodes SET health_report = $1 WHERE id = $2`,
+		reportJSON, nodeID,
+	)
+	return err
 }
 
 // ─── API Tokens ───────────────────────────────────────────────────────────────
