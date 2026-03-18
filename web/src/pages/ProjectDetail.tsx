@@ -291,7 +291,7 @@ function DeployTab({ deployments, projectId }: { deployments: Deployment[]; proj
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
               >
-                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} className={d.status === 'running' ? 'status-running' : ''} />
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} className={d.status === 'running' || d.status === 'building' ? 'status-running' : ''} />
                 <div className="flex-1 min-w-0">
                   <div style={{ fontFamily: MONO, fontSize: '0.82rem', color: 'var(--fg-primary)' }}>
                     {d.commit_sha ? d.commit_sha.slice(0, 12) : d.id.slice(0, 8)}

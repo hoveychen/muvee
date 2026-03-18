@@ -186,6 +186,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/agent/container-metrics", s.handleContainerMetrics)
 		r.Post("/api/agent/node-metrics", s.handleNodeMetrics)
 		r.Post("/api/agent/health-report", s.handleAgentHealthReport)
+		r.Post("/api/deployments/{id}/logs", s.appendDeploymentLog)
 	})
 
 	return r
@@ -1198,6 +1199,15 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if status == store.TaskStatusRunning {
+		task, err := s.store.GetTask(r.Context(), taskID)
+		if err == nil && task != nil && task.Type == store.TaskTypeBuild {
+			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusBuilding, "")
+		}
+		jsonOK(w, map[string]string{"status": "ok"})
+		return
+	}
+
 	if status != store.TaskStatusCompleted {
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
@@ -1232,6 +1242,22 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) appendDeploymentLog(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	var body struct {
+		Line string `json:"line"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := s.store.AppendDeploymentLog(r.Context(), id, body.Line); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
