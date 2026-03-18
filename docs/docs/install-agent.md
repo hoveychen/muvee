@@ -28,15 +28,55 @@ Set `CONTROL_PLANE_URL` to the **internal network address** of the control plane
 
 ### Install dependencies
 
+The agent requires **Docker CE 20.10+** (with the `docker-buildx-plugin`), `git`, and `rsync`. Do **not** use the `docker.io` package from Ubuntu's default apt repo — it often ships an older Docker version without a working buildx plugin, which will cause builder nodes to fail with `unknown flag: --platform`.
+
+**Install Docker CE from the official Docker repository (recommended):**
+
 ```bash
-# Debian / Ubuntu
+# Remove any older packages first
+sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+
+# Add Docker's official GPG key and apt repository
 sudo apt-get update
-sudo apt-get install -y docker.io docker-buildx git rsync
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker CE with buildx plugin
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin git rsync
 
 sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 newgrp docker
 ```
+
+:::note Debian
+Replace `ubuntu` with `debian` and use `$(. /etc/os-release && echo "$VERSION_CODENAME")` in the repo line above — the rest of the steps are identical.
+:::
+
+**Verify the installation before starting the agent:**
+
+```bash
+# Docker version must be 20.10 or newer
+docker version --format '{{.Server.Version}}'
+
+# buildx must be available and support --platform
+docker buildx version
+docker buildx build --help | grep -- --platform
+
+# git and rsync
+git --version
+rsync --version
+```
+
+If `docker buildx version` fails or `--platform` is not listed, your Docker installation is missing the buildx plugin. Re-run the install steps above using the official Docker repository.
 
 ### Option A — Docker (recommended for Linux)
 
@@ -295,3 +335,31 @@ The node should show as **online** within 30 seconds. If it stays offline:
 | `AGENT_SECRET` | ✓ | — | Shared secret (must match control plane) |
 | `DATA_DIR` | deploy only | `/muvee/data` | Local directory for dataset cache |
 | `HOST_IP` | — | auto-detected | Override the IP reported to Traefik |
+
+---
+
+## Prerequisites by Role
+
+### Builder node
+
+| Requirement | Minimum version | How to verify |
+|---|---|---|
+| Docker CE | 20.10+ | `docker version --format '{{.Server.Version}}'` |
+| docker-buildx-plugin | 0.9+ | `docker buildx version` |
+| `git` | any recent | `git --version` |
+
+The builder runs `docker buildx build --platform linux/amd64 --push` to build and push images. Both the `buildx` subcommand and the `--platform` flag are required. These are provided by the `docker-buildx-plugin` package from Docker's official repository — **not** by the `docker.io` package in Ubuntu's default apt repo.
+
+:::caution Common failure mode
+If a builder node logs `unknown flag: --platform` or `docker: 'buildx' is not a docker command`, the `docker-buildx-plugin` is missing or the installed Docker version is too old. Install Docker CE from [the official repository](https://docs.docker.com/engine/install/ubuntu/) and re-run the agent.
+
+You can also inspect the node's live health checks from the admin UI: **Settings → Nodes → `docker_buildx`**.
+:::
+
+### Deploy node
+
+| Requirement | How to verify |
+|---|---|
+| Docker (any recent version) | `docker version` |
+| `rsync` | `rsync --version` |
+| NFS mount at `DATASET_NFS_BASE_PATH` | `ls $DATASET_NFS_BASE_PATH` |

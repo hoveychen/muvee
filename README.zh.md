@@ -277,10 +277,13 @@ muveectl projects deploy PROJECT_ID
 | | |
 |---|---|
 | 控制平面主机 | Linux，Docker |
-| 工作节点 | Linux，Docker + Buildx，rsync，`git` |
+| **Builder 节点** | Linux，**Docker CE 20.10+**（含 `docker-buildx-plugin`），`git` |
+| **Deploy 节点** | Linux，Docker（任意近期版本），`rsync` |
 | NFS 共享 | 所有 Deploy 节点以相同路径挂载 |
 | PostgreSQL 16+ | 可使用内置 Docker Compose 服务 |
 | 身份认证 Provider | 至少一个：[Google](https://hoveychen.github.io/muvee/zh/docs/auth/auth-google)、[飞书/Lark](https://hoveychen.github.io/muvee/zh/docs/auth/auth-feishu)、[企业微信](https://hoveychen.github.io/muvee/zh/docs/auth/auth-wecom)、[钉钉](https://hoveychen.github.io/muvee/zh/docs/auth/auth-dingtalk) |
+
+> **Builder 节点必须使用 [docker.com](https://docs.docker.com/engine/install/ubuntu/) 官方源安装的 Docker CE，而非 Ubuntu 默认 apt 源里的 `docker.io` 包。** `docker.io` 通常不包含 `docker-buildx-plugin`，会导致构建时报错 `unknown flag: --platform`。完整的手把手安装步骤见 [Agent 安装指引](https://hoveychen.github.io/muvee/docs/install-agent)。
 
 ## 详细文档
 

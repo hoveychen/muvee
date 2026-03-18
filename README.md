@@ -278,10 +278,13 @@ See the [muveectl CLI reference](https://hoveychen.github.io/muvee/docs/muveectl
 | | |
 |---|---|
 | Control plane host | Linux, Docker |
-| Worker nodes | Linux, Docker + Buildx, rsync, `git` |
+| **Builder nodes** | Linux, **Docker CE 20.10+** with `docker-buildx-plugin`, `git` |
+| **Deploy nodes** | Linux, Docker (any recent), `rsync` |
 | NFS share | Mounted at the same path on all deploy nodes |
 | PostgreSQL 16+ | Can use the bundled Docker Compose service |
 | Identity provider | At least one of: [Google](https://hoveychen.github.io/muvee/docs/auth/auth-google), [Feishu/Lark](https://hoveychen.github.io/muvee/docs/auth/auth-feishu), [WeCom](https://hoveychen.github.io/muvee/docs/auth/auth-wecom), [DingTalk](https://hoveychen.github.io/muvee/docs/auth/auth-dingtalk) |
+
+> **Builder nodes require Docker CE from [docker.com](https://docs.docker.com/engine/install/ubuntu/), not the `docker.io` package** in Ubuntu's default apt repo. The `docker.io` package often lacks the `docker-buildx-plugin`, causing builds to fail with `unknown flag: --platform`. See the [Agent Installation Guide](https://hoveychen.github.io/muvee/docs/install-agent) for the full step-by-step setup.
 
 ## Documentation
 

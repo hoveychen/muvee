@@ -1,11 +1,11 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages, Settings } from 'lucide-react'
+import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
 import { useSettings } from '../lib/settings'
 import { api } from '../lib/api'
-import type { Node, NodeMetric } from '../lib/types'
+import type { Node, NodeMetric, HealthCheck } from '../lib/types'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
@@ -182,6 +182,15 @@ function MetricBar({ pct, label }: { pct: number; label: string }) {
   )
 }
 
+function parseNodeHealthReport(raw: string | null | undefined): HealthCheck[] | null {
+  if (!raw) return null
+  try {
+    return JSON.parse(atob(raw)) as HealthCheck[]
+  } catch {
+    return null
+  }
+}
+
 export function NodesPage() {
   const [nodes, setNodes] = useState<Node[]>([])
   const [metrics, setMetrics] = useState<Record<string, NodeMetric | null>>({})
@@ -218,6 +227,8 @@ export function NodesPage() {
           const cpuPct = m ? m.cpu_percent : 0
           const memPct = m && m.mem_total_bytes > 0 ? (m.mem_used_bytes / m.mem_total_bytes) * 100 : 0
           const diskPct = m && m.disk_total_bytes > 0 ? (m.disk_used_bytes / m.disk_total_bytes) * 100 : 0
+          const healthChecks = parseNodeHealthReport(n.health_report)
+          const hasIssues = healthChecks?.some(c => c.status !== 'ok')
           return (
             <div key={n.id} style={{ background: 'var(--bg-card)', borderBottom: i < nodes.length - 1 ? '1px solid var(--border)' : 'none', padding: '1rem 1.25rem' }}>
               <div className="flex items-center gap-4">
@@ -259,6 +270,32 @@ export function NodesPage() {
                     <span style={{ color: 'var(--fg-primary)', fontWeight: 500 }}>{t('nodes.updated')}</span>{' '}
                     {new Date(m.collected_at * 1000).toLocaleTimeString()}
                   </div>
+                </div>
+              )}
+              {healthChecks && (
+                <div style={{ marginTop: '10px', paddingLeft: '20px' }}>
+                  {hasIssues ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {healthChecks.filter(c => c.status !== 'ok').map(c => {
+                        const color = c.status === 'warning' ? '#d29922' : '#f85149'
+                        const icon = c.status === 'warning'
+                          ? <AlertCircle size={12} color={color} style={{ flexShrink: 0, marginTop: '1px' }} />
+                          : <XCircle size={12} color={color} style={{ flexShrink: 0, marginTop: '1px' }} />
+                        return (
+                          <div key={c.name} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontFamily: MONO, fontSize: '0.67rem' }}>
+                            {icon}
+                            <span style={{ color, fontWeight: 600 }}>{c.name}</span>
+                            <span style={{ color: 'var(--fg-muted)' }}>{c.message}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontFamily: MONO, fontSize: '0.67rem', color: 'var(--fg-muted)' }}>
+                      <CheckCircle size={12} color="#3fb950" />
+                      all checks passed
+                    </div>
+                  )}
                 </div>
               )}
             </div>
