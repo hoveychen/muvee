@@ -119,7 +119,7 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 			_ = os.Remove(f)
 		}
 	}()
-	buildArgs = append(buildArgs, workDir)
+	buildArgs = append(buildArgs, filepath.Dir(dockerfilePath))
 	if err := runCmd(ctx, logFn, "docker", buildArgs...); err != nil {
 		return "", fmt.Errorf("docker build: %w", err)
 	}
