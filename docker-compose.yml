@@ -151,7 +151,7 @@ services:
       - "traefik.http.services.muvee-authservice.loadbalancer.server.port=4181"
 
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3.6.1
     command:
       - "--configFile=/etc/traefik/traefik.yml"
       - "--certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}"

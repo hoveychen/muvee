@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates rsync git docker-cli
+RUN apk add --no-cache ca-certificates rsync git docker-cli docker-cli-buildx
 
 COPY --from=builder /muvee /usr/local/bin/muvee
 COPY db/migrations /app/db/migrations
