@@ -201,6 +201,7 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{
 		"dataset_nfs_base_path": s.datasetNFSBasePath,
+		"base_domain":           s.baseDomain,
 	})
 }
 

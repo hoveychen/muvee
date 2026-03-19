@@ -22,6 +22,7 @@ export default function ProjectDetail() {
   const [projectSecrets, setProjectSecrets] = useState<ProjectSecretBinding[]>([])
   const [allSecrets, setAllSecrets] = useState<Secret[]>([])
   const [datasetBasePath, setDatasetBasePath] = useState('')
+  const [baseDomain, setBaseDomain] = useState('')
   const [tab, setTab] = useState<Tab>('deploy')
   const [deploying, setDeploying] = useState(false)
   const [editForm, setEditForm] = useState<Partial<Project>>({})
@@ -38,7 +39,10 @@ export default function ProjectDetail() {
     api.projects.secrets(id).then(setProjectSecrets)
     api.secrets.list().then(setAllSecrets)
     api.runtime.config()
-      .then(cfg => setDatasetBasePath(cfg.dataset_nfs_base_path || ''))
+      .then(cfg => {
+        setDatasetBasePath(cfg.dataset_nfs_base_path || '')
+        setBaseDomain(cfg.base_domain || '')
+      })
       .catch(() => setDatasetBasePath(''))
     pollRef.current = setInterval(() => {
       api.projects.deployments(id).then(setDeployments)
@@ -128,7 +132,7 @@ export default function ProjectDetail() {
           </div>
           <div className="flex items-center gap-2">
             <a
-              href={`https://${project.domain_prefix}.domain.com`}
+              href={`https://${project.domain_prefix}.${baseDomain}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all duration-150"
@@ -170,7 +174,7 @@ export default function ProjectDetail() {
           </div>
         </div>
         <div style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)', marginTop: '0.4rem', marginLeft: '1.75rem' }}>
-          {project.domain_prefix}.domain.com
+          {project.domain_prefix}.{baseDomain}
         </div>
       </div>
 

@@ -52,7 +52,18 @@ func runAgent() {
 
 	hostIP := os.Getenv("HOST_IP")
 	if hostIP == "" {
-		hostIP = detectOutboundIP(controlPlaneURL)
+		// When running inside Docker (standalone mode) the outbound IP is the container's
+		// Docker network address, but deployed-app containers bind ports to the Docker host
+		// via "-p 0:<port>". Traefik (also inside Docker) must reach those ports through the
+		// Docker host's gateway IP on the shared network, not the agent container's IP.
+		// Outside Docker (multi-node native agents) the outbound IP is the machine's own IP,
+		// which is exactly what Traefik needs.
+		if isRunningInDocker() {
+			hostIP = detectGatewayIP()
+		}
+		if hostIP == "" {
+			hostIP = detectOutboundIP(controlPlaneURL)
+		}
 	}
 	if hostIP == "" {
 		log.Println("Warning: could not detect HOST_IP; deploy routes may not be reachable by Traefik")
@@ -119,6 +130,33 @@ func detectOutboundIP(controlPlaneURL string) string {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// isRunningInDocker reports whether the current process is running inside a Docker container
+// by checking for the presence of /.dockerenv (created by Docker on container start).
+func isRunningInDocker() bool {
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
+}
+
+// detectGatewayIP returns the default-route gateway IP, which is the Docker host's IP
+// on the container's network. In standalone Docker deployments this is the address
+// Traefik can use to reach ports published with "-p host:container" on the host.
+func detectGatewayIP() string {
+	out, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
+		return ""
+	}
+	// Output looks like: "default via 172.20.0.1 dev eth0 ..."
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.Fields(line)
+		for i, p := range parts {
+			if p == "via" && i+1 < len(parts) {
+				return parts[i+1]
+			}
+		}
+	}
+	return ""
 }
 
 // extractHost parses a URL and returns "host" (without port) suitable for net.Dial.
