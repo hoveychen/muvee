@@ -370,6 +370,14 @@ func (s *Store) ListDeployments(ctx context.Context, projectID uuid.UUID) ([]*De
 	return deployments, nil
 }
 
+// SetDeploymentImageTag stores the image tag built for a deployment.
+func (s *Store) SetDeploymentImageTag(ctx context.Context, id uuid.UUID, imageTag string) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE deployments SET image_tag=$1, updated_at=NOW() WHERE id=$2
+	`, imageTag, id)
+	return err
+}
+
 // SetDeploymentHostPort stores the host port after a successful deploy and marks status as running.
 func (s *Store) SetDeploymentHostPort(ctx context.Context, id uuid.UUID, hostPort int) error {
 	_, err := s.db.Exec(ctx, `

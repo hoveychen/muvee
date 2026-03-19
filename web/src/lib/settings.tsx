@@ -5,7 +5,7 @@ import { api } from './api'
 interface SettingsCtx {
   settings: SystemSettings
   loading: boolean
-  refetch: () => void
+  refetch: () => Promise<void>
 }
 
 const DEFAULT_SETTINGS: SystemSettings = {
@@ -18,7 +18,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
 const SettingsContext = createContext<SettingsCtx>({
   settings: DEFAULT_SETTINGS,
   loading: true,
-  refetch: () => {},
+  refetch: () => Promise.resolve(),
 })
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
@@ -26,7 +26,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(() => {
-    api.public.settings()
+    return api.public.settings()
       .then(s => {
         setSettings(s)
         // Apply branding side-effects

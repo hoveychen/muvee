@@ -231,6 +231,7 @@ func checkBuildCompletions(ctx context.Context, st *store.Store, sched *schedule
 		if err != nil || project == nil {
 			continue
 		}
+		_ = st.SetDeploymentImageTag(ctx, r.deploymentID, res.ImageTag)
 		_ = st.UpdateDeploymentStatus(ctx, r.deploymentID, store.DeploymentStatusDeploying, "")
 		if err := sched.DispatchDeploy(ctx, deployment, project, res.ImageTag); err != nil {
 			fmt.Printf("dispatch deploy error: %v\n", err)

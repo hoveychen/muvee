@@ -192,7 +192,7 @@ export default function OnboardPage() {
 
   const completeOnboarding = async () => {
     await api.admin.updateSettings({ onboarded: 'true' })
-    refetchSettings()
+    await refetchSettings()
     navigate('/projects')
   }
 

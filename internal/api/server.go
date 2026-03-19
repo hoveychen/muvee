@@ -1194,7 +1194,13 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := store.TaskStatus(body.Status)
-	if err := s.store.UpdateTaskStatus(r.Context(), taskID, status, body.Result); err != nil {
+	result := body.Result
+	if body.ImageTag != "" {
+		if b, err := json.Marshal(map[string]string{"image_tag": body.ImageTag}); err == nil {
+			result = string(b)
+		}
+	}
+	if err := s.store.UpdateTaskStatus(r.Context(), taskID, status, result); err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
@@ -1203,6 +1209,19 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 		task, err := s.store.GetTask(r.Context(), taskID)
 		if err == nil && task != nil && task.Type == store.TaskTypeBuild {
 			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusBuilding, "")
+		}
+		jsonOK(w, map[string]string{"status": "ok"})
+		return
+	}
+
+	if status == store.TaskStatusFailed {
+		task, err := s.store.GetTask(r.Context(), taskID)
+		if err == nil && task != nil {
+			errMsg := body.Result
+			if errMsg == "" {
+				errMsg = "task failed"
+			}
+			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusFailed, errMsg)
 		}
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
