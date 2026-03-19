@@ -1291,7 +1291,7 @@ type traefikDynamicConfig struct {
 type traefikHTTP struct {
 	Routers     map[string]traefikRouter     `json:"routers"`
 	Services    map[string]traefikService    `json:"services"`
-	Middlewares map[string]traefikMiddleware `json:"middlewares"`
+	Middlewares map[string]traefikMiddleware `json:"middlewares,omitempty"`
 }
 
 type traefikRouter struct {
@@ -1350,20 +1350,16 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		host := fmt.Sprintf("%s.%s", dep.DomainPrefix, s.baseDomain)
 		backendURL := fmt.Sprintf("http://%s:%d", dep.HostIP, dep.HostPort)
 
-		// HTTPS router
+		// HTTPS router. The web (port 80) entrypoint in traefik.yml already has a
+		// global HTTP→HTTPS redirect, so we only need the HTTPS router here.
+		// Generating a separate HTTP router that references redirect-to-https@file
+		// (a cross-provider middleware) can cause Traefik to reject the entire HTTP
+		// provider config when the cross-provider reference can't be resolved.
 		httpsRouter := traefikRouter{
 			Rule:        fmt.Sprintf("Host(`%s`)", host),
 			EntryPoints: []string{"websecure"},
 			Service:     name,
 			TLS:         &traefikTLS{CertResolver: "letsencrypt"},
-		}
-
-		// HTTP router (redirects to HTTPS via the middleware in dynamic.yml)
-		httpRouter := traefikRouter{
-			Rule:        fmt.Sprintf("Host(`%s`)", host),
-			EntryPoints: []string{"web"},
-			Service:     name,
-			Middlewares: []string{"redirect-to-https@file"},
 		}
 
 		// Per-project ForwardAuth middleware (if auth is required)
@@ -1384,7 +1380,6 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cfg.HTTP.Routers[name] = httpsRouter
-		cfg.HTTP.Routers[name+"-http"] = httpRouter
 		cfg.HTTP.Services[name] = traefikService{
 			LoadBalancer: traefikLB{
 				Servers: []traefikServer{{URL: backendURL}},

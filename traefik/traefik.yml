@@ -1,6 +1,6 @@
 api:
   dashboard: true
-  insecure: false  # Dashboard served via HTTPS router at traefik.BASE_DOMAIN
+  insecure: true  # Temporarily enabled for debugging — revert after diagnosis
 
 entryPoints:
   web:
@@ -41,6 +41,6 @@ providers:
     pollTimeout: "3s"
 
 log:
-  level: INFO
+  level: DEBUG
 
 accessLog: {}
