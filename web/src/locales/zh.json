@@ -1,4 +1,9 @@
 {
+  "health": {
+    "fixCommand": "修复命令",
+    "copy": "复制",
+    "copied": "已复制"
+  },
   "nav": {
     "projects": "项目",
     "datasets": "数据集",
@@ -61,7 +66,18 @@
       "config": "配置",
       "datasets": "数据集",
       "secrets": "密钥",
-      "workspace": "工作区"
+      "workspace": "工作区",
+      "repository": "代码仓库",
+      "tokens": "令牌"
+    },
+    "pushUrl": "GIT 推送地址",
+    "pushUrlHint": "使用任意用户名和您的 API 令牌作为密码。",
+    "repo": {
+      "empty": "仓库为空，请先推送代码。",
+      "branches": "分支",
+      "commits": "提交记录",
+      "files": "文件",
+      "noCommits": "暂无提交"
     },
     "noDeployments": "暂无部署记录，点击「部署」按钮开始。",
     "config": {
@@ -136,6 +152,21 @@
       "useForGitHttps": "用于 git clone（HTTPS）",
       "githubPat": "（GitHub PAT → x-access-token）",
       "failedToUpdate": "更新密钥失败："
+    },
+    "tokens": {
+      "hint": "项目级 API 令牌，用于 git push 和 CLI 访问。每个令牌仅对此项目有效。",
+      "namePlaceholder": "令牌名称（如 CI、笔记本）",
+      "create": "创建令牌",
+      "creating": "创建中…",
+      "created": "令牌已创建 — 请立即复制，之后无法再次查看。",
+      "copyWarning": "此令牌不会再次显示，请妥善保管。",
+      "deleteConfirm": "删除此令牌？使用该令牌的 git 远程仓库或脚本将无法访问。",
+      "empty": "暂无令牌。创建一个以启用此项目的 git push 或 CLI 访问。",
+      "columns": {
+        "name": "名称",
+        "lastUsed": "最近使用",
+        "created": "创建时间"
+      }
     }
   },
   "datasets": {
@@ -169,6 +200,7 @@
     "heading": "创建项目",
     "fields": {
       "name": "名称",
+      "gitSource": "仓库来源",
       "gitUrl": "Git 地址",
       "gitBranch": "Git 分支",
       "domainPrefix": "域名前缀",
@@ -177,6 +209,18 @@
       "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g",
       "volumeMountPath": "持久化存储路径",
       "volumeMountPathHint": "挂载到容器内的路径（例如 /workspace），留空则不挂载。"
+    },
+    "gitSource": {
+      "external": "外部仓库",
+      "hosted": "托管仓库",
+      "hostedHint": "将为您创建一个 Git 仓库。项目创建后会提供推送地址。"
+    },
+    "hostedCreated": {
+      "heading": "仓库已创建",
+      "description": "「{{name}}」的托管仓库已就绪，请使用以下地址推送代码。",
+      "pushUrl": "GIT 推送地址",
+      "authHint": "推送时使用任意用户名，密码填写您的 Muvee API 令牌。",
+      "goToProject": "前往项目"
     },
     "domainOptional": "可选 — 留空时默认使用 \"{{name}}\"",
     "domainRequired": "必填 — 项目名称不能用作子域名",
@@ -273,11 +317,15 @@
     "online": "在线",
     "offline": "离线",
     "empty": "暂无已注册节点，启动 Agent 以连接节点。",
+    "noBuilder": "没有已注册的 Builder 节点，在连接 Builder Agent 之前将无法构建。",
+    "noDeployer": "没有已注册的 Deploy 节点，在连接 Deploy Agent 之前将无法部署。",
     "cpu": "CPU",
     "mem": "内存",
     "disk": "磁盘",
     "load": "负载",
-    "updated": "更新于"
+    "updated": "更新于",
+    "cleanOffline": "清理离线节点",
+    "cleanConfirm": "确认移除所有离线节点？"
   },
   "users": {
     "sectionLabel": "访问控制",
@@ -318,7 +366,8 @@
       "siteName": "站点名称",
       "logoUrl": "Logo 图片地址",
       "faviconUrl": "Favicon 地址",
-      "logoPreview": "Logo 预览",
+      "logoPreview": "预览",
+      "upload": "上传",
       "save": "保存并继续"
     },
     "health": {
@@ -333,7 +382,11 @@
       "nfs_volume": "NFS 存储路径",
       "nfs_dataset": "NFS 数据集路径",
       "builder_agents": "Builder Agent",
-      "deploy_agents": "Deploy Agent"
+      "deploy_agents": "Deploy Agent",
+      "docker": "Docker 守护进程",
+      "docker_buildx": "Docker Buildx 插件",
+      "docker_platform": "跨平台构建 (linux/amd64)",
+      "docker_push": "Docker 推送支持"
     },
     "agents": {
       "instructions": "如何启动 Agent",
@@ -365,6 +418,7 @@
       "logoHint": "显示在侧边栏，建议使用正方形图片。",
       "faviconUrl": "Favicon 地址",
       "preview": "Logo 预览",
+      "upload": "上传",
       "save": "保存修改",
       "saving": "保存中...",
       "saved": "已保存！"
@@ -374,27 +428,6 @@
       "recheck": "重新检测",
       "running": "正在检测...",
       "updatedAt": "更新于 {{time}}"
-    }
-  },
-  "community": {
-    "enterDashboard": "进入控制台",
-    "platformLabel": "私有云平台",
-    "heroTitle": "探索正在运行的应用",
-    "heroDesc": "以下是当前平台上部署在线的全部项目，点击任意卡片即可访问。",
-    "runningCount": "{{count}} 个应用在线",
-    "loginRequired": "需要登录",
-    "noPreview": "预览不可用",
-    "emptyTitle": "暂无在线应用",
-    "emptyDesc": "当有项目部署并运行后，它们将出现在这里",
-    "skillLabel": "AI SKILL 地址",
-    "skillDesc": "将此地址添加到 Cursor / Claude Code / Copilot — AI 会自动学习 muveectl，一键完成部署。",
-    "skillCopy": "复制",
-    "skillCopied": "已复制！",
-    "authModal": {
-      "label": "访问限制",
-      "desc": "此应用需要登录才能访问，点击「前往访问」将跳转到登录页面。",
-      "proceed": "前往访问",
-      "cancel": "取消"
     }
   }
 }

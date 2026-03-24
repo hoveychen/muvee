@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSettings } from '../lib/settings'
 
 const MONO = 'var(--font-mono)'
 
@@ -10,15 +11,18 @@ interface ProviderInfo {
 
 export default function LoginPage() {
   const { t } = useTranslation()
+  const { settings } = useSettings()
   const [providers, setProviders] = useState<ProviderInfo[]>([])
 
+  const brandName = settings.site_name || 'muvee'
+
   useEffect(() => {
-    document.title = 'muvee — Sign In'
+    document.title = `${brandName} — Sign In`
     fetch('/api/auth/providers')
       .then(r => r.json())
       .then((data: ProviderInfo[]) => setProviders(data))
       .catch(() => {})
-  }, [])
+  }, [brandName])
 
   return (
     <div className="min-h-screen flex" style={{ background: 'var(--bg-base)' }}>
@@ -47,12 +51,16 @@ export default function LoginPage() {
         </div>
 
         <div className="relative z-10">
-          <h1
-            className="font-bold leading-none tracking-tight"
-            style={{ fontSize: '6rem', color: 'var(--fg-primary)', lineHeight: '1' }}
-          >
-            muvee
-          </h1>
+          {settings.logo_url ? (
+            <img src={settings.logo_url} alt={brandName} style={{ height: '80px', objectFit: 'contain' }} />
+          ) : (
+            <h1
+              className="font-bold leading-none tracking-tight"
+              style={{ fontSize: '6rem', color: 'var(--fg-primary)', lineHeight: '1' }}
+            >
+              {brandName}
+            </h1>
+          )}
           <p
             className="mt-6 text-lg max-w-sm"
             style={{ color: 'var(--fg-muted)', lineHeight: '1.7', whiteSpace: 'pre-line' }}
@@ -78,12 +86,16 @@ export default function LoginPage() {
         >
           {/* Mobile logo */}
           <div className="lg:hidden mb-10">
-            <h1
-              className="text-5xl font-bold"
-              style={{ color: 'var(--fg-primary)' }}
-            >
-              muvee
-            </h1>
+            {settings.logo_url ? (
+              <img src={settings.logo_url} alt={brandName} style={{ height: '48px', objectFit: 'contain' }} />
+            ) : (
+              <h1
+                className="text-5xl font-bold"
+                style={{ color: 'var(--fg-primary)' }}
+              >
+                {brandName}
+              </h1>
+            )}
           </div>
 
           <div

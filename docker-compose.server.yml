@@ -51,6 +51,13 @@ services:
     # For local/offline builds:
     #   build: { context: ., dockerfile: Dockerfile.local }
     command: ["server"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/agent/config || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     environment:
       DATABASE_URL: postgres://muvee:${POSTGRES_PASSWORD:-muvee}@postgres:5432/muvee?sslmode=disable
       MIGRATIONS_DIR: /app/db/migrations

@@ -76,6 +76,39 @@ func (c *client) do(method, path string, body interface{}) (map[string]interface
 	return c.doSlice(method, path, body)
 }
 
+func (c *client) doRaw(method, path string, body interface{}) ([]byte, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = strings.NewReader(string(data))
+	}
+	req, err := http.NewRequest(method, c.server+path, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		var errObj map[string]string
+		if json.Unmarshal(raw, &errObj) == nil && errObj["error"] != "" {
+			return nil, fmt.Errorf("server error %d: %s", resp.StatusCode, errObj["error"])
+		}
+		return nil, fmt.Errorf("server error %d", resp.StatusCode)
+	}
+	return raw, nil
+}
+
 func (c *client) doSlice(method, path string, body interface{}) (map[string]interface{}, error) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -366,6 +399,11 @@ func parseProjectFlags(args []string, p map[string]interface{}) {
 				p["auth_allowed_domains"] = args[i+1]
 				i++
 			}
+		case "--git-source":
+			if i+1 < len(args) {
+				p["git_source"] = args[i+1]
+				i++
+			}
 		}
 	}
 }
@@ -373,8 +411,12 @@ func parseProjectFlags(args []string, p map[string]interface{}) {
 func cmdProjectsCreate(args []string, c *client, jsonMode bool) error {
 	p := map[string]interface{}{}
 	parseProjectFlags(args, p)
-	if p["name"] == nil || p["git_url"] == nil {
-		return fmt.Errorf("--name and --git-url are required")
+	isHosted := p["git_source"] == "hosted"
+	if p["name"] == nil {
+		return fmt.Errorf("--name is required")
+	}
+	if !isHosted && p["git_url"] == nil {
+		return fmt.Errorf("--git-url is required (or use --git-source hosted)")
 	}
 	result, err := c.do("POST", "/api/projects", p)
 	if err != nil {
@@ -385,6 +427,11 @@ func cmdProjectsCreate(args []string, c *client, jsonMode bool) error {
 		return nil
 	}
 	fmt.Printf("Created project %s (ID: %s)\n", str(result, "name"), str(result, "id"))
+	if pushURL := str(result, "git_push_url"); pushURL != "" {
+		fmt.Printf("Git Push URL:  %s\n", pushURL)
+		fmt.Printf("\nPush your code:\n  git remote add muvee %s\n  git push muvee main\n", pushURL)
+		fmt.Println("\nUse any username and your API token as the password.")
+	}
 	return nil
 }
 
@@ -397,9 +444,12 @@ func cmdProjectsGet(id string, c *client, jsonMode bool) error {
 		printJSON(result)
 		return nil
 	}
-	fmt.Printf("ID:            %s\nName:          %s\nGit URL:       %s\nBranch:        %s\nDomain Prefix: %s\nDockerfile:    %s\n",
-		str(result, "id"), str(result, "name"), str(result, "git_url"), str(result, "git_branch"),
+	fmt.Printf("ID:            %s\nName:          %s\nGit Source:    %s\nGit URL:       %s\nBranch:        %s\nDomain Prefix: %s\nDockerfile:    %s\n",
+		str(result, "id"), str(result, "name"), str(result, "git_source"), str(result, "git_url"), str(result, "git_branch"),
 		str(result, "domain_prefix"), str(result, "dockerfile_path"))
+	if pushURL := str(result, "git_push_url"); pushURL != "" {
+		fmt.Printf("Git Push URL:  %s\n", pushURL)
+	}
 	return nil
 }
 
@@ -657,6 +707,138 @@ func cmdWorkspaceDelete(projectID, remotePath string, c *client) error {
 	return nil
 }
 
+// ─── Hosted Git Repository Commands ──────────────────────────────────────────
+
+func cmdRepoTree(projectID string, args []string, c *client, jsonMode bool) error {
+	ref, path := "", ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--ref":
+			if i+1 < len(args) {
+				ref = args[i+1]
+				i++
+			}
+		case "--path":
+			if i+1 < len(args) {
+				path = args[i+1]
+				i++
+			}
+		}
+	}
+	params := "?"
+	if ref != "" {
+		params += "ref=" + urlEscape(ref) + "&"
+	}
+	if path != "" {
+		params += "path=" + urlEscape(path) + "&"
+	}
+	result, err := c.doRaw("GET", "/api/projects/"+projectID+"/repo/tree"+params, nil)
+	if err != nil {
+		return err
+	}
+	var entries []map[string]interface{}
+	if err := json.Unmarshal(result, &entries); err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(entries)
+		return nil
+	}
+	for _, e := range entries {
+		t := str(e, "type")
+		name := str(e, "name")
+		if t == "tree" {
+			fmt.Printf("  %s/\n", name)
+		} else {
+			fmt.Printf("  %s\n", name)
+		}
+	}
+	return nil
+}
+
+func cmdRepoLog(projectID string, args []string, c *client, jsonMode bool) error {
+	ref := ""
+	limit := "20"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--ref":
+			if i+1 < len(args) {
+				ref = args[i+1]
+				i++
+			}
+		case "--limit":
+			if i+1 < len(args) {
+				limit = args[i+1]
+				i++
+			}
+		}
+	}
+	params := "?limit=" + limit
+	if ref != "" {
+		params += "&ref=" + urlEscape(ref)
+	}
+	result, err := c.doRaw("GET", "/api/projects/"+projectID+"/repo/commits"+params, nil)
+	if err != nil {
+		return err
+	}
+	var commits []map[string]interface{}
+	if err := json.Unmarshal(result, &commits); err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(commits)
+		return nil
+	}
+	for _, cm := range commits {
+		sha := str(cm, "sha")
+		if len(sha) > 8 {
+			sha = sha[:8]
+		}
+		fmt.Printf("%s  %s  (%s, %s)\n", sha, str(cm, "message"), str(cm, "author"), str(cm, "date"))
+	}
+	return nil
+}
+
+func cmdRepoBranches(projectID string, c *client, jsonMode bool) error {
+	result, err := c.doRaw("GET", "/api/projects/"+projectID+"/repo/branches", nil)
+	if err != nil {
+		return err
+	}
+	var branches []map[string]interface{}
+	if err := json.Unmarshal(result, &branches); err != nil {
+		return err
+	}
+	if jsonMode {
+		printJSON(branches)
+		return nil
+	}
+	for _, b := range branches {
+		name := str(b, "name")
+		if b["is_default"] == true {
+			fmt.Printf("* %s\n", name)
+		} else {
+			fmt.Printf("  %s\n", name)
+		}
+	}
+	return nil
+}
+
+func cmdRepoShow(projectID, refPath string, c *client) error {
+	// refPath format: ref:path, e.g. "main:README.md"
+	parts := strings.SplitN(refPath, ":", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("expected format: <ref>:<path> (e.g. main:README.md)")
+	}
+	ref, path := parts[0], parts[1]
+	params := "?ref=" + urlEscape(ref) + "&path=" + urlEscape(path)
+	result, err := c.doRaw("GET", "/api/projects/"+projectID+"/repo/blob"+params, nil)
+	if err != nil {
+		return err
+	}
+	os.Stdout.Write(result)
+	return nil
+}
+
 func multipartWriter(w io.Writer) *multipart.Writer {
 	return multipart.NewWriter(w)
 }
@@ -760,8 +942,8 @@ func cmdDatasetsDelete(id string, c *client) error {
 
 // ─── Tokens ───────────────────────────────────────────────────────────────────
 
-func cmdTokensList(c *client, jsonMode bool) error {
-	items, err := c.doArray("GET", "/api/tokens", nil)
+func cmdTokensList(projectID string, c *client, jsonMode bool) error {
+	items, err := c.doArray("GET", "/api/projects/"+projectID+"/tokens", nil)
 	if err != nil {
 		return err
 	}
@@ -770,21 +952,21 @@ func cmdTokensList(c *client, jsonMode bool) error {
 		return nil
 	}
 	if len(items) == 0 {
-		fmt.Println("No API tokens found.")
+		fmt.Println("No API tokens found for this project.")
 		return nil
 	}
 	printTable(items, []string{"id", "name", "last_used_at", "created_at"})
 	return nil
 }
 
-func cmdTokensCreate(args []string, c *client, jsonMode bool) error {
-	name := "CLI Token"
+func cmdTokensCreate(projectID string, args []string, c *client, jsonMode bool) error {
+	name := "Git Token"
 	for i, a := range args {
 		if a == "--name" && i+1 < len(args) {
 			name = args[i+1]
 		}
 	}
-	result, err := c.do("POST", "/api/tokens", map[string]string{"name": name})
+	result, err := c.do("POST", "/api/projects/"+projectID+"/tokens", map[string]string{"name": name})
 	if err != nil {
 		return err
 	}
@@ -797,12 +979,12 @@ func cmdTokensCreate(args []string, c *client, jsonMode bool) error {
 	return nil
 }
 
-func cmdTokensDelete(id string, c *client) error {
-	_, err := c.do("DELETE", "/api/tokens/"+id, nil)
+func cmdTokensDelete(projectID, tokenID string, c *client) error {
+	_, err := c.do("DELETE", "/api/projects/"+projectID+"/tokens/"+tokenID, nil)
 	if err != nil {
 		return err
 	}
-	fmt.Println("Deleted token", id)
+	fmt.Println("Deleted token", tokenID)
 	return nil
 }
 
@@ -1097,10 +1279,10 @@ Datasets:
   datasets scan ID              Trigger an NFS scan
   datasets delete ID            Delete a dataset
 
-API Tokens:
-  tokens list                   List API tokens
-  tokens create [--name NAME]   Create a new API token
-  tokens delete ID              Delete an API token
+API Tokens (project-scoped):
+  tokens PROJECT_ID list                   List tokens for a project
+  tokens PROJECT_ID create [--name NAME]   Create a project token
+  tokens PROJECT_ID delete TOKEN_ID        Delete a project token
 
 Secrets:
   secrets list                  List secrets (values are never returned)
@@ -1261,6 +1443,31 @@ func main() {
 				os.Exit(1)
 			}
 			runErr = cmdProjectUnbindSecret(subArgs[0], subArgs[1], c)
+		case "repo":
+			if len(subArgs) < 2 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects repo <PROJECT_ID> <tree|log|branches|show> [args...]")
+				os.Exit(1)
+			}
+			projectID := subArgs[0]
+			repoCmd := subArgs[1]
+			repoArgs := subArgs[2:]
+			switch repoCmd {
+			case "tree":
+				runErr = cmdRepoTree(projectID, repoArgs, c, jsonMode)
+			case "log":
+				runErr = cmdRepoLog(projectID, repoArgs, c, jsonMode)
+			case "branches":
+				runErr = cmdRepoBranches(projectID, c, jsonMode)
+			case "show":
+				if len(repoArgs) == 0 {
+					fmt.Fprintln(os.Stderr, "Usage: muveectl projects repo <PROJECT_ID> show <ref>:<path>")
+					os.Exit(1)
+				}
+				runErr = cmdRepoShow(projectID, repoArgs[0], c)
+			default:
+				fmt.Fprintln(os.Stderr, "Unknown repo subcommand:", repoCmd)
+				os.Exit(1)
+			}
 		case "workspace":
 			if len(subArgs) < 2 {
 				fmt.Fprintln(os.Stderr, "Usage: muveectl projects workspace <PROJECT_ID> <ls|pull|push|rm> [args...]")
@@ -1335,23 +1542,24 @@ func main() {
 		}
 
 	case "tokens":
-		if len(rest) == 0 {
-			usage()
+		if len(rest) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: muveectl tokens <PROJECT_ID> <list|create|delete> [args]")
 			os.Exit(1)
 		}
-		sub := rest[0]
-		subArgs := rest[1:]
+		projID := rest[0]
+		sub := rest[1]
+		subArgs := rest[2:]
 		switch sub {
 		case "list":
-			runErr = cmdTokensList(c, jsonMode)
+			runErr = cmdTokensList(projID, c, jsonMode)
 		case "create":
-			runErr = cmdTokensCreate(subArgs, c, jsonMode)
+			runErr = cmdTokensCreate(projID, subArgs, c, jsonMode)
 		case "delete":
 			if len(subArgs) == 0 {
-				fmt.Fprintln(os.Stderr, "Usage: muveectl tokens delete <ID>")
+				fmt.Fprintln(os.Stderr, "Usage: muveectl tokens <PROJECT_ID> delete <TOKEN_ID>")
 				os.Exit(1)
 			}
-			runErr = cmdTokensDelete(subArgs[0], c)
+			runErr = cmdTokensDelete(projID, subArgs[0], c)
 		default:
 			fmt.Fprintln(os.Stderr, "Unknown tokens subcommand:", sub)
 			os.Exit(1)

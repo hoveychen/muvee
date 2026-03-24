@@ -4,6 +4,12 @@ import type { PublicProject } from './lib/types'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from './lib/theme'
 
+interface BrandingSettings {
+  site_name: string
+  logo_url: string
+  favicon_url: string
+}
+
 function getApiBase(): string {
   return window.MUVEE_API_BASE ?? ''
 }
@@ -16,6 +22,12 @@ function fetchPublicProjects(): Promise<PublicProject[]> {
   return fetch(`${getApiBase()}/api/public/projects`)
     .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
     .then(data => Array.isArray(data) ? data : [])
+}
+
+function fetchBranding(): Promise<BrandingSettings> {
+  return fetch(`${getApiBase()}/api/public/settings`)
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+    .catch(() => ({ site_name: '', logo_url: '', favicon_url: '' }))
 }
 
 function epochAgo(epochSeconds: number): string {
@@ -31,12 +43,14 @@ const MONO = 'var(--font-mono)'
 export default function Community() {
   const [projects, setProjects] = useState<PublicProject[]>([])
   const [loading, setLoading] = useState(true)
+  const [branding, setBranding] = useState<BrandingSettings>({ site_name: '', logo_url: '', favicon_url: '' })
 
   useEffect(() => {
     fetchPublicProjects()
       .then(setProjects)
       .catch(() => setProjects([]))
       .finally(() => setLoading(false))
+    fetchBranding().then(setBranding)
   }, [])
 
   return (
@@ -56,8 +70,8 @@ export default function Community() {
         .community-card:hover .card-img { transform: scale(1.03); }
       `}</style>
 
-      <Header />
-      <Hero projectCount={loading ? -1 : projects.length} />
+      <Header branding={branding} />
+      <Hero projectCount={loading ? -1 : projects.length} branding={branding} />
 
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem 1.5rem 6rem' }}>
         {loading ? (
@@ -80,9 +94,10 @@ export default function Community() {
 
 // ─── Header ──────────────────────────────────────────────────────────────────
 
-function Header() {
+function Header({ branding }: { branding: BrandingSettings }) {
   const { t, i18n } = useTranslation()
   const { theme, toggleTheme } = useTheme()
+  const brandName = branding.site_name || 'Muvee'
 
   const toggleLang = () => i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')
 
@@ -119,9 +134,9 @@ function Header() {
       }}>
         {/* Logo */}
         <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
-          <img src={`${getApiBase()}/favicon.png`} alt="Muvee" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+          <img src={branding.logo_url || `${getApiBase()}/favicon.png`} alt={brandName} style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
           <span style={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.02em', color: 'var(--fg-primary)' }}>
-            Muvee
+            {brandName}
           </span>
         </div>
 
@@ -299,8 +314,9 @@ function SkillCopyBox() {
   )
 }
 
-function Hero({ projectCount }: { projectCount: number }) {
+function Hero({ projectCount, branding }: { projectCount: number; branding: BrandingSettings }) {
   const { t } = useTranslation()
+  const brandName = branding.site_name || 'Muvee'
   return (
     <div style={{
       position: 'relative',
@@ -351,8 +367,8 @@ function Hero({ projectCount }: { projectCount: number }) {
           color: 'var(--fg-muted)',
           marginBottom: '1.5rem',
         }}>
-          <img src={`${getApiBase()}/favicon.png`} alt="" style={{ width: '14px', height: '14px', objectFit: 'contain' }} />
-          Muvee · {t('community.platformLabel')}
+          <img src={branding.logo_url || `${getApiBase()}/favicon.png`} alt="" style={{ width: '14px', height: '14px', objectFit: 'contain' }} />
+          {brandName} · {t('community.platformLabel')}
         </div>
 
         <h1 style={{

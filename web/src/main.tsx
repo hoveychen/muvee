@@ -7,7 +7,6 @@ import { AuthProvider, useAuth } from './lib/auth'
 import { ThemeProvider } from './lib/theme'
 import { SettingsProvider } from './lib/settings'
 import LoginPage from './pages/Login'
-import Community from './pages/Community'
 import Projects from './pages/Projects'
 import NewProject from './pages/NewProject'
 import ProjectDetail from './pages/ProjectDetail'
@@ -29,6 +28,16 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function RootRedirect() {
+  const { user, loading } = useAuth()
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg-base)', fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)', fontSize: '0.8rem' }}>
+      Loading...
+    </div>
+  )
+  return <Navigate to={user ? '/projects' : '/login'} replace />
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -37,7 +46,7 @@ function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
-          <Route path="/" element={<Community />} />
+          <Route path="/" element={<RootRedirect />} />
           {/* Onboarding – requires auth but bypasses the normal layout */}
           <Route path="/onboard" element={<RequireAuth><OnboardPage /></RequireAuth>} />
           <Route element={<RequireAuth><Layout /></RequireAuth>}>

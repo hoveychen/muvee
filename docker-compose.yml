@@ -60,6 +60,13 @@ services:
     # For local/offline builds:
     #   build: { context: ., dockerfile: Dockerfile.local }
     command: ["server"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/agent/config || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     environment:
       DATABASE_URL: postgres://muvee:${POSTGRES_PASSWORD:-muvee}@postgres:5432/muvee?sslmode=disable
       MIGRATIONS_DIR: /app/db/migrations
@@ -190,7 +197,8 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - muvee-server
+      muvee-server:
+        condition: service_healthy
     networks:
       - muvee-net
 
@@ -219,7 +227,8 @@ services:
       # Dataset NFS base path: agent reads datasets from this location for rsync/deploy mounts.
       - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:ro
     depends_on:
-      - muvee-server
+      muvee-server:
+        condition: service_healthy
     networks:
       - muvee-net
 

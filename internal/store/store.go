@@ -90,10 +90,13 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 	if p.MemoryLimit == "" {
 		p.MemoryLimit = "4g"
 	}
+	if p.GitSource == "" {
+		p.GitSource = GitSourceExternal
+	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO projects (id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-	`, p.ID, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.CreatedAt, p.UpdatedAt)
+		INSERT INTO projects (id, name, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+	`, p.ID, p.Name, p.GitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -104,9 +107,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 func (s *Store) GetProject(ctx context.Context, id uuid.UUID) (*Project, error) {
 	var p Project
 	err := s.db.QueryRow(ctx, `
-		SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at
+		SELECT id, name, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at
 		FROM projects WHERE id = $1
-	`, id).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt)
+	`, id).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -117,9 +120,9 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	var query string
 	var args []interface{}
 	if isAdmin {
-		query = `SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at FROM projects ORDER BY created_at DESC`
+		query = `SELECT id, name, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at FROM projects ORDER BY created_at DESC`
 	} else {
-		query = `SELECT p.id, p.name, p.git_url, p.git_branch, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.container_port, p.memory_limit, p.volume_mount_path, p.created_at, p.updated_at
+		query = `SELECT p.id, p.name, p.git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.container_port, p.memory_limit, p.volume_mount_path, p.created_at, p.updated_at
 			FROM projects p JOIN project_members pm ON p.id = pm.project_id WHERE pm.user_id = $1 ORDER BY p.created_at DESC`
 		args = []interface{}{userID}
 	}
@@ -131,7 +134,7 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	projects := make([]*Project, 0)
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, &p)
@@ -145,8 +148,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		p.ContainerPort = 8080
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, domain_prefix=$4, dockerfile_path=$5, auth_required=$6, auth_allowed_domains=$7, container_port=$8, memory_limit=$9, volume_mount_path=$10, updated_at=$11 WHERE id=$12
-	`, p.Name, p.GitURL, p.GitBranch, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.UpdatedAt, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, container_port=$9, memory_limit=$10, volume_mount_path=$11, updated_at=$12 WHERE id=$13
+	`, p.Name, p.GitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.UpdatedAt, p.ID)
 	return err
 }
 
@@ -189,9 +192,9 @@ func (s *Store) ListPublicRunningProjects(ctx context.Context) ([]*PublicProject
 func (s *Store) GetProjectByDomainPrefix(ctx context.Context, prefix string) (*Project, error) {
 	var p Project
 	err := s.db.QueryRow(ctx, `
-		SELECT id, name, git_url, git_branch, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at
+		SELECT id, name, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at
 		FROM projects WHERE domain_prefix = $1
-	`, prefix).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt)
+	`, prefix).Scan(&p.ID, &p.Name, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -559,7 +562,18 @@ func (s *Store) GetDeployNodes(ctx context.Context) ([]*Node, error) {
 }
 
 func (s *Store) TouchNode(ctx context.Context, nodeID uuid.UUID) error {
-	_, err := s.db.Exec(ctx, `UPDATE nodes SET last_seen_at = $1 WHERE id = $2`, time.Now(), nodeID)
+	tag, err := s.db.Exec(ctx, `UPDATE nodes SET last_seen_at = $1 WHERE id = $2`, time.Now(), nodeID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("node %s not found", nodeID)
+	}
+	return nil
+}
+
+func (s *Store) DeleteNode(ctx context.Context, nodeID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM nodes WHERE id = $1`, nodeID)
 	return err
 }
 
@@ -930,26 +944,27 @@ func (s *Store) SetNodeHealthReport(ctx context.Context, nodeID uuid.UUID, repor
 
 // ─── API Tokens ───────────────────────────────────────────────────────────────
 
-func (s *Store) CreateAPIToken(ctx context.Context, userID uuid.UUID, name, tokenHash string) (*ApiToken, error) {
+func (s *Store) CreateAPIToken(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID, name, tokenHash string) (*ApiToken, error) {
 	t := &ApiToken{
 		ID:        uuid.New(),
 		UserID:    userID,
+		ProjectID: projectID,
 		Name:      name,
 		TokenHash: tokenHash,
 		CreatedAt: time.Now(),
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO api_tokens (id, user_id, name, token_hash, created_at)
-		VALUES ($1,$2,$3,$4,$5)
-	`, t.ID, t.UserID, t.Name, t.TokenHash, t.CreatedAt)
+		INSERT INTO api_tokens (id, user_id, project_id, name, token_hash, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6)
+	`, t.ID, t.UserID, t.ProjectID, t.Name, t.TokenHash, t.CreatedAt)
 	return t, err
 }
 
 func (s *Store) GetAPITokenByHash(ctx context.Context, tokenHash string) (*ApiToken, error) {
 	var t ApiToken
 	err := s.db.QueryRow(ctx, `
-		SELECT id, user_id, name, token_hash, last_used_at, created_at FROM api_tokens WHERE token_hash = $1
-	`, tokenHash).Scan(&t.ID, &t.UserID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.CreatedAt)
+		SELECT id, user_id, project_id, name, token_hash, last_used_at, created_at FROM api_tokens WHERE token_hash = $1
+	`, tokenHash).Scan(&t.ID, &t.UserID, &t.ProjectID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -961,10 +976,10 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, tokenHash string) (*ApiTo
 	return &t, nil
 }
 
-func (s *Store) ListAPITokensForUser(ctx context.Context, userID uuid.UUID) ([]*ApiToken, error) {
+func (s *Store) ListAPITokensForProject(ctx context.Context, projectID uuid.UUID) ([]*ApiToken, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, user_id, name, token_hash, last_used_at, created_at FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC
-	`, userID)
+		SELECT id, user_id, project_id, name, token_hash, last_used_at, created_at FROM api_tokens WHERE project_id = $1 ORDER BY created_at DESC
+	`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -972,7 +987,7 @@ func (s *Store) ListAPITokensForUser(ctx context.Context, userID uuid.UUID) ([]*
 	tokens := make([]*ApiToken, 0)
 	for rows.Next() {
 		var t ApiToken
-		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.ProjectID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		tokens = append(tokens, &t)

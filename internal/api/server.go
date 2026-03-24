@@ -3,11 +3,14 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +20,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/gitrepo"
 	"github.com/hoveychen/muvee/internal/monitor"
 	"github.com/hoveychen/muvee/internal/scheduler"
 	"github.com/hoveychen/muvee/internal/store"
@@ -35,6 +39,8 @@ type Server struct {
 	registryPassword   string   // registry basic-auth password distributed to agents
 	volumeNFSBasePath  string   // base NFS path for project workspace volumes
 	datasetNFSBasePath string   // base NFS path for dataset files
+	gitRepoBasePath    string   // base path for hosted bare git repos
+	brandingDir        string   // directory for uploaded branding assets (logo, favicon)
 	cliPending         sync.Map // state -> cli_port (string)
 }
 
@@ -47,6 +53,8 @@ type ServerConfig struct {
 	RegistryPassword   string
 	VolumeNFSBasePath  string
 	DatasetNFSBasePath string
+	GitRepoBasePath    string
+	BrandingDir        string
 }
 
 func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Scheduler, mon *monitor.Monitor, cfg ServerConfig) *Server {
@@ -66,6 +74,8 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		registryPassword:   cfg.RegistryPassword,
 		volumeNFSBasePath:  cfg.VolumeNFSBasePath,
 		datasetNFSBasePath: cfg.DatasetNFSBasePath,
+		gitRepoBasePath:    cfg.GitRepoBasePath,
+		brandingDir:        cfg.BrandingDir,
 	}
 }
 
@@ -115,6 +125,14 @@ func (s *Server) Router() http.Handler {
 	// Public system settings (branding, onboarding state) – no auth required
 	r.Get("/api/public/settings", s.handleGetPublicSettings)
 
+	// Public branding assets (uploaded logo/favicon) – no auth required
+	r.Get("/api/public/branding/{filename}", s.handleServeBranding)
+
+	// Git Smart HTTP protocol – uses its own Basic Auth (API tokens)
+	if s.gitRepoBasePath != "" {
+		r.Handle("/git/*", gitrepo.HTTPHandler(s.gitRepoBasePath, s.gitHTTPAuth))
+	}
+
 	// Protected
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
@@ -122,10 +140,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/me", s.handleMe)
 		r.Get("/api/runtime/config", s.handleRuntimeConfig)
 
-		// API Tokens
-		r.Get("/api/tokens", s.listTokens)
-		r.Post("/api/tokens", s.createToken)
-		r.Delete("/api/tokens/{id}", s.deleteToken)
+		// Project-scoped API Tokens
+		r.Get("/api/projects/{id}/tokens", s.listProjectTokens)
+		r.Post("/api/projects/{id}/tokens", s.createProjectToken)
+		r.Delete("/api/projects/{id}/tokens/{tokenId}", s.deleteProjectToken)
 
 		// Secrets
 		r.Get("/api/secrets", s.listSecrets)
@@ -150,6 +168,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/projects/{id}/workspace/upload", s.workspaceUpload)
 		r.Delete("/api/projects/{id}/workspace", s.workspaceDelete)
 
+		// Hosted git repository browser
+		r.Get("/api/projects/{id}/repo/tree", s.repoTree)
+		r.Get("/api/projects/{id}/repo/blob", s.repoBlob)
+		r.Get("/api/projects/{id}/repo/commits", s.repoCommits)
+		r.Get("/api/projects/{id}/repo/branches", s.repoBranches)
+
 		// Datasets
 		r.Get("/api/datasets", s.listDatasets)
 		r.Post("/api/datasets", s.createDataset)
@@ -164,12 +188,14 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.AdminOnly)
 			r.Get("/api/nodes", s.listNodes)
+			r.Delete("/api/nodes/{id}", s.deleteNode)
 			r.Get("/api/nodes/{id}/metrics", s.getNodeMetrics)
 			r.Get("/api/users", s.listUsers)
 			r.Put("/api/users/{id}/role", s.setUserRole)
 			// System settings (admin-only read/write)
 			r.Get("/api/admin/settings", s.handleGetAdminSettings)
 			r.Put("/api/admin/settings", s.handleUpdateAdminSettings)
+			r.Post("/api/admin/branding/upload", s.handleBrandingUpload)
 			// Server-side health checks
 			r.Get("/api/admin/health", s.handleGetSystemHealth)
 		})
@@ -272,7 +298,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	// Check if this was initiated by the CLI device-flow
 	if portVal, ok := s.cliPending.LoadAndDelete(state); ok {
 		port := portVal.(string)
-		apiToken, err := s.auth.CreateAPIToken(r.Context(), user.ID, "CLI Token")
+		apiToken, err := s.auth.CreateAPIToken(r.Context(), user.ID, nil, "CLI Token")
 		if err != nil {
 			http.Error(w, "failed to create token", http.StatusInternalServerError)
 			return
@@ -353,6 +379,8 @@ muveectl projects list
 muveectl projects create --name NAME --git-url URL \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
   [--auth-required] [--auth-domains example.com,corp.com]
+muveectl projects create --name NAME --git-source hosted \
+  [--domain PREFIX] [--dockerfile PATH]
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS]
 muveectl projects deploy PROJECT_ID
@@ -395,12 +423,14 @@ muveectl datasets scan DATASET_ID
 muveectl datasets delete DATASET_ID
 ` + "```" + `
 
-## API Tokens
+## API Tokens (project-scoped)
+
+Tokens are scoped to a single project. Use them for git push authentication and project-level CLI access.
 
 ` + "```" + `bash
-muveectl tokens list
-muveectl tokens create [--name NAME]   # token value shown once on creation
-muveectl tokens delete TOKEN_ID
+muveectl tokens PROJECT_ID list
+muveectl tokens PROJECT_ID create [--name NAME]   # token value shown once on creation
+muveectl tokens PROJECT_ID delete TOKEN_ID
 ` + "```" + `
 
 ## Secrets
@@ -456,6 +486,30 @@ Datasets are injected as Docker volumes at ` + "`/data/<dataset_name>`" + ` insi
 | ` + "`dependency`" + ` | Read-only — rsync-cached local copy |
 | ` + "`readwrite`" + `  | Read-write — direct NFS mount |
 
+## Hosted Git Repositories
+
+When creating a project with ` + "`--git-source hosted`" + `, Muvee creates a bare git repository on the server. After creation, you receive a push URL. Push your code using any git username and your Muvee API token as the password:
+
+` + "```" + `bash
+muveectl projects create --name my-app --git-source hosted
+# → Created project my-app (ID: abc-123)
+# → Git Push URL: https://muvee.example.com/git/abc-123.git
+
+git remote add muvee https://muvee.example.com/git/abc-123.git
+git push muvee main
+# When prompted: username = anything, password = your mvt_* project token
+# Create a token first: muveectl tokens PROJECT_ID create --name "git push"
+` + "```" + `
+
+### Repository Browser
+
+` + "```" + `bash
+muveectl projects repo PROJECT_ID tree [--ref main] [--path src/]
+muveectl projects repo PROJECT_ID log [--ref main] [--limit 20]
+muveectl projects repo PROJECT_ID branches
+muveectl projects repo PROJECT_ID show main:README.md
+` + "```" + `
+
 ## Typical Workflow
 
 1. Get project IDs: ` + "`muveectl projects list --json`" + `
@@ -465,9 +519,9 @@ Datasets are injected as Docker volumes at ` + "`/data/<dataset_name>`" + ` insi
 
 // ─── API Tokens ──────────────────────────────────────────────────────────────
 
-func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
-	user := auth.UserFromCtx(r.Context())
-	tokens, err := s.store.ListAPITokensForUser(r.Context(), user.ID)
+func (s *Server) listProjectTokens(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	tokens, err := s.store.ListAPITokensForProject(r.Context(), projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -495,8 +549,9 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
-func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createProjectToken(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -505,9 +560,9 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Name == "" {
-		body.Name = "CLI Token"
+		body.Name = "Git Token"
 	}
-	token, err := s.auth.CreateAPIToken(r.Context(), user.ID, body.Name)
+	token, err := s.auth.CreateAPIToken(r.Context(), user.ID, &projectID, body.Name)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -520,10 +575,10 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+func (s *Server) deleteProjectToken(w http.ResponseWriter, r *http.Request) {
+	tokenID := mustParseUUID(chi.URLParam(r, "tokenId"))
 	user := auth.UserFromCtx(r.Context())
-	if err := s.store.DeleteAPIToken(r.Context(), id, user.ID); err != nil {
+	if err := s.store.DeleteAPIToken(r.Context(), tokenID, user.ID); err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
@@ -563,6 +618,12 @@ func validateDomainPrefix(prefix string) error {
 func validateProject(p *store.Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("project name must not be empty")
+	}
+	if p.GitSource == "" {
+		p.GitSource = store.GitSourceExternal
+	}
+	if p.GitSource != store.GitSourceExternal && p.GitSource != store.GitSourceHosted {
+		return fmt.Errorf("git_source must be 'external' or 'hosted'")
 	}
 	if p.DomainPrefix == "" {
 		if err := validateDomainPrefix(p.Name); err != nil {
@@ -616,6 +677,11 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 500)
 		return
 	}
+	for _, p := range projects {
+		if p.GitSource == store.GitSourceHosted {
+			p.GitPushURL = s.hostedGitPushURL(p.ID)
+		}
+	}
 	jsonOK(w, projects)
 }
 
@@ -637,12 +703,35 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, fmt.Errorf("domain prefix %q is already in use by another project", p.DomainPrefix), 409)
 		return
 	}
+
+	// For hosted repos: initialize a bare git repo and set the sentinel git_url.
+	if p.GitSource == store.GitSourceHosted {
+		if s.gitRepoBasePath == "" {
+			jsonErr(w, fmt.Errorf("hosted git repositories are not enabled on this server (GIT_REPO_BASE_PATH not set)"), 400)
+			return
+		}
+	}
+
 	p.OwnerID = user.ID
 	created, err := s.store.CreateProject(r.Context(), &p)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
+
+	if created.GitSource == store.GitSourceHosted {
+		repoPath := gitrepo.RepoPath(s.gitRepoBasePath, created.ID)
+		if err := gitrepo.InitBareRepo(repoPath); err != nil {
+			// Clean up the project if repo init fails.
+			_ = s.store.DeleteProject(r.Context(), created.ID)
+			jsonErr(w, fmt.Errorf("failed to initialize git repository: %w", err), 500)
+			return
+		}
+		created.GitURL = "hosted://" + created.ID.String()
+		_ = s.store.UpdateProject(r.Context(), created)
+		created.GitPushURL = s.hostedGitPushURL(created.ID)
+	}
+
 	jsonOK(w, created)
 }
 
@@ -658,6 +747,9 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	if err != nil || p == nil {
 		jsonErr(w, err, 404)
 		return
+	}
+	if p.GitSource == store.GitSourceHosted {
+		p.GitPushURL = s.hostedGitPushURL(p.ID)
 	}
 	jsonOK(w, p)
 }
@@ -701,6 +793,12 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		jsonErr(w, nil, 403)
 		return
+	}
+	// Clean up hosted git repo if applicable.
+	if s.gitRepoBasePath != "" {
+		if p, err := s.store.GetProject(r.Context(), id); err == nil && p != nil && p.GitSource == store.GitSourceHosted {
+			_ = gitrepo.DeleteRepo(gitrepo.RepoPath(s.gitRepoBasePath, id))
+		}
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
 	_ = s.store.DeleteProject(r.Context(), id)
@@ -944,6 +1042,15 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, nodes)
+}
+
+func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	if err := s.store.DeleteNode(r.Context(), id); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // getNodeMetrics returns the latest host-level metric sample for a node.
@@ -1339,9 +1446,8 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 	cfg := traefikDynamicConfig{
 		HTTP: traefikHTTP{
-			Routers:     make(map[string]traefikRouter),
-			Services:    make(map[string]traefikService),
-			Middlewares: make(map[string]traefikMiddleware),
+			Routers:  make(map[string]traefikRouter),
+			Services: make(map[string]traefikService),
 		},
 	}
 
@@ -1364,6 +1470,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Per-project ForwardAuth middleware (if auth is required)
 		if dep.AuthRequired {
+			if cfg.HTTP.Middlewares == nil {
+				cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
+			}
 			mwName := name + "-auth"
 			verifyURL := fmt.Sprintf("%s/verify?project=%s", s.authServiceURL, dep.ProjectID)
 			if dep.AuthAllowedDomains != "" {
@@ -1756,4 +1865,170 @@ func (s *Server) workspaceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// ─── Hosted Git Repository ──────────────────────────────────────────────────
+
+// hostedGitPushURL computes the user-facing push URL for a hosted project.
+func (s *Server) hostedGitPushURL(projectID uuid.UUID) string {
+	scheme := "https"
+	if s.baseDomain == "localhost" || strings.HasPrefix(s.baseDomain, "localhost:") {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s/git/%s.git", scheme, s.baseDomain, projectID)
+}
+
+// gitHTTPAuth authenticates a Git Smart HTTP request using HTTP Basic Auth.
+// The password is treated as an mvt_* API token (or the agent secret).
+func (s *Server) gitHTTPAuth(r *http.Request, projectID uuid.UUID) error {
+	_, password, ok := r.BasicAuth()
+	if !ok {
+		return fmt.Errorf("basic auth required")
+	}
+
+	// Allow agent secret for builder cloning.
+	if s.agentSecret != "" && password == s.agentSecret {
+		return nil
+	}
+
+	// Validate API token.
+	if !strings.HasPrefix(password, "mvt_") {
+		return fmt.Errorf("invalid token")
+	}
+	hash := sha256.Sum256([]byte(password))
+	hashHex := hex.EncodeToString(hash[:])
+	token, err := s.store.GetAPITokenByHash(r.Context(), hashHex)
+	if err != nil || token == nil {
+		return fmt.Errorf("invalid token")
+	}
+
+	// If the token is project-scoped, it must match the requested project.
+	if token.ProjectID != nil && *token.ProjectID != projectID {
+		return fmt.Errorf("token not valid for this project")
+	}
+
+	// For non-scoped tokens (legacy / CLI), fall back to project membership check.
+	if token.ProjectID == nil {
+		user, err := s.store.GetUserByID(r.Context(), token.UserID)
+		if err != nil || user == nil {
+			return fmt.Errorf("user not found")
+		}
+		canAccess, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+		if !canAccess {
+			return fmt.Errorf("access denied")
+		}
+	}
+	return nil
+}
+
+// repoTree lists files in a hosted repo directory.
+func (s *Server) repoTree(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.requireHostedProject(w, r)
+	if !ok {
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	path := r.URL.Query().Get("path")
+	repoPath := gitrepo.RepoPath(s.gitRepoBasePath, p.ID)
+	entries, err := gitrepo.ListTree(repoPath, ref, path)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if entries == nil {
+		entries = []gitrepo.TreeEntry{}
+	}
+	jsonOK(w, entries)
+}
+
+// repoBlob returns the content of a file in a hosted repo.
+func (s *Server) repoBlob(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.requireHostedProject(w, r)
+	if !ok {
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		jsonErr(w, fmt.Errorf("path is required"), 400)
+		return
+	}
+	repoPath := gitrepo.RepoPath(s.gitRepoBasePath, p.ID)
+	content, err := gitrepo.ReadBlob(repoPath, ref, path)
+	if err != nil {
+		jsonErr(w, err, 404)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Write(content)
+}
+
+// repoCommits lists recent commits on a branch.
+func (s *Server) repoCommits(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.requireHostedProject(w, r)
+	if !ok {
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	repoPath := gitrepo.RepoPath(s.gitRepoBasePath, p.ID)
+	commits, err := gitrepo.ListCommits(repoPath, ref, limit)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if commits == nil {
+		commits = []gitrepo.Commit{}
+	}
+	jsonOK(w, commits)
+}
+
+// repoBranches lists all branches in a hosted repo.
+func (s *Server) repoBranches(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.requireHostedProject(w, r)
+	if !ok {
+		return
+	}
+	repoPath := gitrepo.RepoPath(s.gitRepoBasePath, p.ID)
+	branches, err := gitrepo.ListBranches(repoPath)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if branches == nil {
+		branches = []gitrepo.Branch{}
+	}
+	jsonOK(w, branches)
+}
+
+// requireHostedProject is a helper that extracts and validates the project
+// for repo browser endpoints. Returns the project and true, or writes an
+// error response and returns false.
+func (s *Server) requireHostedProject(w http.ResponseWriter, r *http.Request) (*store.Project, bool) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !ok {
+		jsonErr(w, nil, 404)
+		return nil, false
+	}
+	p, err := s.store.GetProject(r.Context(), id)
+	if err != nil || p == nil {
+		jsonErr(w, err, 404)
+		return nil, false
+	}
+	if p.GitSource != store.GitSourceHosted {
+		jsonErr(w, fmt.Errorf("repository browser is only available for hosted repositories"), 400)
+		return nil, false
+	}
+	if s.gitRepoBasePath == "" {
+		jsonErr(w, fmt.Errorf("hosted git repositories are not enabled"), 400)
+		return nil, false
+	}
+	return p, true
 }

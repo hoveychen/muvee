@@ -237,7 +237,8 @@ func (s *Service) ParseJWT(tokenStr string) (*Claims, error) {
 }
 
 // CreateAPIToken generates a new random API token for a user, stores its hash, and returns the token.
-func (s *Service) CreateAPIToken(ctx context.Context, userID uuid.UUID, name string) (*store.ApiToken, error) {
+// If projectID is non-nil the token is scoped to that project.
+func (s *Service) CreateAPIToken(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID, name string) (*store.ApiToken, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, fmt.Errorf("generate token: %w", err)
@@ -246,7 +247,7 @@ func (s *Service) CreateAPIToken(ctx context.Context, userID uuid.UUID, name str
 	hash := sha256.Sum256([]byte(tokenStr))
 	hashHex := hex.EncodeToString(hash[:])
 
-	t, err := s.store.CreateAPIToken(ctx, userID, name, hashHex)
+	t, err := s.store.CreateAPIToken(ctx, userID, projectID, name, hashHex)
 	if err != nil {
 		return nil, err
 	}

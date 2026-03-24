@@ -12,6 +12,8 @@ export interface Project {
   name: string
   git_url: string
   git_branch: string
+  git_source: 'external' | 'hosted'
+  git_push_url?: string
   domain_prefix: string
   dockerfile_path: string
   owner_id: string
@@ -21,6 +23,25 @@ export interface Project {
   volume_mount_path: string
   created_at: string
   updated_at: string
+}
+
+export interface RepoTreeEntry {
+  name: string
+  type: 'blob' | 'tree'
+  size: number
+  path: string
+}
+
+export interface RepoCommit {
+  sha: string
+  message: string
+  author: string
+  date: string
+}
+
+export interface RepoBranch {
+  name: string
+  is_default: boolean
 }
 
 export interface WorkspaceEntry {
@@ -147,17 +168,6 @@ export interface ContainerMetric {
   block_write_bytes: number
 }
 
-export interface PublicProject {
-  id: string
-  name: string
-  domain_prefix: string
-  url: string
-  auth_required: boolean
-  owner_name: string
-  owner_avatar_url: string
-  updated_at: number // epoch seconds
-}
-
 export interface SystemSettings {
   onboarded: string       // 'true' | 'false'
   site_name: string
@@ -171,6 +181,7 @@ export interface HealthCheck {
   name: string
   status: HealthStatus
   message: string
+  hint?: string
 }
 
 export interface HealthReport {

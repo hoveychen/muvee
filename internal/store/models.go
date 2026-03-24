@@ -22,11 +22,17 @@ type User struct {
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 }
 
+const (
+	GitSourceExternal = "external"
+	GitSourceHosted   = "hosted"
+)
+
 type Project struct {
 	ID                 uuid.UUID `db:"id"                   json:"id"`
 	Name               string    `db:"name"                 json:"name"`
 	GitURL             string    `db:"git_url"              json:"git_url"`
 	GitBranch          string    `db:"git_branch"           json:"git_branch"`
+	GitSource          string    `db:"git_source"           json:"git_source"`
 	DomainPrefix       string    `db:"domain_prefix"        json:"domain_prefix"`
 	DockerfilePath     string    `db:"dockerfile_path"      json:"dockerfile_path"`
 	OwnerID            uuid.UUID `db:"owner_id"             json:"owner_id"`
@@ -37,6 +43,8 @@ type Project struct {
 	VolumeMountPath    string    `db:"volume_mount_path"    json:"volume_mount_path"`
 	CreatedAt          time.Time `db:"created_at"           json:"created_at"`
 	UpdatedAt          time.Time `db:"updated_at"           json:"updated_at"`
+	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
+	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 }
 
 type MountMode string
@@ -178,6 +186,7 @@ const (
 type ApiToken struct {
 	ID         uuid.UUID  `db:"id"`
 	UserID     uuid.UUID  `db:"user_id"`
+	ProjectID  *uuid.UUID `db:"project_id"`
 	Name       string     `db:"name"`
 	TokenHash  string     `db:"token_hash"`
 	LastUsedAt *time.Time `db:"last_used_at"`

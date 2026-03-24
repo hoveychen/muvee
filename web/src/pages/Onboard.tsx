@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle, XCircle, AlertCircle, Loader, ChevronRight, RefreshCw, Server, Globe, HardDrive, Cpu } from 'lucide-react'
+import { CheckCircle, XCircle, AlertCircle, Loader, ChevronRight, RefreshCw, Server, Globe, HardDrive, Cpu, Copy, Check, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useSettings } from '../lib/settings'
@@ -29,6 +29,38 @@ function StepBar({ current, total }: { current: number; total: number }) {
 
 // ─── Health Check Item ────────────────────────────────────────────────────────
 
+function HintBlock({ hint }: { hint: string }) {
+  const [copied, setCopied] = useState(false)
+  const { t } = useTranslation()
+  return (
+    <div style={{
+      marginTop: '6px', padding: '8px 10px', borderRadius: '4px',
+      background: 'var(--bg-hover)', border: '1px solid var(--border)',
+      position: 'relative',
+    }}>
+      <div style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', marginBottom: '4px', fontWeight: 600 }}>
+        {t('health.fixCommand', 'Fix command')}
+      </div>
+      <pre style={{
+        fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-primary)',
+        margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5,
+      }}>{hint}</pre>
+      <button
+        onClick={() => { navigator.clipboard.writeText(hint); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
+        style={{
+          position: 'absolute', top: '6px', right: '6px',
+          background: 'none', border: '1px solid var(--border)', borderRadius: '4px',
+          padding: '3px 6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+          fontFamily: MONO, fontSize: '0.58rem', color: 'var(--fg-muted)',
+        }}
+      >
+        {copied ? <Check size={10} /> : <Copy size={10} />}
+        {copied ? t('health.copied', 'Copied') : t('health.copy', 'Copy')}
+      </button>
+    </div>
+  )
+}
+
 function HealthItem({ check }: { check: HealthCheck }) {
   const { t } = useTranslation()
   const icon = check.status === 'ok'
@@ -53,6 +85,7 @@ function HealthItem({ check }: { check: HealthCheck }) {
         <div style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>
           {check.message}
         </div>
+        {check.hint && check.status !== 'ok' && <HintBlock hint={check.hint} />}
       </div>
     </div>
   )
@@ -90,7 +123,7 @@ function AgentRow({ node }: { node: Node }) {
       {healthChecks && (
         <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
           {healthChecks.map(c => (
-            <span key={c.name} title={c.message} style={{
+            <span key={c.name} title={c.hint ? `${c.message}\n\nFix: ${c.hint}` : c.message} style={{
               fontFamily: MONO, fontSize: '0.62rem', padding: '2px 7px', borderRadius: '3px',
               background: c.status === 'ok' ? 'rgba(63,185,80,0.12)' : c.status === 'warning' ? 'rgba(210,153,34,0.12)' : 'rgba(248,81,73,0.12)',
               color: c.status === 'ok' ? '#3fb950' : c.status === 'warning' ? '#d29922' : 'var(--danger)',
@@ -216,6 +249,71 @@ export default function OnboardPage() {
     </div>
   )
 
+  const imageField = (label: string, value: string, onChange: (v: string) => void, uploadType: 'logo' | 'favicon', placeholder?: string) => {
+    const inputRef = useRef<HTMLInputElement>(null)
+    const [uploading, setUploading] = useState(false)
+    const handleUpload = async (file: File) => {
+      setUploading(true)
+      try {
+        const result = await api.admin.uploadBranding(uploadType, file)
+        onChange(result.url)
+      } catch { /* ignore */ }
+      finally { setUploading(false) }
+    }
+    return (
+      <div style={{ marginBottom: '16px' }}>
+        <label style={{ display: 'block', fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.06em', marginBottom: '6px' }}>
+          {label}
+        </label>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <input
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            placeholder={placeholder}
+            style={{
+              flex: 1, padding: '8px 10px',
+              background: 'var(--bg-base)', border: '1px solid var(--border)',
+              borderRadius: '6px', color: 'var(--fg-primary)',
+              fontFamily: MONO, fontSize: '0.85rem',
+              outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+          <button
+            onClick={() => inputRef.current?.click()}
+            disabled={uploading}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '4px',
+              padding: '8px 12px', background: 'var(--bg-hover)',
+              border: '1px solid var(--border)', borderRadius: '6px',
+              fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)',
+              cursor: uploading ? 'default' : 'pointer', flexShrink: 0,
+            }}
+          >
+            {uploading ? <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Upload size={12} />}
+            {t('onboard.branding.upload')}
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file) handleUpload(file)
+              e.target.value = ''
+            }}
+          />
+        </div>
+        {value && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+            <img src={value} alt="" style={{ width: '32px', height: '32px', borderRadius: '6px', objectFit: 'contain', border: '1px solid var(--border)' }} />
+            <span style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>{t('onboard.branding.logoPreview')}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const btn = (label: string, onClick: () => void, disabled = false, loading = false) => (
     <button
       onClick={onClick}
@@ -269,15 +367,8 @@ export default function OnboardPage() {
         {step === 0 && (
           <div className="page-enter">
             {field(t('onboard.branding.siteName'), siteName, setSiteName, 'My Private Cloud')}
-            {field(t('onboard.branding.logoUrl'), logoUrl, setLogoUrl, 'https://example.com/logo.png')}
-            {field(t('onboard.branding.faviconUrl'), faviconUrl, setFaviconUrl, 'https://example.com/favicon.ico')}
-
-            {logoUrl && (
-              <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <img src={logoUrl} alt="" style={{ width: '32px', height: '32px', borderRadius: '6px', objectFit: 'contain', border: '1px solid var(--border)' }} />
-                <span style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>{t('onboard.branding.logoPreview')}</span>
-              </div>
-            )}
+            {imageField(t('onboard.branding.logoUrl'), logoUrl, setLogoUrl, 'logo', 'https://example.com/logo.png')}
+            {imageField(t('onboard.branding.faviconUrl'), faviconUrl, setFaviconUrl, 'favicon', 'https://example.com/favicon.ico')}
 
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '24px' }}>
               {btn(t('onboard.branding.save'), saveBranding, brandingSaving, brandingSaving)}

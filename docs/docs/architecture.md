@@ -46,9 +46,10 @@ sidebar_position: 4
 ### Control Plane (`cmd/server`)
 
 - **API Server** (`internal/api`) — Chi router, JWT auth middleware, REST handlers for Projects, Datasets, Deployments, Nodes, Users
+- **Git Hosting** (`internal/gitrepo`) — Bare git repository lifecycle, Git Smart HTTP protocol handler (`git-upload-pack` / `git-receive-pack`), repository browser (tree, blob, commits, branches)
 - **Scheduler** (`internal/scheduler`) — Affinity scoring, LRU eviction trigger, task dispatch
 - **Monitor** (`internal/monitor`) — Periodic NFS path scan, checksum diff, file history recording
-- **Auth** (`internal/auth`) — Google OIDC, JWT signing, RBAC middleware
+- **Auth** (`internal/auth`) — Google OIDC, JWT signing, RBAC middleware, project-scoped API tokens
 
 ### Agent (`cmd/agent`)
 
@@ -78,7 +79,7 @@ Scheduler.DispatchBuild()
     │
     ▼
 Builder Agent polls & picks up task
-  → git clone --depth=1
+  → git clone --depth=1 (external URL or hosted repo via internal HTTP)
   → docker buildx build
   → docker push registry/{project}:{sha}
   → POST /api/agent/tasks/{id}/complete

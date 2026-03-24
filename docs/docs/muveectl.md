@@ -92,13 +92,42 @@ muveectl projects list
 muveectl projects create --name NAME --git-url URL \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
   [--auth-required] [--auth-domains example.com,corp.com]
+muveectl projects create --name NAME --git-source hosted \
+  [--domain PREFIX] [--dockerfile PATH]
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
 muveectl projects workspace PROJECT_ID <ls|pull|push|rm> [args...]
+muveectl projects repo PROJECT_ID <tree|log|branches|show> [args...]
 muveectl projects delete PROJECT_ID
+```
+
+### Hosted Git Repository
+
+Instead of pointing to an external Git URL, you can let muvee host the repository. Pass `--git-source hosted` when creating a project:
+
+```bash
+muveectl projects create --name my-app --git-source hosted
+# → Created project my-app (ID: abc-123)
+# → Git Source: hosted
+# → Git Push URL: https://muvee.example.com/git/abc-123.git
+
+git remote add muvee https://muvee.example.com/git/abc-123.git
+git push muvee main
+# When prompted: username = anything, password = your mvt_* project token
+```
+
+Create a project-scoped token first (see [API Tokens](#api-tokens-project-scoped) below), then use it as the git password.
+
+### Repository Browser (hosted projects only)
+
+```bash
+muveectl projects repo PROJECT_ID tree [--ref main] [--path /]
+muveectl projects repo PROJECT_ID log [--ref main] [--limit 20]
+muveectl projects repo PROJECT_ID branches
+muveectl projects repo PROJECT_ID show <ref>:<path>
 ```
 
 ### Google OAuth protection (`--auth-required`)
@@ -186,13 +215,27 @@ muveectl datasets scan DATASET_ID
 muveectl datasets delete DATASET_ID
 ```
 
-## API Tokens
+## API Tokens (project-scoped)
+
+Tokens are scoped to a single project. Use them for git push authentication (hosted repos) or project-level CLI/CI access.
 
 ```bash
-muveectl tokens list
-muveectl tokens create [--name NAME]   # token value is shown once on creation
-muveectl tokens delete TOKEN_ID
+muveectl tokens PROJECT_ID list
+muveectl tokens PROJECT_ID create [--name NAME]   # token value is shown once on creation
+muveectl tokens PROJECT_ID delete TOKEN_ID
 ```
+
+You can also manage tokens from the web UI under each project's **Tokens** tab.
+
+:::tip Git push authentication
+For hosted repositories, create a project token and use it as the HTTPS password when pushing:
+```bash
+muveectl tokens PROJECT_ID create --name "git push"
+# → Token: mvt_abc123...
+git push https://muvee.example.com/git/PROJECT_ID.git main
+# username: anything, password: mvt_abc123...
+```
+:::
 
 ## Secrets
 
@@ -252,7 +295,7 @@ muveectl projects unbind-secret PROJECT_ID SECRET_ID
 For a project to deploy successfully, the repository must satisfy:
 
 ### Build
-- Accessible via `git clone --depth=1` over HTTPS (public or with token secret) or SSH (SSH key secret)
+- Accessible via `git clone --depth=1` over HTTPS (public or with token secret), SSH (SSH key secret), or hosted on muvee (automatic internal auth)
 - The configured branch must exist (default: `main`)
 - A `Dockerfile` must exist at the configured path (default: `Dockerfile` in repo root)
 - Image must build for **`linux/amd64`** (`docker buildx build --platform linux/amd64`)

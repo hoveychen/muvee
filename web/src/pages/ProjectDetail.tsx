@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, Secret, WorkspaceEntry } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, Secret, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
-type Tab = 'deploy' | 'config' | 'datasets' | 'secrets' | 'workspace'
+type Tab = 'deploy' | 'config' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository'
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
@@ -176,6 +176,9 @@ export default function ProjectDetail() {
         <div style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)', marginTop: '0.4rem', marginLeft: '1.75rem' }}>
           {project.domain_prefix}.{baseDomain}
         </div>
+        {project.git_source === 'hosted' && project.git_push_url && (
+          <PushUrlBadge url={project.git_push_url} />
+        )}
       </div>
 
       {/* Tabs */}
@@ -183,8 +186,10 @@ export default function ProjectDetail() {
         {([
           ['deploy', Rocket, t('projectDetail.tabs.deployments')],
           ['config', Settings, t('projectDetail.tabs.config')],
+          ...(project.git_source === 'hosted' ? [['repository', GitBranch, t('projectDetail.tabs.repository')] as const] : []),
           ['datasets', Database, t('projectDetail.tabs.datasets')],
           ['secrets', KeyRound, t('projectDetail.tabs.secrets')],
+          ['tokens', Key, t('projectDetail.tabs.tokens')],
           ['workspace', HardDrive, t('projectDetail.tabs.workspace')],
         ] as const).map(([key, Icon, label]) => (
           <button
@@ -239,11 +244,17 @@ export default function ProjectDetail() {
             onBindingsChange={setProjectSecrets}
           />
         )}
+        {tab === 'tokens' && id && (
+          <TokensTab projectId={id} />
+        )}
         {tab === 'workspace' && id && (
           <WorkspaceTab
             projectId={id}
             volumeMountPath={project.volume_mount_path}
           />
+        )}
+        {tab === 'repository' && id && project.git_source === 'hosted' && (
+          <RepoTab projectId={id} />
         )}
       </div>
     </div>
@@ -1141,6 +1152,391 @@ function SecretsTab({
           })
         )}
       </div>
+    </div>
+  )
+}
+
+// ─── Push URL Badge (for hosted repos) ──────────────────────────────────────
+
+function PushUrlBadge({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false)
+  const { t } = useTranslation()
+  const copy = () => {
+    navigator.clipboard.writeText(url)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <div className="flex items-center gap-2 mt-2 ml-7">
+      <span style={{ fontFamily: MONO, fontSize: '0.6rem', color: 'var(--fg-muted)', letterSpacing: '0.1em' }}>{t('projectDetail.pushUrl')}</span>
+      <code style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--accent)', wordBreak: 'break-all' }}>{url}</code>
+      <button onClick={copy} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '2px' }}>
+        {copied ? <Check size={12} style={{ color: 'var(--accent)' }} /> : <Copy size={12} />}
+      </button>
+    </div>
+  )
+}
+
+// ─── Repository Browser Tab ─────────────────────────────────────────────────
+
+function RepoTab({ projectId }: { projectId: string }) {
+  const { t } = useTranslation()
+  const [branches, setBranches] = useState<RepoBranch[]>([])
+  const [currentBranch, setCurrentBranch] = useState('')
+  const [tree, setTree] = useState<RepoTreeEntry[]>([])
+  const [commits, setCommits] = useState<RepoCommit[]>([])
+  const [currentPath, setCurrentPath] = useState('')
+  const [fileContent, setFileContent] = useState<string | null>(null)
+  const [viewingFile, setViewingFile] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [subTab, setSubTab] = useState<'files' | 'commits'>('files')
+
+  useEffect(() => {
+    api.projects.repoBranches(projectId).then(b => {
+      setBranches(b)
+      const def = b.find(br => br.is_default)
+      setCurrentBranch(def?.name || b[0]?.name || 'main')
+    }).catch(() => {})
+    setLoading(false)
+  }, [projectId])
+
+  useEffect(() => {
+    if (!currentBranch) return
+    setLoading(true)
+    Promise.all([
+      api.projects.repoTree(projectId, currentBranch, currentPath).catch(() => []),
+      api.projects.repoCommits(projectId, currentBranch, 20).catch(() => []),
+    ]).then(([t, c]) => {
+      setTree(t)
+      setCommits(c)
+      setLoading(false)
+    })
+  }, [projectId, currentBranch, currentPath])
+
+  const navigateTo = (entry: RepoTreeEntry) => {
+    if (entry.type === 'tree') {
+      setCurrentPath(entry.path)
+      setFileContent(null)
+      setViewingFile('')
+    } else {
+      setViewingFile(entry.path)
+      api.projects.repoBlob(projectId, currentBranch, entry.path).then(setFileContent).catch(() => setFileContent('(failed to load)'))
+    }
+  }
+
+  const goUp = () => {
+    const parts = currentPath.split('/').filter(Boolean)
+    parts.pop()
+    setCurrentPath(parts.join('/'))
+    setFileContent(null)
+    setViewingFile('')
+  }
+
+  const isEmpty = branches.length === 0 && !loading
+
+  if (isEmpty) {
+    return <p style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>{t('projectDetail.repo.empty')}</p>
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Branch selector + sub-tabs */}
+      <div className="flex items-center gap-4">
+        <select
+          value={currentBranch}
+          onChange={e => { setCurrentBranch(e.target.value); setCurrentPath(''); setFileContent(null); setViewingFile('') }}
+          style={{
+            fontFamily: MONO, fontSize: '0.78rem', padding: '0.35rem 0.5rem',
+            background: 'var(--bg-hover)', border: '1px solid var(--border)',
+            borderRadius: '2px', color: 'var(--fg-primary)', cursor: 'pointer',
+          }}
+        >
+          {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+        </select>
+        <div className="flex gap-1">
+          {(['files', 'commits'] as const).map(st => (
+            <button key={st} onClick={() => setSubTab(st)} style={{
+              fontFamily: MONO, fontSize: '0.72rem', padding: '0.3rem 0.6rem',
+              border: `1px solid ${subTab === st ? 'var(--accent)' : 'var(--border)'}`,
+              background: subTab === st ? 'rgba(200,240,60,0.08)' : 'none',
+              color: subTab === st ? 'var(--accent)' : 'var(--fg-muted)',
+              borderRadius: '2px', cursor: 'pointer',
+            }}>{t(`projectDetail.repo.${st}`)}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading && <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>Loading...</p>}
+
+      {/* File browser */}
+      {!loading && subTab === 'files' && !viewingFile && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: '2px' }}>
+          {currentPath && (
+            <button onClick={goUp} className="w-full text-left px-3 py-2 flex items-center gap-2" style={{
+              fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)',
+              background: 'none', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            >
+              ..
+            </button>
+          )}
+          {tree.map(entry => (
+            <button key={entry.path} onClick={() => navigateTo(entry)} className="w-full text-left px-3 py-2 flex items-center gap-2" style={{
+              fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-primary)',
+              background: 'none', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            >
+              {entry.type === 'tree' ? <FolderOpen size={14} style={{ color: 'var(--accent)' }} /> : <File size={14} style={{ color: 'var(--fg-muted)' }} />}
+              <span className="flex-1">{entry.name}</span>
+              {entry.type === 'blob' && entry.size > 0 && (
+                <span style={{ fontSize: '0.65rem', color: 'var(--fg-muted)' }}>{formatBytes(entry.size)}</span>
+              )}
+            </button>
+          ))}
+          {tree.length === 0 && (
+            <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', padding: '1rem', textAlign: 'center' }}>
+              {t('projectDetail.repo.empty')}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* File content viewer */}
+      {!loading && subTab === 'files' && viewingFile && fileContent !== null && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <button onClick={() => { setViewingFile(''); setFileContent(null) }} style={{
+              fontFamily: MONO, fontSize: '0.72rem', color: 'var(--accent)',
+              background: 'none', border: 'none', cursor: 'pointer',
+            }}>← {t('projectDetail.repo.files')}</button>
+            <span style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>{viewingFile}</span>
+          </div>
+          <pre style={{
+            fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-primary)',
+            background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '2px',
+            padding: '1rem', overflow: 'auto', maxHeight: '600px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          }}>{fileContent}</pre>
+        </div>
+      )}
+
+      {/* Commits list */}
+      {!loading && subTab === 'commits' && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: '2px' }}>
+          {commits.length === 0 && (
+            <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', padding: '1rem', textAlign: 'center' }}>
+              {t('projectDetail.repo.noCommits')}
+            </p>
+          )}
+          {commits.map(c => (
+            <div key={c.sha} style={{
+              padding: '0.6rem 0.75rem', borderBottom: '1px solid var(--border)',
+              fontFamily: MONO, fontSize: '0.78rem',
+            }}>
+              <div className="flex items-center gap-2">
+                <code style={{ fontSize: '0.7rem', color: 'var(--accent)' }}>{c.sha.substring(0, 8)}</code>
+                <span style={{ color: 'var(--fg-primary)', flex: 1 }}>{c.message}</span>
+              </div>
+              <div style={{ fontSize: '0.65rem', color: 'var(--fg-muted)', marginTop: '0.2rem' }}>
+                {c.author} · {timeAgo(c.date)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Tokens Tab ──────────────────────────────────────────────────────────────
+
+function TokensTab({ projectId }: { projectId: string }) {
+  const { t } = useTranslation()
+  const [tokens, setTokens] = useState<ApiToken[]>([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [createdToken, setCreatedToken] = useState<string | null>(null)
+  const [showToken, setShowToken] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const load = () => {
+    api.tokens.list(projectId).then(setTokens).catch(() => {}).finally(() => setLoading(false))
+  }
+  useEffect(load, [projectId])
+
+  const handleCreate = async () => {
+    setCreating(true)
+    try {
+      const result = await api.tokens.create(projectId, newName || 'Git Token')
+      setCreatedToken(result.token)
+      setNewName('')
+      load()
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleDelete = async (tokenId: string) => {
+    if (!confirm(t('projectDetail.tokens.deleteConfirm'))) return
+    await api.tokens.delete(projectId, tokenId)
+    load()
+  }
+
+  const copyToken = (val: string) => {
+    navigator.clipboard.writeText(val)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div>
+      <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '1rem', lineHeight: 1.6 }}>
+        {t('projectDetail.tokens.hint')}
+      </p>
+
+      {/* Create token form */}
+      <div className="flex items-center gap-2 mb-4">
+        <input
+          type="text"
+          value={newName}
+          onChange={e => setNewName(e.target.value)}
+          placeholder={t('projectDetail.tokens.namePlaceholder')}
+          style={{
+            fontFamily: MONO, fontSize: '0.78rem', padding: '6px 10px', borderRadius: '4px',
+            border: '1px solid var(--border)', background: 'var(--bg-base)', color: 'var(--fg-primary)',
+            flex: 1, maxWidth: '300px',
+          }}
+          onKeyDown={e => e.key === 'Enter' && handleCreate()}
+        />
+        <button
+          onClick={handleCreate}
+          disabled={creating}
+          className="flex items-center gap-1.5"
+          style={{
+            fontFamily: MONO, fontSize: '0.75rem', padding: '6px 14px', borderRadius: '4px',
+            background: 'var(--accent)', color: '#fff', border: 'none', cursor: creating ? 'not-allowed' : 'pointer',
+            fontWeight: 500, opacity: creating ? 0.6 : 1,
+          }}
+        >
+          <Plus size={13} />
+          {creating ? t('projectDetail.tokens.creating') : t('projectDetail.tokens.create')}
+        </button>
+      </div>
+
+      {/* Newly created token */}
+      {createdToken && (
+        <div style={{
+          background: 'rgba(88,166,255,0.08)', border: '1px solid rgba(88,166,255,0.3)',
+          borderRadius: '6px', padding: '0.75rem 1rem', marginBottom: '1rem',
+        }}>
+          <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--accent)', marginBottom: '0.4rem', fontWeight: 600 }}>
+            {t('projectDetail.tokens.created')}
+          </p>
+          <div className="flex items-center gap-2">
+            <code style={{
+              fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-primary)', flex: 1,
+              wordBreak: 'break-all',
+            }}>
+              {showToken ? createdToken : '•'.repeat(40)}
+            </code>
+            <button
+              onClick={() => setShowToken(!showToken)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '4px' }}
+            >
+              {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+            <button
+              onClick={() => copyToken(createdToken)}
+              className="flex items-center gap-1"
+              style={{
+                fontFamily: MONO, fontSize: '0.68rem', padding: '3px 8px', borderRadius: '4px',
+                border: '1px solid var(--border)', background: 'none', cursor: 'pointer',
+                color: copied ? '#3fb950' : 'var(--fg-muted)',
+              }}
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              {copied ? t('projects.copied') : t('projects.copy')}
+            </button>
+          </div>
+          <p style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', marginTop: '0.4rem' }}>
+            {t('projectDetail.tokens.copyWarning')}
+          </p>
+        </div>
+      )}
+
+      {/* Token list */}
+      {loading ? (
+        <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>{t('common.loading')}</p>
+      ) : tokens.length === 0 && !createdToken ? (
+        <div style={{
+          border: '1px solid var(--border)', borderRadius: '6px', padding: '2rem',
+          textAlign: 'center', background: 'var(--bg-card)',
+        }}>
+          <Key size={28} style={{ color: 'var(--fg-muted)', margin: '0 auto 0.5rem' }} />
+          <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>
+            {t('projectDetail.tokens.empty')}
+          </p>
+        </div>
+      ) : (
+        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+          <table className="w-full border-collapse">
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                {[t('projectDetail.tokens.columns.name'), t('projectDetail.tokens.columns.lastUsed'), t('projectDetail.tokens.columns.created'), ''].map(h => (
+                  <th key={h} style={{
+                    fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em',
+                    padding: '0.6rem 1rem', textAlign: 'left', fontWeight: 500,
+                  }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {tokens.map(tok => (
+                <tr key={tok.id} style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card)' }}
+                >
+                  <td style={{ padding: '0.7rem 1rem' }}>
+                    <span style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
+                      {tok.name}
+                    </span>
+                  </td>
+                  <td style={{ padding: '0.7rem 1rem' }}>
+                    <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+                      {tok.last_used_at ? timeAgo(tok.last_used_at) : '—'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '0.7rem 1rem' }}>
+                    <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+                      {new Date(tok.created_at).toLocaleDateString()}
+                    </span>
+                  </td>
+                  <td style={{ padding: '0.7rem 1rem', textAlign: 'right' }}>
+                    <button
+                      onClick={() => handleDelete(tok.id)}
+                      style={{
+                        background: 'none', border: '1px solid var(--border)', borderRadius: '4px',
+                        padding: '3px 8px', cursor: 'pointer', color: 'var(--fg-muted)',
+                        fontFamily: MONO, fontSize: '0.68rem',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--danger)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--danger)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

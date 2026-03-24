@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle } from 'lucide-react'
+import { LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle, Copy, Check } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
 import { useSettings } from '../lib/settings'
@@ -191,6 +191,34 @@ function parseNodeHealthReport(raw: string | null | undefined): HealthCheck[] | 
   }
 }
 
+function NodeHintBlock({ hint }: { hint: string }) {
+  const [copied, setCopied] = useState(false)
+  const { t } = useTranslation()
+  return (
+    <div style={{
+      marginTop: '4px', marginLeft: '18px', padding: '6px 8px', borderRadius: '4px',
+      background: 'var(--bg-hover)', border: '1px solid var(--border)',
+      display: 'flex', alignItems: 'flex-start', gap: '8px',
+    }}>
+      <pre style={{
+        fontFamily: MONO, fontSize: '0.6rem', color: 'var(--fg-primary)',
+        margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5, flex: 1,
+      }}>{hint}</pre>
+      <button
+        onClick={() => { navigator.clipboard.writeText(hint); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
+        style={{
+          background: 'none', border: '1px solid var(--border)', borderRadius: '4px',
+          padding: '2px 6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px',
+          fontFamily: MONO, fontSize: '0.55rem', color: 'var(--fg-muted)', flexShrink: 0,
+        }}
+      >
+        {copied ? <Check size={10} /> : <Copy size={10} />}
+        {copied ? t('health.copied', 'Copied') : t('health.copy', 'Copy')}
+      </button>
+    </div>
+  )
+}
+
 export function NodesPage() {
   const [nodes, setNodes] = useState<Node[]>([])
   const [metrics, setMetrics] = useState<Record<string, NodeMetric | null>>({})
@@ -214,12 +242,46 @@ export function NodesPage() {
     return Date.now() - lastSeen < 2 * 60 * 1000
   }
 
+  const offlineNodes = nodes.filter(n => !isOnline(n))
+
+  const cleanOffline = async () => {
+    if (!confirm(t('nodes.cleanConfirm'))) return
+    await Promise.all(offlineNodes.map(n => api.nodes.delete(n.id)))
+    setNodes(prev => prev.filter(n => isOnline(n)))
+  }
+
+  const hasBuilder = nodes.some(n => n.role === 'builder')
+  const hasDeployer = nodes.some(n => n.role === 'deploy')
+
   return (
     <div className="page-enter">
-      <div className="mb-8">
-        <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.05em' }}>{t('nodes.sectionLabel')}</p>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>{t('nodes.heading')}</h1>
+      <div className="mb-8 flex items-center justify-between">
+        <div>
+          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.05em' }}>{t('nodes.sectionLabel')}</p>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>{t('nodes.heading')}</h1>
+        </div>
+        {offlineNodes.length > 0 && (
+          <button onClick={cleanOffline} className="btn-secondary" style={{ fontFamily: MONO, fontSize: '0.75rem' }}>
+            {t('nodes.cleanOffline')}
+          </button>
+        )}
       </div>
+      {nodes.length > 0 && (!hasBuilder || !hasDeployer) && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+          {!hasBuilder && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', borderRadius: '6px', background: 'rgba(210, 153, 34, 0.1)', border: '1px solid rgba(210, 153, 34, 0.4)' }}>
+              <AlertCircle size={16} color="#d29922" style={{ flexShrink: 0 }} />
+              <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: '#d29922' }}>{t('nodes.noBuilder')}</span>
+            </div>
+          )}
+          {!hasDeployer && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', borderRadius: '6px', background: 'rgba(210, 153, 34, 0.1)', border: '1px solid rgba(210, 153, 34, 0.4)' }}>
+              <AlertCircle size={16} color="#d29922" style={{ flexShrink: 0 }} />
+              <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: '#d29922' }}>{t('nodes.noDeployer')}</span>
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
         {nodes.map((n, i) => {
           const online = isOnline(n)
@@ -282,10 +344,13 @@ export function NodesPage() {
                           ? <AlertCircle size={12} color={color} style={{ flexShrink: 0, marginTop: '1px' }} />
                           : <XCircle size={12} color={color} style={{ flexShrink: 0, marginTop: '1px' }} />
                         return (
-                          <div key={c.name} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontFamily: MONO, fontSize: '0.67rem' }}>
-                            {icon}
-                            <span style={{ color, fontWeight: 600 }}>{c.name}</span>
-                            <span style={{ color: 'var(--fg-muted)' }}>{c.message}</span>
+                          <div key={c.name}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontFamily: MONO, fontSize: '0.67rem' }}>
+                              {icon}
+                              <span style={{ color, fontWeight: 600 }}>{c.name}</span>
+                              <span style={{ color: 'var(--fg-muted)' }}>{c.message}</span>
+                            </div>
+                            {c.hint && <NodeHintBlock hint={c.hint} />}
                           </div>
                         )
                       })}

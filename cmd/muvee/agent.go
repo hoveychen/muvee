@@ -228,7 +228,14 @@ func registerNode(ctx context.Context, baseURL, secret, hostname, role, hostIP s
 
 func pollTasks(ctx context.Context, baseURL, secret string, nodeID uuid.UUID) []*store.Task {
 	resp, err := agentGet(fmt.Sprintf("%s/api/agent/tasks?node_id=%s", baseURL, nodeID), secret)
-	if err != nil || resp.StatusCode != 200 {
+	if err != nil {
+		log.Printf("poll tasks error: %v", err)
+		return nil
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		resp.Body.Close()
+		log.Printf("poll tasks returned %d: %s", resp.StatusCode, body)
 		return nil
 	}
 	defer resp.Body.Close()
@@ -279,6 +286,15 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 
 func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn func(string)) (map[string]interface{}, error) {
 	p := task.Payload
+	// Extract build secrets from payload.
+	buildSecrets := make(map[string]string)
+	if bsRaw, ok := p["build_secrets"].(map[string]interface{}); ok {
+		for k, v := range bsRaw {
+			if s, ok := v.(string); ok {
+				buildSecrets[k] = s
+			}
+		}
+	}
 	cfg := builder.BuildConfig{
 		GitURL:         str(p, "git_url"),
 		GitBranch:      str(p, "git_branch"),
@@ -286,6 +302,10 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn 
 		DeploymentID:   str(p, "deployment_id"),
 		ProjectID:      str(p, "project_id"),
 		RegistryAddr:   registryAddr,
+		SSHKey:         str(p, "git_ssh_key"),
+		GitUsername:    str(p, "git_username"),
+		GitToken:       str(p, "git_token"),
+		BuildSecrets:   buildSecrets,
 	}
 	imageTag, err := builder.Build(ctx, cfg, logFn)
 	if err != nil {
@@ -739,6 +759,7 @@ type agentHealthCheck struct {
 	Name    string `json:"name"`
 	Status  string `json:"status"`  // "ok" | "warning" | "error"
 	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"`
 }
 
 // runAgentHealthReporter runs health checks on the agent and reports them to the control plane.
@@ -771,6 +792,32 @@ func reportAgentHealth(ctx context.Context, baseURL, secret string, nodeID uuid.
 	}
 }
 
+const dockerUpgradeHint = `# Step 1: Remove old Docker packages (docker.io, etc.)
+sudo apt purge -y docker.io docker-doc docker-compose podman-docker containerd runc 2>/dev/null
+
+# Step 2: Add Docker official apt repository
+sudo apt update && sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Step 3: Install Docker CE with buildx plugin
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Step 4: Enable docker socket and restart
+sudo systemctl daemon-reload
+sudo systemctl enable docker.socket docker.service
+sudo systemctl start docker.socket
+sudo systemctl restart docker
+
+# Step 5: Verify
+docker info`
+
 func collectAgentHealthChecks(role, registryAddr, volumeNFSBasePath, datasetNFSBasePath string) []agentHealthCheck {
 	var checks []agentHealthCheck
 
@@ -780,6 +827,7 @@ func collectAgentHealthChecks(role, registryAddr, volumeNFSBasePath, datasetNFSB
 		checks = append(checks, agentHealthCheck{
 			Name: "docker", Status: "error",
 			Message: fmt.Sprintf("docker daemon not reachable: %v", err),
+			Hint:    dockerUpgradeHint,
 		})
 	} else {
 		checks = append(checks, agentHealthCheck{
@@ -833,19 +881,50 @@ func collectAgentHealthChecks(role, registryAddr, volumeNFSBasePath, datasetNFSB
 	// 4. NFS dataset path
 	checks = append(checks, agentCheckPath("nfs_dataset", datasetNFSBasePath))
 
-	// 5. Docker build support (builder only)
+	// 5. Docker feature detection (builder only)
 	if role == "builder" {
+		// 5a. Check docker buildx plugin availability
 		out, err := exec.Command("docker", "buildx", "version").Output()
 		if err != nil {
 			checks = append(checks, agentHealthCheck{
-				Name: "docker_buildx", Status: "warning",
-				Message: "docker buildx not available; builds may fail",
+				Name: "docker_buildx", Status: "error",
+				Message: "docker buildx plugin not installed; image builds will fail",
+				Hint:    dockerUpgradeHint,
 			})
 		} else {
 			checks = append(checks, agentHealthCheck{
 				Name: "docker_buildx", Status: "ok",
 				Message: strings.TrimSpace(string(out)),
 			})
+		}
+
+		// 5b. Check cross-platform build support (linux/amd64)
+		lsOut, err := exec.Command("docker", "buildx", "ls").Output()
+		if err == nil {
+			if !strings.Contains(string(lsOut), "linux/amd64") {
+				checks = append(checks, agentHealthCheck{
+					Name: "docker_platform", Status: "warning",
+					Message: "no builder supports linux/amd64; cross-platform builds may fail",
+					Hint:    "docker buildx create --name muvee --platform linux/amd64 --use && docker buildx inspect --bootstrap",
+				})
+			} else {
+				checks = append(checks, agentHealthCheck{
+					Name: "docker_platform", Status: "ok",
+					Message: "linux/amd64 platform supported",
+				})
+			}
+		}
+
+		// 5c. Check docker push capability (login to registry)
+		if registryAddr != "" {
+			pushOut, err := exec.Command("docker", "buildx", "build", "--help").Output()
+			if err == nil && !strings.Contains(string(pushOut), "--push") {
+				checks = append(checks, agentHealthCheck{
+					Name: "docker_push", Status: "error",
+					Message: "docker buildx does not support --push; upgrade docker or buildx plugin",
+					Hint:    dockerUpgradeHint,
+				})
+			}
 		}
 	}
 

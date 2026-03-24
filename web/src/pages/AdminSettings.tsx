@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useSettings } from '../lib/settings'
@@ -35,6 +35,92 @@ function Field({
         }}
       />
       {hint && <p style={{ fontFamily: MONO, fontSize: '0.67rem', color: 'var(--fg-muted)', marginTop: '4px' }}>{hint}</p>}
+    </div>
+  )
+}
+
+// ─── Image field with upload ──────────────────────────────────────────────────
+
+function ImageField({
+  label, value, onChange, hint, placeholder, uploadType, t,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+  placeholder?: string
+  uploadType: 'logo' | 'favicon'
+  t: (key: string) => string
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+
+  const handleUpload = async (file: File) => {
+    setUploading(true)
+    try {
+      const result = await api.admin.uploadBranding(uploadType, file)
+      onChange(result.url)
+    } catch {
+      // ignore
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: '18px' }}>
+      <label style={{ display: 'block', fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.06em', marginBottom: '6px' }}>
+        {label}
+      </label>
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <input
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+          style={{
+            flex: 1, padding: '8px 10px', boxSizing: 'border-box',
+            background: 'var(--bg-base)', border: '1px solid var(--border)',
+            borderRadius: '6px', color: 'var(--fg-primary)',
+            fontFamily: MONO, fontSize: '0.85rem', outline: 'none',
+          }}
+        />
+        <button
+          onClick={() => inputRef.current?.click()}
+          disabled={uploading}
+          title={t('adminSettings.branding.upload')}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '4px',
+            padding: '8px 12px', background: 'var(--bg-hover)',
+            border: '1px solid var(--border)', borderRadius: '6px',
+            fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)',
+            cursor: uploading ? 'default' : 'pointer', flexShrink: 0,
+          }}
+        >
+          {uploading ? <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Upload size={12} />}
+          {t('adminSettings.branding.upload')}
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={e => {
+            const file = e.target.files?.[0]
+            if (file) handleUpload(file)
+            e.target.value = ''
+          }}
+        />
+      </div>
+      {hint && <p style={{ fontFamily: MONO, fontSize: '0.67rem', color: 'var(--fg-muted)', marginTop: '4px' }}>{hint}</p>}
+      {value && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+          <img
+            src={value} alt=""
+            style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'contain', border: '1px solid var(--border)' }}
+          />
+          <span style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>{t('adminSettings.branding.preview')}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -142,29 +228,23 @@ export default function AdminSettingsPage() {
             onChange={setSiteName}
             placeholder="My Private Cloud"
           />
-          <Field
+          <ImageField
             label={t('adminSettings.branding.logoUrl')}
             value={logoUrl}
             onChange={setLogoUrl}
             placeholder="https://example.com/logo.png"
             hint={t('adminSettings.branding.logoHint')}
+            uploadType="logo"
+            t={t}
           />
-          <Field
+          <ImageField
             label={t('adminSettings.branding.faviconUrl')}
             value={faviconUrl}
             onChange={setFaviconUrl}
             placeholder="https://example.com/favicon.ico"
+            uploadType="favicon"
+            t={t}
           />
-
-          {logoUrl && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
-              <img
-                src={logoUrl} alt=""
-                style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'contain', border: '1px solid var(--border)' }}
-              />
-              <span style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>{t('adminSettings.branding.preview')}</span>
-            </div>
-          )}
 
           <button
             onClick={saveSettings}

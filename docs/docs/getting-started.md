@@ -115,13 +115,23 @@ docker run -d --name muvee-agent \
 
 1. Open `https://example.com` and sign in with your configured identity provider
 2. Click **New Project**
-3. Fill in Git URL, branch, domain prefix
-4. Click **Deploy** — muvee will:
+3. Choose a repository source:
+   - **External Repo** — enter a Git URL and branch (supports public repos, HTTPS tokens, and SSH keys)
+   - **Hosted Repo** — muvee creates a bare git repo for you; after project creation you'll get a push URL
+4. Fill in domain prefix and other settings
+5. Click **Create Project**, then **Deploy** — muvee will:
    - Clone your repo on a builder node
    - Build the Dockerfile
    - Push the image to the internal registry
    - Deploy the container on a deploy node
    - Configure Traefik routing to `{domain_prefix}.example.com`
+
+If you chose **Hosted Repo**, push your code first:
+```bash
+git remote add muvee https://example.com/git/PROJECT_ID.git
+git push muvee main
+# username: anything, password: your project token (create one in the Tokens tab)
+```
 
 ## Download Binaries
 

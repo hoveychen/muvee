@@ -1,4 +1,9 @@
 {
+  "health": {
+    "fixCommand": "Fix command",
+    "copy": "Copy",
+    "copied": "Copied"
+  },
   "nav": {
     "projects": "Projects",
     "datasets": "Datasets",
@@ -61,7 +66,18 @@
       "config": "Config",
       "datasets": "Datasets",
       "secrets": "Secrets",
-      "workspace": "Workspace"
+      "workspace": "Workspace",
+      "repository": "Repository",
+      "tokens": "Tokens"
+    },
+    "pushUrl": "GIT PUSH URL",
+    "pushUrlHint": "Use any username and your API token as the password.",
+    "repo": {
+      "empty": "Repository is empty. Push some code to get started.",
+      "branches": "Branches",
+      "commits": "Commits",
+      "files": "Files",
+      "noCommits": "No commits yet"
     },
     "noDeployments": "No deployments yet. Click Deploy to start.",
     "config": {
@@ -136,6 +152,21 @@
       "useForGitHttps": "Use for git clone (HTTPS)",
       "githubPat": "(GitHub PAT → x-access-token)",
       "failedToUpdate": "Failed to update secrets: "
+    },
+    "tokens": {
+      "hint": "Project-scoped API tokens for git push and CLI access. Each token only works with this project.",
+      "namePlaceholder": "Token name (e.g. CI, laptop)",
+      "create": "Create Token",
+      "creating": "Creating…",
+      "created": "Token created — copy it now, you won't see it again.",
+      "copyWarning": "This token will not be displayed again. Store it securely.",
+      "deleteConfirm": "Delete this token? Any git remotes or scripts using it will stop working.",
+      "empty": "No tokens yet. Create one to enable git push or CLI access for this project.",
+      "columns": {
+        "name": "NAME",
+        "lastUsed": "LAST USED",
+        "created": "CREATED"
+      }
     }
   },
   "datasets": {
@@ -169,6 +200,7 @@
     "heading": "Create Project",
     "fields": {
       "name": "Name",
+      "gitSource": "Repository Source",
       "gitUrl": "Git URL",
       "gitBranch": "Git Branch",
       "domainPrefix": "DOMAIN PREFIX",
@@ -177,6 +209,18 @@
       "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g",
       "volumeMountPath": "Persistent Storage Path",
       "volumeMountPathHint": "Container-internal mount path (e.g. /workspace). Leave empty to disable."
+    },
+    "gitSource": {
+      "external": "External Repo",
+      "hosted": "Hosted Repo",
+      "hostedHint": "A git repository will be created for you. After project creation, you'll get a push URL."
+    },
+    "hostedCreated": {
+      "heading": "Repository Created",
+      "description": "Your hosted repository for \"{{name}}\" is ready. Push your code using the URL below.",
+      "pushUrl": "GIT PUSH URL",
+      "authHint": "Use any username and your Muvee API token as the password when prompted for credentials.",
+      "goToProject": "Go to Project"
     },
     "domainOptional": "Optional — defaults to \"{{name}}\" if left blank",
     "domainRequired": "Required — project name cannot be used as a subdomain",
@@ -273,11 +317,15 @@
     "online": "online",
     "offline": "offline",
     "empty": "No nodes registered yet. Start an Agent to connect nodes.",
+    "noBuilder": "No builder node registered. Builds will not work until a builder agent is connected.",
+    "noDeployer": "No deploy node registered. Deployments will not work until a deploy agent is connected.",
     "cpu": "CPU",
     "mem": "MEM",
     "disk": "DISK",
     "load": "Load",
-    "updated": "updated"
+    "updated": "updated",
+    "cleanOffline": "Clean Offline",
+    "cleanConfirm": "Remove all offline nodes?"
   },
   "users": {
     "sectionLabel": "ACCESS CONTROL",
@@ -318,7 +366,8 @@
       "siteName": "SITE NAME",
       "logoUrl": "LOGO URL",
       "faviconUrl": "FAVICON URL",
-      "logoPreview": "Logo preview",
+      "logoPreview": "Preview",
+      "upload": "Upload",
       "save": "Save & Continue"
     },
     "health": {
@@ -333,7 +382,11 @@
       "nfs_volume": "NFS Volume Path",
       "nfs_dataset": "NFS Dataset Path",
       "builder_agents": "Builder Agents",
-      "deploy_agents": "Deploy Agents"
+      "deploy_agents": "Deploy Agents",
+      "docker": "Docker Daemon",
+      "docker_buildx": "Docker Buildx Plugin",
+      "docker_platform": "Cross-platform Build (linux/amd64)",
+      "docker_push": "Docker Push Support"
     },
     "agents": {
       "instructions": "HOW TO START AGENTS",
@@ -365,6 +418,7 @@
       "logoHint": "Displayed in the sidebar. Use a square image for best results.",
       "faviconUrl": "FAVICON URL",
       "preview": "Logo preview",
+      "upload": "Upload",
       "save": "Save Changes",
       "saving": "Saving...",
       "saved": "Saved!"
@@ -374,27 +428,6 @@
       "recheck": "Re-run",
       "running": "Running checks...",
       "updatedAt": "Updated at {{time}}"
-    }
-  },
-  "community": {
-    "enterDashboard": "Dashboard",
-    "platformLabel": "Private Cloud",
-    "heroTitle": "Explore Live Applications",
-    "heroDesc": "Browse all currently running projects deployed on this platform. Click any card to visit.",
-    "runningCount": "{{count}} apps online",
-    "loginRequired": "Login required",
-    "noPreview": "Preview unavailable",
-    "emptyTitle": "No apps running",
-    "emptyDesc": "Projects will appear here once they are deployed and running",
-    "skillLabel": "AI SKILL URL",
-    "skillDesc": "Add this URL to Cursor / Claude Code / Copilot — the AI will learn muveectl and deploy your app in one shot.",
-    "skillCopy": "Copy",
-    "skillCopied": "Copied!",
-    "authModal": {
-      "label": "ACCESS RESTRICTED",
-      "desc": "This app requires authentication. Clicking proceed will redirect you to the login page.",
-      "proceed": "Proceed",
-      "cancel": "Cancel"
     }
   }
 }

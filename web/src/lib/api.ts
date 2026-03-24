@@ -10,10 +10,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: 'include',
   })
   if (!res.ok) {
-    if (res.status === 401) {
-      window.location.href = '/auth/google/login'
-      throw new Error('unauthorized')
-    }
     const err = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error(err.error || res.statusText)
   }
@@ -59,6 +55,30 @@ export const api = {
     },
     workspaceDelete: (id: string, path: string) =>
       request(`/api/projects/${id}/workspace?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+
+    // Hosted git repository browser
+    repoTree: (id: string, ref?: string, path?: string) => {
+      const params = new URLSearchParams()
+      if (ref) params.set('ref', ref)
+      if (path) params.set('path', path)
+      return request<import('./types').RepoTreeEntry[]>(`/api/projects/${id}/repo/tree?${params}`)
+    },
+    repoBlob: async (id: string, ref?: string, path?: string): Promise<string> => {
+      const params = new URLSearchParams()
+      if (ref) params.set('ref', ref)
+      if (path) params.set('path', path)
+      const res = await fetch(`/api/projects/${id}/repo/blob?${params}`, { credentials: 'include' })
+      if (!res.ok) throw new Error(res.statusText)
+      return res.text()
+    },
+    repoCommits: (id: string, ref?: string, limit = 20) => {
+      const params = new URLSearchParams()
+      if (ref) params.set('ref', ref)
+      params.set('limit', String(limit))
+      return request<import('./types').RepoCommit[]>(`/api/projects/${id}/repo/commits?${params}`)
+    },
+    repoBranches: (id: string) =>
+      request<import('./types').RepoBranch[]>(`/api/projects/${id}/repo/branches`),
   },
 
   datasets: {
@@ -73,9 +93,9 @@ export const api = {
   },
 
   tokens: {
-    list: () => request<import('./types').ApiToken[]>('/api/tokens'),
-    create: (name: string) => request<import('./types').CreatedApiToken>('/api/tokens', { method: 'POST', body: JSON.stringify({ name }) }),
-    delete: (id: string) => request(`/api/tokens/${id}`, { method: 'DELETE' }),
+    list: (projectId: string) => request<import('./types').ApiToken[]>(`/api/projects/${projectId}/tokens`),
+    create: (projectId: string, name: string) => request<import('./types').CreatedApiToken>(`/api/projects/${projectId}/tokens`, { method: 'POST', body: JSON.stringify({ name }) }),
+    delete: (projectId: string, tokenId: string) => request(`/api/projects/${projectId}/tokens/${tokenId}`, { method: 'DELETE' }),
   },
 
   secrets: {
@@ -87,6 +107,7 @@ export const api = {
 
   nodes: {
     list: () => request<import('./types').Node[]>('/api/nodes'),
+    delete: (id: string) => request(`/api/nodes/${id}`, { method: 'DELETE' }),
     metrics: (id: string) => request<import('./types').NodeMetric | null>(`/api/nodes/${id}/metrics`),
   },
 
@@ -96,9 +117,6 @@ export const api = {
   },
 
   public: {
-    projects: () => fetch('/api/public/projects')
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
-      .then(data => Array.isArray(data) ? data : []) as Promise<import('./types').PublicProject[]>,
     settings: () => fetch('/api/public/settings')
       .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText))) as Promise<import('./types').SystemSettings>,
   },
@@ -108,5 +126,19 @@ export const api = {
     updateSettings: (data: Partial<import('./types').SystemSettings>) =>
       request<import('./types').SystemSettings>('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) }),
     health: () => request<import('./types').HealthReport>('/api/admin/health'),
+    uploadBranding: async (type: 'logo' | 'favicon', file: File): Promise<{ url: string }> => {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`/api/admin/branding/upload?type=${type}`, {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }))
+        throw new Error(err.error || res.statusText)
+      }
+      return res.json()
+    },
   },
 }

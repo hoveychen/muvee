@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react'
+import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project, Secret } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
@@ -324,12 +324,15 @@ function PrivateRepoSection({
 
 export default function NewProject() {
   const [form, setForm] = useState<Partial<Project>>({
+    git_source: 'external',
     git_branch: 'main',
     dockerfile_path: 'Dockerfile',
     auth_required: false,
     auth_allowed_domains: '',
     memory_limit: '4g',
   })
+  const [createdProject, setCreatedProject] = useState<Project | null>(null)
+  const [copied, setCopied] = useState(false)
   const [cred, setCred] = useState<CredConfig>({
     mode: 'none',
     existingSecretId: '',
@@ -346,18 +349,20 @@ export default function NewProject() {
     e.preventDefault()
     setError('')
 
-    // Validate credential inputs
-    if (cred.mode === 'new_pat' && !cred.patValue.trim()) {
-      setError(t('newProject.errors.noToken'))
-      return
-    }
-    if (cred.mode === 'new_ssh' && !cred.sshKeyValue.trim()) {
-      setError(t('newProject.errors.noSshKey'))
-      return
-    }
-    if (cred.mode === 'existing' && !cred.existingSecretId) {
-      setError(t('newProject.errors.noSecret'))
-      return
+    // Validate credential inputs (only for external repos)
+    if (form.git_source !== 'hosted') {
+      if (cred.mode === 'new_pat' && !cred.patValue.trim()) {
+        setError(t('newProject.errors.noToken'))
+        return
+      }
+      if (cred.mode === 'new_ssh' && !cred.sshKeyValue.trim()) {
+        setError(t('newProject.errors.noSshKey'))
+        return
+      }
+      if (cred.mode === 'existing' && !cred.existingSecretId) {
+        setError(t('newProject.errors.noSecret'))
+        return
+      }
     }
 
     setSaving(true)
@@ -365,7 +370,14 @@ export default function NewProject() {
       // Step 1: create the project
       const project = await api.projects.create(form)
 
-      // Step 2: create + bind credential (if any)
+      // For hosted repos, show the push URL instead of navigating
+      if (project.git_source === 'hosted' && project.git_push_url) {
+        setCreatedProject(project)
+        setSaving(false)
+        return
+      }
+
+      // Step 2: create + bind credential (if any, for external repos)
       if (cred.mode === 'new_pat') {
         const secretName = `${form.name || 'project'} Git Token`
         const sec = await api.secrets.create({ name: secretName, type: 'password', value: cred.patValue.trim() })
@@ -419,6 +431,64 @@ export default function NewProject() {
     </label>
   )
 
+  // If a hosted project was just created, show the push URL
+  if (createdProject && createdProject.git_push_url) {
+    const pushUrl = createdProject.git_push_url
+    const copyUrl = () => {
+      navigator.clipboard.writeText(pushUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+    return (
+      <div className="page-enter" style={{ maxWidth: '520px' }}>
+        <div className="mb-8">
+          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.15em' }}>{t('newProject.sectionLabel')}</p>
+          <h1 style={{ fontFamily: 'Bebas Neue', fontSize: '3rem', color: 'var(--fg-primary)', lineHeight: 1 }}>{t('newProject.hostedCreated.heading')}</h1>
+        </div>
+        <div className="flex flex-col gap-5">
+          <p style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-secondary)', lineHeight: 1.6 }}>
+            {t('newProject.hostedCreated.description', { name: createdProject.name })}
+          </p>
+          <div>
+            <label style={labelStyle}>{t('newProject.hostedCreated.pushUrl')}</label>
+            <div className="flex items-center gap-2">
+              <code style={{
+                flex: 1, fontFamily: MONO, fontSize: '0.8rem', padding: '0.5rem 0.75rem',
+                background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '2px',
+                color: 'var(--accent)', wordBreak: 'break-all',
+              }}>{pushUrl}</code>
+              <button type="button" onClick={copyUrl} style={{
+                background: 'none', border: '1px solid var(--border)', borderRadius: '2px',
+                padding: '0.5rem', cursor: 'pointer', color: 'var(--fg-muted)',
+              }}>
+                {copied ? <Check size={14} style={{ color: 'var(--accent)' }} /> : <Copy size={14} />}
+              </button>
+            </div>
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', lineHeight: 1.8, background: 'var(--bg-hover)', padding: '0.75rem 1rem', borderRadius: '2px' }}>
+            <div>git remote add muvee {pushUrl}</div>
+            <div>git push muvee main</div>
+          </div>
+          <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>
+            {t('newProject.hostedCreated.authHint')}
+          </p>
+          <button
+            onClick={() => navigate(`/projects/${createdProject.id}`)}
+            style={{
+              background: 'var(--accent)', color: '#0f0f0f', fontFamily: MONO,
+              fontSize: '0.85rem', fontWeight: 500, padding: '0.6rem 1.5rem',
+              border: 'none', borderRadius: '2px', cursor: 'pointer', alignSelf: 'flex-start',
+            }}
+          >
+            {t('newProject.hostedCreated.goToProject')}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const isHosted = form.git_source === 'hosted'
+
   return (
     <div className="page-enter" style={{ maxWidth: '520px' }}>
         <div className="mb-8">
@@ -427,6 +497,39 @@ export default function NewProject() {
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          {/* Git Source selector */}
+          <div>
+            <label style={labelStyle}>{t('newProject.fields.gitSource').toUpperCase()}</label>
+            <div className="flex gap-2">
+              {([
+                { id: 'external' as const, icon: Globe, label: t('newProject.gitSource.external') },
+                { id: 'hosted' as const, icon: GitBranch, label: t('newProject.gitSource.hosted') },
+              ]).map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setForm({ ...form, git_source: opt.id })}
+                  className="flex items-center gap-2 flex-1"
+                  style={{
+                    fontFamily: MONO, fontSize: '0.78rem', padding: '0.55rem 0.75rem',
+                    borderRadius: '2px', cursor: 'pointer',
+                    border: `1px solid ${form.git_source === opt.id ? 'var(--accent)' : 'var(--border)'}`,
+                    background: form.git_source === opt.id ? 'rgba(200,240,60,0.08)' : 'var(--bg-hover)',
+                    color: form.git_source === opt.id ? 'var(--accent)' : 'var(--fg-muted)',
+                  }}
+                >
+                  <opt.icon size={14} />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {isHosted && (
+              <p style={{ fontFamily: MONO, fontSize: '0.63rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.gitSource.hostedHint')}
+              </p>
+            )}
+          </div>
+
           {/* Name */}
           <div>
             {fieldLabel(t('newProject.fields.name'))}
@@ -440,22 +543,24 @@ export default function NewProject() {
             />
           </div>
 
-          {/* Git URL */}
-          <div>
-            {fieldLabel(t('newProject.fields.gitUrl'))}
-            <input
-              value={form.git_url ?? ''}
-              onChange={e => setForm({ ...form, git_url: e.target.value })}
-              required
-              placeholder="https://github.com/owner/repo.git"
-              style={inputStyle}
-              onFocus={focusAccent}
-              onBlur={blurBorder}
-            />
-          </div>
+          {/* Git URL — only for external repos */}
+          {!isHosted && (
+            <div>
+              {fieldLabel(t('newProject.fields.gitUrl'))}
+              <input
+                value={form.git_url ?? ''}
+                onChange={e => setForm({ ...form, git_url: e.target.value })}
+                required
+                placeholder="https://github.com/owner/repo.git"
+                style={inputStyle}
+                onFocus={focusAccent}
+                onBlur={blurBorder}
+              />
+            </div>
+          )}
 
-          {/* Private repo credential shortcut — appears when git URL is filled */}
-          {(form.git_url ?? '').trim() !== '' && (
+          {/* Private repo credential shortcut — only for external repos */}
+          {!isHosted && (form.git_url ?? '').trim() !== '' && (
             <PrivateRepoSection
               gitUrl={form.git_url ?? ''}
               projectName={form.name ?? ''}
@@ -464,18 +569,20 @@ export default function NewProject() {
             />
           )}
 
-          {/* Branch */}
-          <div>
-            {fieldLabel(t('newProject.fields.gitBranch'), false)}
-            <input
-              value={form.git_branch ?? ''}
-              onChange={e => setForm({ ...form, git_branch: e.target.value })}
-              placeholder="main"
-              style={inputStyle}
-              onFocus={focusAccent}
-              onBlur={blurBorder}
-            />
-          </div>
+          {/* Branch — only for external repos */}
+          {!isHosted && (
+            <div>
+              {fieldLabel(t('newProject.fields.gitBranch'), false)}
+              <input
+                value={form.git_branch ?? ''}
+                onChange={e => setForm({ ...form, git_branch: e.target.value })}
+                placeholder="main"
+                style={inputStyle}
+                onFocus={focusAccent}
+                onBlur={blurBorder}
+              />
+            </div>
+          )}
 
           {/* Domain prefix */}
           <div>

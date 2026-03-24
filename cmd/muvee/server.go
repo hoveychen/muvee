@@ -39,7 +39,18 @@ func runServer() {
 	if err != nil {
 		log.Fatalf("auth service: %v", err)
 	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	agentSecret := os.Getenv("AGENT_SECRET")
+	if agentSecret == "" {
+		log.Println("Warning: AGENT_SECRET is not set; agent endpoints are unauthenticated")
+	}
+
 	sched := scheduler.New(st)
+	sched.SetGitHostingConfig(agentSecret, fmt.Sprintf("http://localhost:%s", port))
+
 	scanInterval := 5 * time.Minute
 	datasetNFSBasePath := os.Getenv("DATASET_NFS_BASE_PATH")
 	mon := monitor.New(st, datasetNFSBasePath, scanInterval, 4)
@@ -50,10 +61,6 @@ func runServer() {
 		baseDomain = "localhost"
 	}
 	authServiceURL := os.Getenv("AUTH_SERVICE_URL")
-	agentSecret := os.Getenv("AGENT_SECRET")
-	if agentSecret == "" {
-		log.Println("Warning: AGENT_SECRET is not set; agent endpoints are unauthenticated")
-	}
 	registryAddr := os.Getenv("REGISTRY_ADDR")
 	if registryAddr == "" {
 		registryAddr = "localhost:5000"
@@ -71,6 +78,18 @@ func runServer() {
 		log.Println("Warning: DATASET_NFS_BASE_PATH is not set; dataset feature is disabled")
 	}
 
+	gitRepoBasePath := os.Getenv("GIT_REPO_BASE_PATH")
+	if gitRepoBasePath != "" {
+		log.Printf("Git repository base path: %s", gitRepoBasePath)
+	} else {
+		log.Println("Warning: GIT_REPO_BASE_PATH is not set; hosted git repositories are disabled")
+	}
+
+	brandingDir := os.Getenv("BRANDING_DIR")
+	if brandingDir == "" {
+		brandingDir = "/data/branding"
+	}
+
 	srv := api.NewServer(st, authSvc, sched, mon, api.ServerConfig{
 		BaseDomain:         baseDomain,
 		AuthServiceURL:     authServiceURL,
@@ -80,16 +99,14 @@ func runServer() {
 		RegistryPassword:   os.Getenv("REGISTRY_PASSWORD"),
 		VolumeNFSBasePath:  volumeNFSBasePath,
 		DatasetNFSBasePath: datasetNFSBasePath,
+		GitRepoBasePath:    gitRepoBasePath,
+		BrandingDir:        brandingDir,
 	})
 	handler := mountFrontend(srv.Router())
 
 	go processBuildCompletions(ctx, st, sched)
 	go processNodeFailovers(ctx, st, sched)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
 	log.Printf("muvee server listening on :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
@@ -104,6 +121,10 @@ func mountFrontend(apiHandler http.Handler) http.Handler {
 			return
 		}
 		if len(p) >= 5 && p[:5] == "/auth" {
+			apiHandler.ServeHTTP(w, r)
+			return
+		}
+		if len(p) >= 5 && p[:5] == "/git/" {
 			apiHandler.ServeHTTP(w, r)
 			return
 		}
