@@ -78,13 +78,16 @@ func (s *Server) handleGetSystemHealth(w http.ResponseWriter, r *http.Request) {
 	// ── 4. NFS volume path ───────────────────────────────────────────────────
 	checks = append(checks, checkPath("nfs_volume", s.volumeNFSBasePath))
 
-	// ── 5. NFS dataset path ──────────────────────────────────────────────────
-	checks = append(checks, checkPath("nfs_dataset", s.datasetNFSBasePath))
+	// ── 5. NFS dataset path (read-only on control panel is expected) ─────────
+	checks = append(checks, checkPathReadOnly("nfs_dataset", s.datasetNFSBasePath))
 
-	// ── 6. Builder agents ────────────────────────────────────────────────────
+	// ── 6. Git repo path ────────────────────────────────────────────────────
+	checks = append(checks, checkPath("git_repo_path", s.gitRepoBasePath))
+
+	// ── 7. Builder agents ────────────────────────────────────────────────────
 	checks = append(checks, s.checkAgents(ctx, "builder"))
 
-	// ── 7. Deploy agents ─────────────────────────────────────────────────────
+	// ── 8. Deploy agents ─────────────────────────────────────────────────────
 	checks = append(checks, s.checkAgents(ctx, "deploy"))
 
 	jsonOK(w, HealthReport{
@@ -152,6 +155,17 @@ func checkPath(name, path string) HealthCheck {
 	f.Close()
 	os.Remove(probeFile)
 	return HealthCheck{Name: name, Status: HealthCheckOK, Message: fmt.Sprintf("%s is accessible and writable", path)}
+}
+
+// checkPathReadOnly verifies a filesystem path is configured and readable (no write test).
+func checkPathReadOnly(name, path string) HealthCheck {
+	if path == "" {
+		return HealthCheck{Name: name, Status: HealthCheckWarning, Message: "path not configured"}
+	}
+	if _, err := os.Stat(path); err != nil {
+		return HealthCheck{Name: name, Status: HealthCheckError, Message: fmt.Sprintf("cannot access %s: %v", path, err)}
+	}
+	return HealthCheck{Name: name, Status: HealthCheckOK, Message: fmt.Sprintf("%s is accessible", path)}
 }
 
 // checkAgents verifies that at least one agent of the given role (builder/deploy)

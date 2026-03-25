@@ -336,7 +336,7 @@ export default function OnboardPage() {
   )
 
   const iconForCheck = (name: string) => {
-    if (name.includes('nfs')) return <HardDrive size={13} />
+    if (name.includes('nfs') || name.includes('git_repo')) return <HardDrive size={13} />
     if (name.includes('agent')) return <Server size={13} />
     if (name.includes('registry') || name.includes('traefik') || name.includes('internet')) return <Globe size={13} />
     return <Cpu size={13} />
