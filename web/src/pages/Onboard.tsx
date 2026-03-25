@@ -249,7 +249,7 @@ export default function OnboardPage() {
     </div>
   )
 
-  const imageField = (label: string, value: string, onChange: (v: string) => void, uploadType: 'logo' | 'favicon', placeholder?: string) => {
+  const ImageField = useCallback(({ label, value, onChange, uploadType, placeholder }: { label: string; value: string; onChange: (v: string) => void; uploadType: 'logo' | 'favicon'; placeholder?: string }) => {
     const inputRef = useRef<HTMLInputElement>(null)
     const [uploading, setUploading] = useState(false)
     const handleUpload = async (file: File) => {
@@ -312,7 +312,7 @@ export default function OnboardPage() {
         )}
       </div>
     )
-  }
+  }, [t])
 
   const btn = (label: string, onClick: () => void, disabled = false, loading = false) => (
     <button
@@ -367,8 +367,8 @@ export default function OnboardPage() {
         {step === 0 && (
           <div className="page-enter">
             {field(t('onboard.branding.siteName'), siteName, setSiteName, 'My Private Cloud')}
-            {imageField(t('onboard.branding.logoUrl'), logoUrl, setLogoUrl, 'logo', 'https://example.com/logo.png')}
-            {imageField(t('onboard.branding.faviconUrl'), faviconUrl, setFaviconUrl, 'favicon', 'https://example.com/favicon.ico')}
+            <ImageField label={t('onboard.branding.logoUrl')} value={logoUrl} onChange={setLogoUrl} uploadType="logo" placeholder="https://example.com/logo.png" />
+            <ImageField label={t('onboard.branding.faviconUrl')} value={faviconUrl} onChange={setFaviconUrl} uploadType="favicon" placeholder="https://example.com/favicon.ico" />
 
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '24px' }}>
               {btn(t('onboard.branding.save'), saveBranding, brandingSaving, brandingSaving)}
