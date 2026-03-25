@@ -49,7 +49,7 @@ func runServer() {
 	}
 
 	sched := scheduler.New(st)
-	sched.SetGitHostingConfig(agentSecret, fmt.Sprintf("http://localhost:%s", port))
+	sched.SetGitHostingConfig(agentSecret)
 
 	scanInterval := 5 * time.Minute
 	datasetNFSBasePath := os.Getenv("DATASET_NFS_BASE_PATH")

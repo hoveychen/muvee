@@ -62,7 +62,7 @@ services:
     command: ["server"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/agent/config || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/auth/providers || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -105,10 +105,13 @@ services:
       # Dataset NFS base path: datasets use relative sub-paths under this base
       # (e.g. "warehouse" -> /opt/muvee/datasets/warehouse in standalone mode).
       DATASET_NFS_BASE_PATH: ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}
+      # Git repository base path: self-hosted bare repos for projects.
+      GIT_REPO_BASE_PATH: ${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}
     volumes:
       - ./db/migrations:/app/db/migrations:ro
       - ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:rw
       - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:ro
+      - ${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:rw
     ports:
       - "8080:8080"
     depends_on:

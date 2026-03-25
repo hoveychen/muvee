@@ -253,7 +253,7 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 
 	switch task.Type {
 	case store.TaskTypeBuild:
-		result, err := runBuild(ctx, task, registryAddr, func(line string) {
+		result, err := runBuild(ctx, task, registryAddr, baseURL, func(line string) {
 			appendLog(ctx, baseURL, secret, task.DeploymentID, line)
 		})
 		taskErr = err
@@ -284,7 +284,7 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 	}
 }
 
-func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn func(string)) (map[string]interface{}, error) {
+func runBuild(ctx context.Context, task *store.Task, registryAddr, controlPlaneURL string, logFn func(string)) (map[string]interface{}, error) {
 	p := task.Payload
 	// Extract build secrets from payload.
 	buildSecrets := make(map[string]string)
@@ -295,8 +295,14 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr string, logFn 
 			}
 		}
 	}
+	// Hosted repos use a relative path (e.g. "/git/<id>.git");
+	// prepend the control-plane URL so the builder can reach it.
+	gitURL := str(p, "git_url")
+	if strings.HasPrefix(gitURL, "/") {
+		gitURL = strings.TrimRight(controlPlaneURL, "/") + gitURL
+	}
 	cfg := builder.BuildConfig{
-		GitURL:         str(p, "git_url"),
+		GitURL:         gitURL,
 		GitBranch:      str(p, "git_branch"),
 		DockerfilePath: str(p, "dockerfile_path"),
 		DeploymentID:   str(p, "deployment_id"),

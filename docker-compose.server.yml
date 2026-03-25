@@ -53,7 +53,7 @@ services:
     command: ["server"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/agent/config || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/auth/providers || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -96,6 +96,8 @@ services:
       # Dataset NFS base path:
       # Dataset nfs_path values are relative sub-paths under this base.
       DATASET_NFS_BASE_PATH: ${DATASET_NFS_BASE_PATH}
+      # Git repository base path: self-hosted bare repos for projects.
+      GIT_REPO_BASE_PATH: ${GIT_REPO_BASE_PATH}
     volumes:
       - ./db/migrations:/app/db/migrations:ro
       # Uncomment the line below (and set VOLUME_NFS_BASE_PATH in .env) to enable workspace file management.
@@ -104,6 +106,8 @@ services:
       # Uncomment to enable dataset monitor access (server scans dataset files directly).
       # The NFS share must already be mounted on this host at DATASET_NFS_BASE_PATH.
       # - ${DATASET_NFS_BASE_PATH}:${DATASET_NFS_BASE_PATH}:ro
+      # Uncomment to enable self-hosted git repositories (set GIT_REPO_BASE_PATH in .env).
+      # - ${GIT_REPO_BASE_PATH}:${GIT_REPO_BASE_PATH}:rw
     ports:
       - "8080:8080"
     depends_on:

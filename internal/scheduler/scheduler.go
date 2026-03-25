@@ -13,7 +13,6 @@ import (
 type Scheduler struct {
 	store       *store.Store
 	agentSecret string // shared secret for agent auth to hosted git repos
-	serverAddr  string // internal address of the control plane (e.g., "http://localhost:8080")
 }
 
 func New(st *store.Store) *Scheduler {
@@ -21,9 +20,8 @@ func New(st *store.Store) *Scheduler {
 }
 
 // SetGitHostingConfig configures the scheduler for hosted git repo builds.
-func (s *Scheduler) SetGitHostingConfig(agentSecret, serverAddr string) {
+func (s *Scheduler) SetGitHostingConfig(agentSecret string) {
 	s.agentSecret = agentSecret
-	s.serverAddr = serverAddr
 }
 
 type nodeScore struct {
@@ -173,14 +171,11 @@ func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deploym
 		}
 	}
 
-	// For hosted repos, construct the internal clone URL with agent credentials.
+	// For hosted repos, use a relative path; the agent prepends its CONTROL_PLANE_URL.
 	gitURL := project.GitURL
 	gitBranch := project.GitBranch
 	if project.GitSource == store.GitSourceHosted {
-		if s.serverAddr == "" {
-			return fmt.Errorf("hosted git repos require server address to be configured")
-		}
-		gitURL = fmt.Sprintf("%s/git/%s.git", s.serverAddr, project.ID)
+		gitURL = fmt.Sprintf("/git/%s.git", project.ID)
 		gitUsername = "agent"
 		gitToken = s.agentSecret
 		gitSSHKey = ""
