@@ -71,7 +71,7 @@ func (p *wecomProvider) UserInfo(ctx context.Context, code string) (email, name,
 	var userInfoResp struct {
 		ErrCode int    `json:"errcode"`
 		ErrMsg  string `json:"errmsg"`
-		UserID  string `json:"UserId"`
+		UserID  string `json:"userid"`
 	}
 	if err := json.Unmarshal(body, &userInfoResp); err != nil {
 		return "", "", "", fmt.Errorf("parse getuserinfo: %w", err)

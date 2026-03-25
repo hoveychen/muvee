@@ -289,7 +289,11 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	}
 	state := cookieParts[1]
 
-	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, r.URL.Query().Get("code"))
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		code = r.URL.Query().Get("authCode") // DingTalk uses authCode instead of code
+	}
+	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return

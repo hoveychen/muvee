@@ -211,7 +211,11 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, Path: "/", Domain: cookieDomain,
 	})
 
-	email, _, _, err := p.UserInfo(ctx, r.URL.Query().Get("code"))
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		code = r.URL.Query().Get("authCode") // DingTalk uses authCode instead of code
+	}
+	email, _, _, err := p.UserInfo(ctx, code)
 	if err != nil {
 		log.Printf("authservice: UserInfo (%s): %v", providerName, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
