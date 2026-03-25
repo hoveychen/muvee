@@ -15,15 +15,15 @@ export default function Layout({ children }: { children?: ReactNode }) {
   const navigate = useNavigate()
   const { theme, toggleTheme } = useTheme()
   const { t, i18n } = useTranslation()
-  const { settings } = useSettings()
+  const { settings, loading } = useSettings()
   const isAdmin = user?.role === 'admin'
 
   // Redirect admin to onboarding if not yet completed
   useEffect(() => {
-    if (isAdmin && settings.onboarded === 'false') {
+    if (!loading && isAdmin && settings.onboarded === 'false') {
       navigate('/onboard', { replace: true })
     }
-  }, [isAdmin, settings.onboarded, navigate])
+  }, [loading, isAdmin, settings.onboarded, navigate])
 
   const ALL_NAV_ITEMS = [
     { to: '/projects', icon: LayoutGrid, label: t('nav.projects'), adminOnly: false },
