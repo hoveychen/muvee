@@ -127,17 +127,18 @@ func (p *feishuProvider) exchangeToken(ctx context.Context, code string) (string
 	respBody, _ := io.ReadAll(resp.Body)
 
 	var result struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-		Data struct {
-			AccessToken string `json:"access_token"`
-		} `json:"data"`
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+		ErrorDesc   string `json:"error_description"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("parse token response: %w", err)
 	}
-	if result.Code != 0 {
-		return "", fmt.Errorf("feishu token error %d: %s", result.Code, result.Msg)
+	if result.Error != "" {
+		return "", fmt.Errorf("feishu token error: %s: %s", result.Error, result.ErrorDesc)
 	}
-	return result.Data.AccessToken, nil
+	if result.AccessToken == "" {
+		return "", fmt.Errorf("feishu token response: empty access_token, body: %s", string(respBody))
+	}
+	return result.AccessToken, nil
 }
