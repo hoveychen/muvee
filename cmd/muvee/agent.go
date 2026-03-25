@@ -881,13 +881,13 @@ func collectAgentHealthChecks(role, registryAddr, volumeNFSBasePath, datasetNFSB
 		})
 	}
 
-	// 3. NFS volume path (relevant for both roles)
-	checks = append(checks, agentCheckPath("nfs_volume", volumeNFSBasePath))
+	// 3. NFS volume path & dataset path (deploy only)
+	if role == "deploy" {
+		checks = append(checks, agentCheckPath("nfs_volume", volumeNFSBasePath))
+		checks = append(checks, agentCheckPath("nfs_dataset", datasetNFSBasePath))
+	}
 
-	// 4. NFS dataset path
-	checks = append(checks, agentCheckPath("nfs_dataset", datasetNFSBasePath))
-
-	// 5. Docker feature detection (builder only)
+	// 4. Docker feature detection (builder only)
 	if role == "builder" {
 		// 5a. Check docker buildx plugin availability
 		out, err := exec.Command("docker", "buildx", "version").Output()

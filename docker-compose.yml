@@ -165,6 +165,9 @@ services:
     command:
       - "--configFile=/etc/traefik/traefik.yml"
       - "--certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+    depends_on:
+      muvee-server:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
