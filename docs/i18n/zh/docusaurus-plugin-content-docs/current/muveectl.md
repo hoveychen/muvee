@@ -61,6 +61,7 @@ muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
 muveectl projects workspace PROJECT_ID <ls|pull|push|rm> [参数...]
+muveectl projects port-forward PROJECT_ID [--port 端口]
 muveectl projects delete PROJECT_ID
 ```
 
@@ -138,6 +139,26 @@ muveectl projects workspace PROJECT_ID rm tmp/
 :::info 前提条件
 工作区功能需要在控制平面上配置 `VOLUME_NFS_BASE_PATH`，并在项目中设置 `volume_mount_path`。详见[配置参考](./configuration)。
 :::
+
+## 本地端口转发
+
+将项目正在运行的容器转发到本地端口，方便本地开发调用。身份认证自动使用 CLI 当前登录的身份——容器会收到与生产环境相同的 `X-Forwarded-User` 头。
+
+```bash
+# 自动选择空闲端口
+muveectl projects port-forward PROJECT_ID
+
+# 指定本地端口
+muveectl projects port-forward PROJECT_ID --port 3000
+```
+
+然后即可在本地调用项目的 API：
+
+```bash
+curl http://127.0.0.1:3000/api/some-endpoint
+```
+
+适用于本地开发时需要调用已部署项目暴露的 API，无需处理 OAuth 登录流程或 TLS 证书。
 
 ## 数据集管理
 
@@ -250,6 +271,9 @@ muveectl projects deployments PROJECT_ID
 # 4. 查看容器资源用量
 muveectl projects metrics PROJECT_ID
 
-# 5. 下载容器产生的文件
+# 5. 转发到本地端口进行开发
+muveectl projects port-forward PROJECT_ID --port 3000
+
+# 6. 下载容器产生的文件
 muveectl projects workspace PROJECT_ID pull output/result.json
 ```

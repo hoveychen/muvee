@@ -58,6 +58,7 @@ muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-au
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
+muveectl projects port-forward PROJECT_ID [--port PORT]
 muveectl projects delete PROJECT_ID
 ```
 
@@ -118,6 +119,26 @@ muveectl projects workspace PROJECT_ID push local_file.bin --remote-path uploads
 # Delete a file from the workspace
 muveectl projects workspace PROJECT_ID rm remote/path/file.txt
 ```
+
+## Local Port Forwarding
+
+Forward a project's running container to a local port for development. Authentication is automatically handled using your CLI identity — the container receives your email in the `X-Forwarded-User` header, just like in production.
+
+```bash
+# Auto-pick a free local port
+muveectl projects port-forward PROJECT_ID
+
+# Use a specific local port
+muveectl projects port-forward PROJECT_ID --port 3000
+```
+
+Then call the project's API locally:
+
+```bash
+curl http://127.0.0.1:3000/api/some-endpoint
+```
+
+This is useful for local development when your code needs to call APIs exposed by a deployed project, without dealing with OAuth login flows or TLS certificates.
 
 ## Datasets
 
@@ -307,3 +328,4 @@ Datasets are injected as Docker volumes at `/data/<dataset_name>`:
 1. Get project IDs: `muveectl projects list --json`
 2. Deploy a project: `muveectl projects deploy PROJECT_ID`
 3. Check deployment status: `muveectl projects deployments PROJECT_ID`
+4. Forward to local port: `muveectl projects port-forward PROJECT_ID --port 3000`

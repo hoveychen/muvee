@@ -558,6 +558,75 @@ func floatStr(m map[string]interface{}, key string) string {
 	return ""
 }
 
+// ─── Port Forward ─────────────────────────────────────────────────────────────
+
+func cmdPortForward(projectID string, args []string, c *client) error {
+	localPort := "0" // 0 = auto-pick
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--port" && i+1 < len(args) {
+			localPort = args[i+1]
+			i++
+		}
+	}
+
+	// Verify project exists and has a running deployment.
+	proj, err := c.do("GET", "/api/projects/"+projectID, nil)
+	if err != nil {
+		return fmt.Errorf("fetch project: %w", err)
+	}
+
+	proxyBase := c.server + "/api/projects/" + projectID + "/proxy"
+
+	ln, err := net.Listen("tcp", "127.0.0.1:"+localPort)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	defer ln.Close()
+
+	fmt.Printf("Forwarding 127.0.0.1:%d → %s (project: %s)\n",
+		ln.Addr().(*net.TCPAddr).Port, str(proj, "domain_prefix")+"."+str(proj, "name"), projectID)
+	fmt.Println("Press Ctrl+C to stop.")
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetURL := proxyBase + r.URL.Path
+		if r.URL.RawQuery != "" {
+			targetURL += "?" + r.URL.RawQuery
+		}
+
+		proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		// Copy request headers.
+		for k, vv := range r.Header {
+			for _, v := range vv {
+				proxyReq.Header.Add(k, v)
+			}
+		}
+		// Set auth.
+		proxyReq.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+
+		resp, err := http.DefaultClient.Do(proxyReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		// Copy response headers.
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})
+
+	return http.Serve(ln, handler)
+}
+
 // ─── Workspace ────────────────────────────────────────────────────────────────
 
 func cmdWorkspaceList(projectID string, args []string, c *client, jsonMode bool) error {
@@ -1268,6 +1337,9 @@ Projects:
   projects deployments ID       List deployment history
   projects metrics ID [--limit N]
                                 Show container resource metrics (CPU, mem, net, disk)
+  projects port-forward ID [--port PORT]
+                                Forward a local port to the project's running container
+                                (auth is injected automatically using your CLI identity)
   projects delete ID            Delete a project
 
 Datasets:
@@ -1419,6 +1491,12 @@ func main() {
 				os.Exit(1)
 			}
 			runErr = cmdProjectsMetrics(subArgs[0], subArgs[1:], c, jsonMode)
+		case "port-forward":
+			if len(subArgs) == 0 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects port-forward <ID> [--port PORT]")
+				os.Exit(1)
+			}
+			runErr = cmdPortForward(subArgs[0], subArgs[1:], c)
 		case "delete":
 			if len(subArgs) == 0 {
 				fmt.Fprintln(os.Stderr, "Usage: muveectl projects delete <ID>")

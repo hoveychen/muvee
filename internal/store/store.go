@@ -491,6 +491,28 @@ func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeployment
 	return items, nil
 }
 
+// GetRunningDeploymentByProject returns the running deployment info for a specific project.
+// Returns nil if no running deployment exists.
+func (s *Store) GetRunningDeploymentByProject(ctx context.Context, projectID uuid.UUID) (*RunningDeploymentInfo, error) {
+	var r RunningDeploymentInfo
+	err := s.db.QueryRow(ctx, `
+		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, n.host_ip, d.host_port
+		FROM deployments d
+		JOIN projects p ON d.project_id = p.id
+		JOIN nodes n ON d.node_id = n.id
+		WHERE d.project_id = $1 AND d.status = 'running' AND d.host_port > 0 AND n.host_ip != ''
+		ORDER BY d.created_at DESC
+		LIMIT 1
+	`, projectID).Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.HostIP, &r.HostPort)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 func (s *Store) UpdateDeploymentStatus(ctx context.Context, id uuid.UUID, status DeploymentStatus, logs string) error {
 	_, err := s.db.Exec(ctx, `UPDATE deployments SET status=$1, logs=$2, updated_at=NOW() WHERE id=$3`, status, logs, id)
 	return err

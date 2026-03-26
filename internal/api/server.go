@@ -6,7 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -168,6 +171,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/projects/{id}/workspace/download", s.workspaceDownload)
 		r.Post("/api/projects/{id}/workspace/upload", s.workspaceUpload)
 		r.Delete("/api/projects/{id}/workspace", s.workspaceDelete)
+
+		// Project proxy – forward requests to the running container
+		r.HandleFunc("/api/projects/{id}/proxy", s.handleProjectProxy)
+		r.HandleFunc("/api/projects/{id}/proxy/*", s.handleProjectProxy)
 
 		// Hosted git repository browser
 		r.Get("/api/projects/{id}/repo/tree", s.repoTree)
@@ -431,6 +438,26 @@ userEmail := r.Header.Get("X-Forwarded-User")
 const userEmail = req.headers["x-forwarded-user"]
 ` + "```" + `
 
+## Local Port Forwarding
+
+Forward a project's running container to a local port for development. Authentication is automatically handled using your CLI identity — the container receives your email in the ` + "`X-Forwarded-User`" + ` header, just like in production.
+
+` + "```" + `bash
+# Auto-pick a free local port
+muveectl projects port-forward PROJECT_ID
+
+# Use a specific local port
+muveectl projects port-forward PROJECT_ID --port 3000
+` + "```" + `
+
+Then call the project's API locally:
+
+` + "```" + `bash
+curl http://127.0.0.1:3000/api/some-endpoint
+` + "```" + `
+
+This is useful for local development when your code needs to call APIs exposed by a deployed project, without dealing with OAuth login flows or TLS certificates.
+
 ## Datasets
 
 ` + "```" + `bash
@@ -533,6 +560,7 @@ muveectl projects repo PROJECT_ID show main:README.md
 1. Get project IDs: ` + "`muveectl projects list --json`" + `
 2. Deploy a project: ` + "`muveectl projects deploy PROJECT_ID`" + `
 3. Check status: ` + "`muveectl projects deployments PROJECT_ID`" + `
+4. Forward to local port: ` + "`muveectl projects port-forward PROJECT_ID --port 3000`" + `
 `
 
 // ─── API Tokens ──────────────────────────────────────────────────────────────
@@ -1516,6 +1544,58 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+// ─── Project Proxy ───────────────────────────────────────────────────────────
+
+// handleProjectProxy reverse-proxies requests to the running container of a project.
+// The authenticated user's email is injected as X-Forwarded-User so the container
+// sees the same identity as it would through Traefik ForwardAuth.
+// Route: /api/projects/{id}/proxy/*
+func (s *Server) handleProjectProxy(w http.ResponseWriter, r *http.Request) {
+	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !ok {
+		jsonErr(w, nil, 404)
+		return
+	}
+
+	dep, err := s.store.GetRunningDeploymentByProject(r.Context(), projectID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if dep == nil {
+		jsonErr(w, fmt.Errorf("no running deployment for this project"), 404)
+		return
+	}
+
+	backendURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", dep.HostIP, dep.HostPort))
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = backendURL.Scheme
+			req.URL.Host = backendURL.Host
+			// Strip the /api/projects/{id}/proxy prefix to get the path the container expects.
+			prefix := "/api/projects/" + chi.URLParam(r, "id") + "/proxy"
+			req.URL.Path = strings.TrimPrefix(req.URL.Path, prefix)
+			if req.URL.Path == "" {
+				req.URL.Path = "/"
+			}
+			req.URL.RawQuery = r.URL.RawQuery
+			req.Host = backendURL.Host
+			// Inject authenticated user identity.
+			req.Header.Set("X-Forwarded-User", user.Email)
+			// Remove Authorization header so the API token is not leaked to the container.
+			req.Header.Del("Authorization")
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("proxy error (project %s): %v", projectID, err)
+			jsonErr(w, fmt.Errorf("proxy error: %v", err), 502)
+		},
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

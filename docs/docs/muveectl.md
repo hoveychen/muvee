@@ -101,6 +101,7 @@ muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
 muveectl projects workspace PROJECT_ID <ls|pull|push|rm> [args...]
 muveectl projects repo PROJECT_ID <tree|log|branches|show> [args...]
+muveectl projects port-forward PROJECT_ID [--port PORT]
 muveectl projects delete PROJECT_ID
 ```
 
@@ -204,6 +205,26 @@ muveectl projects workspace PROJECT_ID rm tmp/
 :::info Prerequisite
 The workspace feature requires `VOLUME_NFS_BASE_PATH` to be set on the control plane and the project's `volume_mount_path` to be configured. See [Configuration Reference](./configuration) for details.
 :::
+
+## Local Port Forwarding
+
+Forward a project's running container to a local port for development. Authentication is automatically handled using your CLI identity — the container receives your email in the `X-Forwarded-User` header, just like in production.
+
+```bash
+# Auto-pick a free local port
+muveectl projects port-forward PROJECT_ID
+
+# Use a specific local port
+muveectl projects port-forward PROJECT_ID --port 3000
+```
+
+Then call the project's API locally:
+
+```bash
+curl http://127.0.0.1:3000/api/some-endpoint
+```
+
+This is useful when your local development code needs to call APIs exposed by a deployed project, without dealing with OAuth login flows or TLS certificates.
 
 ## Datasets
 
@@ -330,6 +351,9 @@ muveectl projects deployments PROJECT_ID
 # 4. Check container resource usage
 muveectl projects metrics PROJECT_ID
 
-# 5. Download a file produced by the container
+# 5. Forward to local port for development
+muveectl projects port-forward PROJECT_ID --port 3000
+
+# 6. Download a file produced by the container
 muveectl projects workspace PROJECT_ID pull output/result.json
 ```
