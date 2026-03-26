@@ -42,6 +42,7 @@ type Server struct {
 	gitRepoBasePath    string   // base path for hosted bare git repos
 	brandingDir        string   // directory for uploaded branding assets (logo, favicon)
 	cliPending         sync.Map // state -> cli_port (string)
+	oauthPending       sync.Map // state -> provider name (string); fallback when cookie is missing
 }
 
 type ServerConfig struct {
@@ -243,7 +244,9 @@ func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "oauth_state", Value: providerName + ":" + state,
 		MaxAge: 300, HttpOnly: true, Path: "/",
+		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
+	s.oauthPending.Store(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -270,24 +273,35 @@ func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "oauth_state", Value: providerName + ":" + state,
 		MaxAge: 300, HttpOnly: true, Path: "/",
+		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
+	s.oauthPending.Store(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) {
 	providerName := chi.URLParam(r, "provider")
-	cookie, err := r.Cookie("oauth_state")
-	if err != nil {
-		http.Error(w, "missing state cookie", http.StatusBadRequest)
-		return
+	queryState := r.URL.Query().Get("state")
+
+	var state string
+	if cookie, err := r.Cookie("oauth_state"); err == nil {
+		// Cookie value format: "{provider}:{state}"
+		cookieParts := strings.SplitN(cookie.Value, ":", 2)
+		if len(cookieParts) == 2 && cookieParts[0] == providerName && cookieParts[1] == queryState {
+			state = cookieParts[1]
+		}
 	}
-	// Cookie value format: "{provider}:{state}"
-	cookieParts := strings.SplitN(cookie.Value, ":", 2)
-	if len(cookieParts) != 2 || cookieParts[0] != providerName || cookieParts[1] != r.URL.Query().Get("state") {
+	// Fallback: verify state against server-side store when cookie is missing (e.g. incognito)
+	if state == "" {
+		if prov, ok := s.oauthPending.Load(queryState); ok && prov.(string) == providerName {
+			state = queryState
+		}
+	}
+	if state == "" {
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
-	state := cookieParts[1]
+	s.oauthPending.Delete(state)
 
 	code := r.URL.Query().Get("code")
 	if code == "" {

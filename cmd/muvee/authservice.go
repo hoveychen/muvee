@@ -141,6 +141,7 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_state", Value: state,
 			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 		http.Redirect(w, r, p.AuthCodeURL(state), http.StatusFound)
 		return
@@ -262,6 +263,7 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: originalURL,
 		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
 	http.Redirect(w, r, forwardAuthBase+"/_oauth/login", http.StatusFound)
 }
