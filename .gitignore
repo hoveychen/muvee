@@ -65,6 +65,12 @@ letsencrypt/
 # Temp
 tmp/
 
+# Go build/test cache
+.gocache/
+
+# Release artifacts
+release/
+
 # binary
 /muvee
 /agent

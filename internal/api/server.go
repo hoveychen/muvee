@@ -367,25 +367,25 @@ description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages pr
 
 ## Installation
 
-Download from [GitHub Releases](https://github.com/hoveychen/muvee/releases/latest):
+Install ` + "`muveectl`" + ` from the official prebuilt assets on [GitHub Releases](https://github.com/hoveychen/muvee/releases/latest). Prefer the latest stable release unless the user asks for a specific version. Do not build from source and do not guess ad-hoc download URLs; use the published release assets directly.
 
 ` + "```" + `bash
-# macOS (Apple Silicon)
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_arm64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
-
-# macOS (Intel)
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_amd64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
-
-# Linux (amd64)
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_amd64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+# Choose the matching asset from the latest GitHub Release:
+# macOS (Apple Silicon): muveectl_<VERSION>_darwin_arm64.tar.gz
+# macOS (Intel):         muveectl_<VERSION>_darwin_amd64.tar.gz
+# Linux (amd64):         muveectl_<VERSION>_linux_amd64.tar.gz
+# Linux (arm64):         muveectl_<VERSION>_linux_arm64.tar.gz
+#
+# After extracting, rename the binary to ` + "`muveectl`" + ` and place it on PATH,
+# for example in /usr/local/bin/muveectl.
 ` + "```" + `
 
 ` + "```" + `powershell
-# Windows (PowerShell)
-Invoke-WebRequest -Uri https://github.com/hoveychen/muvee/releases/latest/download/muveectl_windows_amd64.exe -OutFile muveectl.exe
+# Windows assets on GitHub Releases:
+# muveectl_<VERSION>_windows_amd64.zip
+# muveectl_<VERSION>_windows_arm64.zip
+#
+# Extract the zip and place the executable on PATH as ` + "`muveectl.exe`" + `.
 ` + "```" + `
 
 ## Authentication

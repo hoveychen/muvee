@@ -260,9 +260,23 @@ curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_
 curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_arm64
 chmod +x muveectl && sudo mv muveectl /usr/local/bin/
 
+# macOS (Intel)
+curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_amd64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+
 # Linux (amd64)
 curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_amd64
 chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+
+# Linux (arm64)
+curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_arm64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+```
+
+```powershell
+# Windows (PowerShell)
+Invoke-WebRequest -Uri https://github.com/hoveychen/muvee/releases/latest/download/muveectl_windows_amd64.exe -OutFile muveectl.exe
+Move-Item muveectl.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\muveectl.exe"
 ```
 
 ```bash

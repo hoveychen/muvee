@@ -47,31 +47,35 @@ After adding the skill, just tell your AI: *"Deploy my app at github.com/me/repo
 
 ## Installation
 
-Download the latest binary from the [Releases page](https://github.com/hoveychen/muvee/releases/latest):
+Install `muveectl` from the official prebuilt assets on the [Releases page](https://github.com/hoveychen/muvee/releases/latest). Pick the latest stable release unless you need a specific version.
 
 **macOS (Apple Silicon)**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_arm64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+muveectl_<VERSION>_darwin_arm64.tar.gz
 ```
 
 **macOS (Intel)**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_amd64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+muveectl_<VERSION>_darwin_amd64.tar.gz
 ```
 
 **Linux (amd64)**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_amd64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+muveectl_<VERSION>_linux_amd64.tar.gz
+```
+
+**Linux (arm64)**
+```bash
+muveectl_<VERSION>_linux_arm64.tar.gz
 ```
 
 **Windows (PowerShell)**
 ```powershell
-Invoke-WebRequest -Uri https://github.com/hoveychen/muvee/releases/latest/download/muveectl_windows_amd64.exe -OutFile muveectl.exe
-Move-Item muveectl.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\muveectl.exe"
+muveectl_<VERSION>_windows_amd64.zip
+muveectl_<VERSION>_windows_arm64.zip
 ```
+
+After extracting, rename the binary to `muveectl` (or `muveectl.exe` on Windows) and place it on your `PATH`, for example `/usr/local/bin/muveectl` on macOS/Linux.
 
 ## Authentication
 

@@ -139,11 +139,27 @@ jobs:
               "release/muveectl/muveectl_windows_${GOARCH}.exe"
           done
 
+          # muveectl CLI: unversioned binaries for direct curl install
+          # (served via releases/latest/download/muveectl_<os>_<arch>)
+          for GOOS in linux darwin; do
+            for GOARCH in amd64 arm64; do
+              cp "release/muveectl/muveectl_${GOOS}_${GOARCH}" \
+                 "release/muveectl_${GOOS}_${GOARCH}"
+            done
+          done
+          for GOARCH in amd64 arm64; do
+            cp "release/muveectl/muveectl_windows_${GOARCH}.exe" \
+               "release/muveectl_windows_${GOARCH}.exe"
+          done
+
       # ── Generate checksums ────────────────────────────────────────────────
       - name: Generate checksums
         working-directory: release
         run: |
-          sha256sum muvee_*.tar.gz muvee_*.zip muveectl_*.tar.gz muveectl_*.zip > checksums.txt
+          sha256sum muvee_*.tar.gz muvee_*.zip muveectl_*.tar.gz muveectl_*.zip \
+            muveectl_linux_amd64 muveectl_linux_arm64 \
+            muveectl_darwin_amd64 muveectl_darwin_arm64 \
+            muveectl_windows_amd64.exe muveectl_windows_arm64.exe > checksums.txt
           cat checksums.txt
 
       # ── Push Docker image to ghcr.io ──────────────────────────────────────
@@ -183,6 +199,12 @@ jobs:
             release/muvee_*.zip
             release/muveectl_*.tar.gz
             release/muveectl_*.zip
+            release/muveectl_linux_amd64
+            release/muveectl_linux_arm64
+            release/muveectl_darwin_amd64
+            release/muveectl_darwin_arm64
+            release/muveectl_windows_amd64.exe
+            release/muveectl_windows_arm64.exe
             release/checksums.txt
             release/docker-compose.yml
             release/.env.example

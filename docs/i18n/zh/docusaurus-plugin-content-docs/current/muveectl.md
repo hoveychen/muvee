@@ -10,31 +10,35 @@ sidebar_position: 4
 
 ## 安装
 
-从 [Releases 页面](https://github.com/hoveychen/muvee/releases/latest)下载最新二进制文件：
+从 [Releases 页面](https://github.com/hoveychen/muvee/releases/latest)安装 `muveectl` 官方预编译版本。除非你需要指定版本，否则优先选择最新稳定版。
 
 **macOS（Apple Silicon）**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_arm64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+muveectl_<VERSION>_darwin_arm64.tar.gz
 ```
 
 **macOS（Intel）**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_amd64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+muveectl_<VERSION>_darwin_amd64.tar.gz
 ```
 
 **Linux（amd64）**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_amd64
-chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+muveectl_<VERSION>_linux_amd64.tar.gz
+```
+
+**Linux（arm64）**
+```bash
+muveectl_<VERSION>_linux_arm64.tar.gz
 ```
 
 **Windows（PowerShell）**
 ```powershell
-Invoke-WebRequest -Uri https://github.com/hoveychen/muvee/releases/latest/download/muveectl_windows_amd64.exe -OutFile muveectl.exe
-Move-Item muveectl.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\muveectl.exe"
+muveectl_<VERSION>_windows_amd64.zip
+muveectl_<VERSION>_windows_arm64.zip
 ```
+
+解压后，将可执行文件重命名为 `muveectl`（Windows 下为 `muveectl.exe`），并放到系统 `PATH` 中，例如 macOS / Linux 的 `/usr/local/bin/muveectl`。
 
 ## 身份验证
 
