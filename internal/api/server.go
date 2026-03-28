@@ -233,9 +233,10 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{
+	jsonOK(w, map[string]any{
 		"dataset_nfs_base_path": s.datasetNFSBasePath,
 		"base_domain":           s.baseDomain,
+		"secrets_enabled":       s.store.SecretsEnabled(),
 	})
 }
 

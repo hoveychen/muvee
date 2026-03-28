@@ -5,7 +5,7 @@ import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
 import { useSettings } from '../lib/settings'
 import { api } from '../lib/api'
-import type { Node, NodeMetric, HealthCheck } from '../lib/types'
+import type { Node, NodeMetric, HealthCheck, RuntimeConfig } from '../lib/types'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
@@ -17,6 +17,7 @@ export default function Layout({ children }: { children?: ReactNode }) {
   const { t, i18n } = useTranslation()
   const { settings, loading } = useSettings()
   const isAdmin = user?.role === 'admin'
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null)
 
   // Redirect admin to onboarding if not yet completed
   useEffect(() => {
@@ -25,15 +26,19 @@ export default function Layout({ children }: { children?: ReactNode }) {
     }
   }, [loading, isAdmin, settings.onboarded, navigate])
 
+  useEffect(() => {
+    api.runtime.config().then(setRuntimeConfig).catch(() => {})
+  }, [])
+
   const ALL_NAV_ITEMS = [
-    { to: '/projects', icon: LayoutGrid, label: t('nav.projects'), adminOnly: false },
-    { to: '/datasets', icon: Database, label: t('nav.datasets'), adminOnly: false },
-    { to: '/secrets', icon: KeyRound, label: t('nav.secrets'), adminOnly: false },
-    { to: '/nodes', icon: Server, label: t('nav.nodes'), adminOnly: true },
-    { to: '/users', icon: Users, label: t('nav.users'), adminOnly: true },
-    { to: '/admin/settings', icon: Settings, label: t('nav.settings'), adminOnly: true },
+    { to: '/projects', icon: LayoutGrid, label: t('nav.projects'), adminOnly: false, hidden: false },
+    { to: '/datasets', icon: Database, label: t('nav.datasets'), adminOnly: false, hidden: false },
+    { to: '/secrets', icon: KeyRound, label: t('nav.secrets'), adminOnly: false, hidden: runtimeConfig !== null && !runtimeConfig.secrets_enabled },
+    { to: '/nodes', icon: Server, label: t('nav.nodes'), adminOnly: true, hidden: false },
+    { to: '/users', icon: Users, label: t('nav.users'), adminOnly: true, hidden: false },
+    { to: '/admin/settings', icon: Settings, label: t('nav.settings'), adminOnly: true, hidden: false },
   ]
-  const navItems = ALL_NAV_ITEMS.filter(item => !item.adminOnly || isAdmin)
+  const navItems = ALL_NAV_ITEMS.filter(item => (!item.adminOnly || isAdmin) && !item.hidden)
 
   const handleLogout = async () => {
     await fetch('/auth/logout', { method: 'POST', credentials: 'include' })

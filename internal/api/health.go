@@ -84,10 +84,25 @@ func (s *Server) handleGetSystemHealth(w http.ResponseWriter, r *http.Request) {
 	// ── 6. Git repo path ────────────────────────────────────────────────────
 	checks = append(checks, checkPath("git_repo_path", s.gitRepoBasePath))
 
-	// ── 7. Builder agents ────────────────────────────────────────────────────
+	// ── 7. Secret encryption key ─────────────────────────────────────────────
+	if s.store.SecretsEnabled() {
+		checks = append(checks, HealthCheck{
+			Name:    "secret_encryption",
+			Status:  HealthCheckOK,
+			Message: "SECRET_ENCRYPTION_KEY is configured",
+		})
+	} else {
+		checks = append(checks, HealthCheck{
+			Name:    "secret_encryption",
+			Status:  HealthCheckWarning,
+			Message: "SECRET_ENCRYPTION_KEY is not set — secrets feature is disabled. Generate with: openssl rand -hex 32",
+		})
+	}
+
+	// ── 8. Builder agents ────────────────────────────────────────────────────
 	checks = append(checks, s.checkAgents(ctx, "builder"))
 
-	// ── 8. Deploy agents ─────────────────────────────────────────────────────
+	// ── 9. Deploy agents ─────────────────────────────────────────────────────
 	checks = append(checks, s.checkAgents(ctx, "deploy"))
 
 	jsonOK(w, HealthReport{

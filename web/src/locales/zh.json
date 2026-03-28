@@ -30,7 +30,8 @@
     "signIn": "登录",
     "authorizedOnly": "仅限授权人员",
     "continueWith": "使用 {{provider}} 继续",
-    "accessRestricted": "仅限授权域名访问"
+    "accessRestricted": "仅限授权域名访问",
+    "cliAuthPrompt": "选择登录方式以授权 muveectl"
   },
   "projects": {
     "sectionLabel": "项目",
@@ -295,7 +296,8 @@
     "empty": {
       "title": "暂无密钥",
       "hint": "添加密码、API Token 或 SSH 密钥，安全地注入到部署中。"
-    }
+    },
+    "disabledBanner": "密钥功能未启用。请在 <code>.env</code> 文件中设置 <code>SECRET_ENCRYPTION_KEY</code> 并重启服务器以开启此功能。"
   },
   "newDataset": {
     "sectionLabel": "数据仓库",
@@ -381,6 +383,8 @@
       "registry": "Docker 镜像仓库",
       "nfs_volume": "NFS 存储路径",
       "nfs_dataset": "NFS 数据集路径",
+      "secret_encryption": "密钥加密配置",
+      "git_repo_path": "Git 仓库路径",
       "builder_agents": "Builder Agent",
       "deploy_agents": "Deploy Agent",
       "docker": "Docker 守护进程",

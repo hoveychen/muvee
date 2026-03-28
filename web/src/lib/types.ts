@@ -66,6 +66,7 @@ export interface Dataset {
 export interface RuntimeConfig {
   dataset_nfs_base_path: string
   base_domain: string
+  secrets_enabled: boolean
 }
 
 export interface ProjectDataset {

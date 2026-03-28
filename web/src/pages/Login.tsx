@@ -15,6 +15,7 @@ export default function LoginPage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([])
 
   const brandName = settings.site_name || 'muvee'
+  const cliPort = new URLSearchParams(window.location.search).get('port')
 
   useEffect(() => {
     document.title = `${brandName} — Sign In`
@@ -115,9 +116,14 @@ export default function LoginPage() {
               {t('login.authorizedOnly')}
             </p>
 
+            {cliPort && (
+              <p className="text-sm mb-4 px-3 py-2 rounded" style={{ fontFamily: MONO, color: 'var(--fg-muted)', background: 'var(--bg-hover)', border: '1px solid var(--border)' }}>
+                {t('login.cliAuthPrompt')}
+              </p>
+            )}
             <div className="flex flex-col gap-3">
               {providers.map(p => (
-                <ProviderButton key={p.id} provider={p} />
+                <ProviderButton key={p.id} provider={p} cliPort={cliPort} />
               ))}
             </div>
           </div>
@@ -134,11 +140,14 @@ export default function LoginPage() {
   )
 }
 
-function ProviderButton({ provider }: { provider: ProviderInfo }) {
+function ProviderButton({ provider, cliPort }: { provider: ProviderInfo; cliPort: string | null }) {
   const { t } = useTranslation()
+  const href = cliPort
+    ? `/auth/cli/login?port=${cliPort}&provider=${provider.id}`
+    : `/auth/${provider.id}/login`
   return (
     <a
-      href={`/auth/${provider.id}/login`}
+      href={href}
       className="flex items-center justify-center gap-3 w-full py-2.5 px-4 rounded-md text-sm transition-all duration-150"
       style={{
         background: 'var(--bg-hover)',

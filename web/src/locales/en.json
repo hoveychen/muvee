@@ -30,7 +30,8 @@
     "signIn": "Sign in",
     "authorizedOnly": "Authorized personnel only",
     "continueWith": "Continue with {{provider}}",
-    "accessRestricted": "Access restricted to authorized domains"
+    "accessRestricted": "Access restricted to authorized domains",
+    "cliAuthPrompt": "Select a login method to authenticate muveectl"
   },
   "projects": {
     "sectionLabel": "PROJECTS",
@@ -295,7 +296,8 @@
     "empty": {
       "title": "No Secrets Yet",
       "hint": "Add passwords, API tokens, or SSH keys to securely inject into your deployments."
-    }
+    },
+    "disabledBanner": "Secrets are disabled. Set <code>SECRET_ENCRYPTION_KEY</code> in your <code>.env</code> file and restart the server to enable this feature."
   },
   "newDataset": {
     "sectionLabel": "DATA WAREHOUSE",
@@ -381,6 +383,8 @@
       "registry": "Docker Registry",
       "nfs_volume": "NFS Volume Path",
       "nfs_dataset": "NFS Dataset Path",
+      "secret_encryption": "Secret Encryption Key",
+      "git_repo_path": "Git Repo Path",
       "builder_agents": "Builder Agents",
       "deploy_agents": "Deploy Agents",
       "docker": "Docker Daemon",

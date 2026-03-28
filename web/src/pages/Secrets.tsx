@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { KeyRound, Plus, Trash2, Eye, EyeOff, Lock } from 'lucide-react'
+import { KeyRound, Plus, Trash2, Eye, EyeOff, Lock, AlertTriangle } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Secret } from '../lib/types'
 import { timeAgo } from '../lib/utils'
@@ -13,9 +13,11 @@ export default function SecretsPage() {
   const [secrets, setSecrets] = useState<Secret[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [secretsEnabled, setSecretsEnabled] = useState<boolean | null>(null)
   const { t } = useTranslation()
 
   useEffect(() => {
+    api.runtime.config().then(cfg => setSecretsEnabled(cfg.secrets_enabled)).catch(() => {})
     api.secrets.list().then(setSecrets).finally(() => setLoading(false))
   }, [])
 
@@ -38,19 +40,34 @@ export default function SecretsPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
+          disabled={secretsEnabled === false}
           className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-150"
           style={{
             background: 'var(--accent)',
             color: '#ffffff',
             fontWeight: 500,
             border: 'none',
-            cursor: 'pointer',
+            cursor: secretsEnabled === false ? 'not-allowed' : 'pointer',
+            opacity: secretsEnabled === false ? 0.4 : 1,
           }}
         >
           <Plus size={14} />
           {t('secrets.newSecret')}
         </button>
       </div>
+
+      {secretsEnabled === false && (
+        <div
+          className="mb-6 px-4 py-3 rounded-md flex items-start gap-3"
+          style={{ background: 'rgba(210, 153, 34, 0.1)', border: '1px solid rgba(210, 153, 34, 0.4)' }}
+        >
+          <AlertTriangle size={16} color="#d29922" style={{ flexShrink: 0, marginTop: '1px' }} />
+          <p
+            style={{ fontFamily: MONO, fontSize: '0.75rem', color: '#d29922', lineHeight: 1.7 }}
+            dangerouslySetInnerHTML={{ __html: t('secrets.disabledBanner') }}
+          />
+        </div>
+      )}
 
       {/* Info banner */}
       <div

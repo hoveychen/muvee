@@ -26,6 +26,10 @@ func NewWithEncryption(db *pgxpool.Pool, encryptionKey []byte) *Store {
 	return &Store{db: db, encryptionKey: encryptionKey}
 }
 
+func (s *Store) SecretsEnabled() bool {
+	return s.encryptionKey != nil
+}
+
 func (s *Store) DB() *pgxpool.Pool {
 	return s.db
 }
