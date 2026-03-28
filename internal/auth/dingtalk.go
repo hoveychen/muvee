@@ -39,6 +39,7 @@ func newDingTalkProvider(redirectURL string) (*dingtalkProvider, error) {
 
 func (p *dingtalkProvider) Name() string        { return "dingtalk" }
 func (p *dingtalkProvider) DisplayName() string { return "钉钉" }
+func (p *dingtalkProvider) OrgScoped() bool     { return true }
 
 func (p *dingtalkProvider) AuthCodeURL(state string) string {
 	params := url.Values{}

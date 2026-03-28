@@ -47,6 +47,7 @@ func newGoogleProvider(redirectURL string) (*googleProvider, error) {
 
 func (p *googleProvider) Name() string        { return "google" }
 func (p *googleProvider) DisplayName() string { return "Google" }
+func (p *googleProvider) OrgScoped() bool     { return false }
 
 func (p *googleProvider) AuthCodeURL(state string) string {
 	return p.config.AuthCodeURL(state, oauth2.AccessTypeOnline)

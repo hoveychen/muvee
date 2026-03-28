@@ -40,6 +40,7 @@ func newWeComProvider(redirectURL string) (*wecomProvider, error) {
 
 func (p *wecomProvider) Name() string        { return "wecom" }
 func (p *wecomProvider) DisplayName() string { return "企业微信" }
+func (p *wecomProvider) OrgScoped() bool     { return true }
 
 // AuthCodeURL redirects the user to the WeCom QR-code login page.
 func (p *wecomProvider) AuthCodeURL(state string) string {

@@ -47,6 +47,7 @@ func newFeishuProvider(redirectURL string) (*feishuProvider, error) {
 
 func (p *feishuProvider) Name() string        { return "feishu" }
 func (p *feishuProvider) DisplayName() string { return "飞书 / Lark" }
+func (p *feishuProvider) OrgScoped() bool     { return true }
 
 func (p *feishuProvider) AuthCodeURL(state string) string {
 	params := url.Values{}

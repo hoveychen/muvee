@@ -12,4 +12,8 @@ type Provider interface {
 	AuthCodeURL(state string) string
 	// UserInfo exchanges the authorization code for the user's email, name, and avatar URL.
 	UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error)
+	// OrgScoped returns true if the provider inherently restricts users to a specific
+	// organisation (e.g. Feishu, WeCom, DingTalk). For such providers the email domain
+	// check is skipped because membership in the org is sufficient authorisation.
+	OrgScoped() bool
 }

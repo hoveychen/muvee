@@ -116,8 +116,8 @@ export default function Layout({ children }: { children?: ReactNode }) {
                 <div style={{ fontSize: '0.8rem', color: 'var(--fg-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>
                   {user.name || user.email.split('@')[0]}
                 </div>
-                <div style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)' }}>
-                  {user.role}
+                <div style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={user.email}>
+                  {user.email}
                 </div>
               </div>
               <button

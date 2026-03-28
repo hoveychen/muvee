@@ -1,5 +1,5 @@
 // muveectl is the command-line interface for Muvee.
-// It authenticates via Google OAuth (device-flow) and communicates with
+// It authenticates via OAuth (device-flow) and communicates with
 // the Muvee API server using a long-lived API token stored locally.
 package main
 
@@ -268,6 +268,12 @@ func cmdLogin(args []string, cfg *Config) error {
 		cfg.Server = strings.TrimRight(s, "/")
 	}
 
+	// Fetch available auth providers from the server so the user can choose.
+	providerName, err := selectProvider(cfg.Server)
+	if err != nil {
+		return fmt.Errorf("select provider: %w", err)
+	}
+
 	// Start a local HTTP server to receive the token callback
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -275,7 +281,7 @@ func cmdLogin(args []string, cfg *Config) error {
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	loginURL := fmt.Sprintf("%s/auth/cli/login?port=%d", cfg.Server, port)
+	loginURL := fmt.Sprintf("%s/auth/cli/login?port=%d&provider=%s", cfg.Server, port, providerName)
 	fmt.Printf("Opening browser for authentication...\n%s\n\n", loginURL)
 	openBrowser(loginURL)
 
@@ -313,6 +319,47 @@ func cmdLogin(args []string, cfg *Config) error {
 		_ = srv.Shutdown(context.Background())
 		return fmt.Errorf("login timed out after 5 minutes")
 	}
+}
+
+// selectProvider fetches the list of enabled auth providers from the server.
+// If only one is configured it is returned immediately; otherwise the user is prompted to choose.
+func selectProvider(server string) (string, error) {
+	resp, err := http.Get(server + "/api/auth/providers")
+	if err != nil {
+		return "", fmt.Errorf("fetch providers: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var providers []struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.Unmarshal(body, &providers); err != nil {
+		return "", fmt.Errorf("parse providers: %w", err)
+	}
+	if len(providers) == 0 {
+		return "", fmt.Errorf("no auth providers configured on the server")
+	}
+	if len(providers) == 1 {
+		return providers[0].ID, nil
+	}
+
+	fmt.Println("Available login methods:")
+	for i, p := range providers {
+		fmt.Printf("  %d) %s\n", i+1, p.DisplayName)
+	}
+	fmt.Print("Choose a login method [1]: ")
+	var choice string
+	fmt.Scanln(&choice)
+	if choice == "" {
+		choice = "1"
+	}
+	var idx int
+	if _, err := fmt.Sscanf(choice, "%d", &idx); err != nil || idx < 1 || idx > len(providers) {
+		return "", fmt.Errorf("invalid choice: %s", choice)
+	}
+	return providers[idx-1].ID, nil
 }
 
 func openBrowser(url string) {

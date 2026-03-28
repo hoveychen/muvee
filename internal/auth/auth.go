@@ -161,10 +161,10 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code string)
 		return nil, "", fmt.Errorf("user info: %w", err)
 	}
 
-	// Only enforce domain restrictions for providers that produce real email addresses.
-	// Synthetic emails (*.local) bypass the check since the provider itself is already
-	// scoped to a specific organisation.
-	if !strings.HasSuffix(email, ".local") {
+	// Skip domain restrictions for org-scoped providers (Feishu, WeCom, DingTalk).
+	// These providers inherently restrict users to a specific organisation, so the
+	// email domain check is redundant — regardless of whether the email is real or synthetic.
+	if !p.OrgScoped() {
 		if err := s.checkDomain(email); err != nil {
 			return nil, "", err
 		}
