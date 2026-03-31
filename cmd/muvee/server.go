@@ -90,6 +90,11 @@ func runServer() {
 		brandingDir = "/data/branding"
 	}
 
+	tunnelBackendURL := os.Getenv("TUNNEL_BACKEND_URL")
+	if tunnelBackendURL != "" {
+		log.Printf("Tunnel backend URL: %s", tunnelBackendURL)
+	}
+
 	srv := api.NewServer(st, authSvc, sched, mon, api.ServerConfig{
 		BaseDomain:         baseDomain,
 		AuthServiceURL:     authServiceURL,
@@ -101,8 +106,9 @@ func runServer() {
 		DatasetNFSBasePath: datasetNFSBasePath,
 		GitRepoBasePath:    gitRepoBasePath,
 		BrandingDir:        brandingDir,
+		TunnelBackendURL:   tunnelBackendURL,
 	})
-	handler := mountFrontend(srv.Router())
+	handler := srv.TunnelAwareHandler(mountFrontend(srv.Router()))
 
 	go processBuildCompletions(ctx, st, sched)
 	go processNodeFailovers(ctx, st, sched)

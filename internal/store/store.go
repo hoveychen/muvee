@@ -517,8 +517,12 @@ func (s *Store) GetRunningDeploymentByProject(ctx context.Context, projectID uui
 	return &r, nil
 }
 
-func (s *Store) UpdateDeploymentStatus(ctx context.Context, id uuid.UUID, status DeploymentStatus, logs string) error {
-	_, err := s.db.Exec(ctx, `UPDATE deployments SET status=$1, logs=$2, updated_at=NOW() WHERE id=$3`, status, logs, id)
+func (s *Store) UpdateDeploymentStatus(ctx context.Context, id uuid.UUID, status DeploymentStatus, errMsg string) error {
+	if errMsg != "" {
+		_, err := s.db.Exec(ctx, `UPDATE deployments SET status=$1, logs=logs||$2, updated_at=NOW() WHERE id=$3`, status, errMsg+"\n", id)
+		return err
+	}
+	_, err := s.db.Exec(ctx, `UPDATE deployments SET status=$1, updated_at=NOW() WHERE id=$2`, status, id)
 	return err
 }
 

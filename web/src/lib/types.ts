@@ -190,6 +190,22 @@ export interface HealthReport {
   updated_at: string
 }
 
+export interface ActiveTunnel {
+  domain: string
+  user_email: string
+  auth_required: boolean
+  connected_at: string
+}
+
+export interface TunnelHistoryEntry {
+  id: string
+  domain: string
+  user_email: string
+  auth_required: boolean
+  connected_at: string
+  disconnected_at: string | null
+}
+
 export interface FileHistory {
   id: string
   dataset_id: string

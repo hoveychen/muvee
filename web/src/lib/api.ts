@@ -126,6 +126,8 @@ export const api = {
     updateSettings: (data: Partial<import('./types').SystemSettings>) =>
       request<import('./types').SystemSettings>('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) }),
     health: () => request<import('./types').HealthReport>('/api/admin/health'),
+    tunnels: () => request<import('./types').ActiveTunnel[]>('/api/admin/tunnels'),
+    tunnelHistory: () => request<import('./types').TunnelHistoryEntry[]>('/api/admin/tunnels/history'),
     uploadBranding: async (type: 'logo' | 'favicon', file: File): Promise<{ url: string }> => {
       const form = new FormData()
       form.append('file', file)

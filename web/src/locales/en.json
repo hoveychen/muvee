@@ -9,6 +9,7 @@
     "datasets": "Datasets",
     "secrets": "Secrets",
     "nodes": "Nodes",
+    "tunnels": "Tunnels",
     "users": "Users",
     "settings": "Settings",
     "privateCloud": "private cloud",
@@ -328,6 +329,24 @@
     "updated": "updated",
     "cleanOffline": "Clean Offline",
     "cleanConfirm": "Remove all offline nodes?"
+  },
+  "tunnels": {
+    "sectionLabel": "NETWORKING",
+    "heading": "Tunnels",
+    "refresh": "Refresh",
+    "activeTitle": "Active",
+    "historyTitle": "Recent History",
+    "auth": "auth",
+    "public": "public",
+    "upFor": "up for",
+    "ago": "ago",
+    "noActive": "No active tunnels. Use muveectl tunnel <PORT> to create one.",
+    "noHistory": "No tunnel history yet.",
+    "colDomain": "DOMAIN",
+    "colUser": "USER",
+    "colAuth": "AUTH",
+    "colDuration": "DURATION",
+    "colWhen": "WHEN"
   },
   "users": {
     "sectionLabel": "ACCESS CONTROL",

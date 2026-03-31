@@ -67,6 +67,7 @@ Key features:
 - **Smart Affinity Scheduling** — deploy nodes are scored by how many required datasets they already have cached, minimizing rsync time.
 - **File-level Dataset Tracking** — a background monitor scans NFS paths, diffs file trees, and records a `git log`–style history of every file change (added / modified / deleted), with per-file timelines in the UI.
 - **Flexible Identity Providers** — sign in via Google, Feishu/Lark, WeCom (企业微信), or DingTalk (钉钉). Multiple providers can be enabled simultaneously. Per-project ForwardAuth supports Google for protecting deployed apps.
+- **Adhoc Tunnel** — publish any local port to the internet with `muveectl tunnel 8080`. A deterministic, human-readable subdomain (e.g. `t-bold-fox.example.com`) is generated from the working directory and port — like a self-hosted ngrok.
 - **Single binary** — one `muvee` binary runs as `muvee server`, `muvee agent`, or `muvee authservice`. The server subcommand embeds the React web UI — no separate web server needed.
 
 ## Quick Start

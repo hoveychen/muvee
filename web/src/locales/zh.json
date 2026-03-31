@@ -9,6 +9,7 @@
     "datasets": "数据集",
     "secrets": "密钥",
     "nodes": "节点",
+    "tunnels": "隧道",
     "users": "用户",
     "settings": "设置",
     "privateCloud": "私有云",
@@ -328,6 +329,24 @@
     "updated": "更新于",
     "cleanOffline": "清理离线节点",
     "cleanConfirm": "确认移除所有离线节点？"
+  },
+  "tunnels": {
+    "sectionLabel": "网络",
+    "heading": "隧道",
+    "refresh": "刷新",
+    "activeTitle": "活跃中",
+    "historyTitle": "历史记录",
+    "auth": "认证",
+    "public": "公开",
+    "upFor": "运行",
+    "ago": "前",
+    "noActive": "暂无活跃隧道。使用 muveectl tunnel <PORT> 创建一个。",
+    "noHistory": "暂无隧道历史记录。",
+    "colDomain": "域名",
+    "colUser": "用户",
+    "colAuth": "认证",
+    "colDuration": "时长",
+    "colWhen": "时间"
   },
   "users": {
     "sectionLabel": "访问控制",

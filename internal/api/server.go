@@ -44,6 +44,8 @@ type Server struct {
 	datasetNFSBasePath string   // base NFS path for dataset files
 	gitRepoBasePath    string   // base path for hosted bare git repos
 	brandingDir        string   // directory for uploaded branding assets (logo, favicon)
+	tunnelBackendURL   string   // URL that Traefik uses to reach this server for tunnel traffic
+	tunnels            *tunnelRegistry
 	cliPending         sync.Map // state -> cli_port (string)
 	oauthPending       sync.Map // state -> provider name (string); fallback when cookie is missing
 }
@@ -59,6 +61,7 @@ type ServerConfig struct {
 	DatasetNFSBasePath string
 	GitRepoBasePath    string
 	BrandingDir        string
+	TunnelBackendURL   string // URL Traefik uses to reach this server for tunnel proxy (e.g. http://muvee-server:8080)
 }
 
 func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Scheduler, mon *monitor.Monitor, cfg ServerConfig) *Server {
@@ -80,6 +83,8 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		datasetNFSBasePath: cfg.DatasetNFSBasePath,
 		gitRepoBasePath:    cfg.GitRepoBasePath,
 		brandingDir:        cfg.BrandingDir,
+		tunnelBackendURL:   cfg.TunnelBackendURL,
+		tunnels:            newTunnelRegistry(),
 	}
 }
 
@@ -176,6 +181,9 @@ func (s *Server) Router() http.Handler {
 		r.HandleFunc("/api/projects/{id}/proxy", s.handleProjectProxy)
 		r.HandleFunc("/api/projects/{id}/proxy/*", s.handleProjectProxy)
 
+		// Adhoc tunnel – WebSocket endpoint for CLI tunnel connections
+		r.Get("/api/tunnel/connect", s.handleTunnelConnect)
+
 		// Hosted git repository browser
 		r.Get("/api/projects/{id}/repo/tree", s.repoTree)
 		r.Get("/api/projects/{id}/repo/blob", s.repoBlob)
@@ -206,6 +214,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/api/admin/branding/upload", s.handleBrandingUpload)
 			// Server-side health checks
 			r.Get("/api/admin/health", s.handleGetSystemHealth)
+			// Active tunnels and history
+			r.Get("/api/admin/tunnels", s.listActiveTunnels)
+			r.Get("/api/admin/tunnels/history", s.listTunnelHistory)
 		})
 	})
 
@@ -556,12 +567,36 @@ muveectl projects repo PROJECT_ID branches
 muveectl projects repo PROJECT_ID show main:README.md
 ` + "```" + `
 
+## Adhoc Tunnel (self-hosted ngrok)
+
+Publish a local port directly to the internet — no deployment, no Docker, no git repo required. The domain is deterministically generated from the current working directory and port number, so reconnecting from the same directory reuses the same URL.
+
+` + "```" + `bash
+# Publish local port 8080 to the internet
+muveectl tunnel 8080
+# → Tunnel active:
+# →   https://t-bold-fox.YOUR_SERVER_URL → 127.0.0.1:8080
+
+# Override the auto-generated domain prefix
+muveectl tunnel 3000 --domain t-my-demo
+
+# Disable ForwardAuth (make the tunnel publicly accessible)
+muveectl tunnel 8080 --no-auth
+` + "```" + `
+
+The tunnel stays open until you press Ctrl+C. All HTTP traffic to the generated ` + "`t-*.BASE_DOMAIN`" + ` URL is forwarded through a WebSocket connection to your local machine. By default, ForwardAuth is enabled — only authenticated users can access the tunnel. Pass ` + "`--no-auth`" + ` to make it publicly accessible.
+
+` + "**" + `How the domain is generated:` + "**" + ` SHA-256 of ` + "`cwd + port`" + ` selects an adjective-noun pair from a built-in word list, producing names like ` + "`t-bold-fox`" + `, ` + "`t-calm-owl`" + `, ` + "`t-keen-elk`" + `. The same directory + port always produces the same name.
+
+` + "**" + `Requirements:` + "**" + ` The server must have ` + "`TUNNEL_BACKEND_URL`" + ` configured (set automatically in the default Docker Compose setup). There may be a ~5 second delay on first connection while Traefik picks up the new route.
+
 ## Typical Workflow
 
 1. Get project IDs: ` + "`muveectl projects list --json`" + `
 2. Deploy a project: ` + "`muveectl projects deploy PROJECT_ID`" + `
 3. Check status: ` + "`muveectl projects deployments PROJECT_ID`" + `
 4. Forward to local port: ` + "`muveectl projects port-forward PROJECT_ID --port 3000`" + `
+5. Publish a local dev server: ` + "`muveectl tunnel 8080`" + `
 `
 
 // ─── API Tokens ──────────────────────────────────────────────────────────────
@@ -1543,6 +1578,46 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Append active tunnel routes. Each tunnel domain routes back to this server
+	// so that handleTunnelTraffic can forward traffic through the WebSocket.
+	if s.tunnelBackendURL != "" {
+		for _, t := range s.tunnels.activeTunnels() {
+			name := "tunnel-" + t.Domain
+			host := fmt.Sprintf("%s.%s", t.Domain, s.baseDomain)
+
+			router := traefikRouter{
+				Rule:        fmt.Sprintf("Host(`%s`)", host),
+				EntryPoints: []string{"websecure"},
+				Service:     name,
+				TLS:         &traefikTLS{CertResolver: "letsencrypt"},
+			}
+
+			// Per-tunnel ForwardAuth middleware (enabled by default).
+			if t.AuthRequired {
+				if cfg.HTTP.Middlewares == nil {
+					cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
+				}
+				mwName := name + "-auth"
+				verifyURL := fmt.Sprintf("%s/verify", s.authServiceURL)
+				cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
+					ForwardAuth: &traefikForwardAuth{
+						Address:             verifyURL,
+						AuthResponseHeaders: []string{"X-Forwarded-User"},
+						TrustForwardHeader:  true,
+					},
+				}
+				router.Middlewares = []string{mwName}
+			}
+
+			cfg.HTTP.Routers[name] = router
+			cfg.HTTP.Services[name] = traefikService{
+				LoadBalancer: traefikLB{
+					Servers: []traefikServer{{URL: s.tunnelBackendURL}},
+				},
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)
 }
@@ -1597,6 +1672,19 @@ func (s *Server) handleProjectProxy(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// TunnelAwareHandler wraps an http.Handler so that requests whose Host header
+// matches a registered tunnel domain (t-*.baseDomain) are forwarded through the
+// tunnel WebSocket instead of being served by the normal application handler.
+func (s *Server) TunnelAwareHandler(inner http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.isTunnelRequest(r) {
+			s.handleTunnelTraffic(w, r)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

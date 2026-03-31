@@ -98,6 +98,8 @@ services:
       DATASET_NFS_BASE_PATH: ${DATASET_NFS_BASE_PATH}
       # Git repository base path: self-hosted bare repos for projects.
       GIT_REPO_BASE_PATH: ${GIT_REPO_BASE_PATH}
+      # Tunnel backend URL: how Traefik reaches this server for adhoc tunnel traffic.
+      TUNNEL_BACKEND_URL: ${TUNNEL_BACKEND_URL:-http://muvee-server:8080}
     volumes:
       - ./db/migrations:/app/db/migrations:ro
       # Uncomment the line below (and set VOLUME_NFS_BASE_PATH in .env) to enable workspace file management.

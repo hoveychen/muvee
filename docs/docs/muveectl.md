@@ -340,6 +340,31 @@ Datasets are injected as Docker volumes at `/data/<dataset_name>`:
 | `dependency` | Read-only — rsync-cached local copy |
 | `readwrite` | Read-write — direct NFS mount |
 
+## Adhoc Tunnel (self-hosted ngrok)
+
+Publish a local port directly to the internet — no deployment, no Docker, no git repo required. This is ideal for sharing a local dev server, demoing work-in-progress, or letting an AI agent expose a service it's running locally.
+
+```bash
+# Publish local port 8080 to the internet
+muveectl tunnel 8080
+# → Tunnel active:
+# →   https://t-bold-fox.example.com → 127.0.0.1:8080
+
+# Override the auto-generated domain prefix
+muveectl tunnel 3000 --domain t-my-demo
+
+# Disable ForwardAuth (make the tunnel publicly accessible)
+muveectl tunnel 8080 --no-auth
+```
+
+The tunnel stays open until you press Ctrl+C. All HTTP traffic to the generated `t-*.BASE_DOMAIN` URL is forwarded through a WebSocket connection to your local machine. By default, ForwardAuth is enabled — only authenticated users can access the tunnel. Pass `--no-auth` to make it publicly accessible.
+
+**How the domain is generated:** SHA-256 of `cwd + port` selects an adjective-noun pair from a built-in word list, producing names like `t-bold-fox`, `t-calm-owl`, `t-keen-elk`. The same directory + port always produces the same name, so reconnecting reuses the URL.
+
+:::info Prerequisite
+The server must have `TUNNEL_BACKEND_URL` configured. This is set automatically in the default Docker Compose setup (`http://muvee-server:8080`). See [Configuration Reference](./configuration) for details. There may be a ~5 second delay on first connection while Traefik picks up the new route.
+:::
+
 ## Typical Workflow
 
 ```bash
@@ -360,4 +385,7 @@ muveectl projects port-forward PROJECT_ID --port 3000
 
 # 6. Download a file produced by the container
 muveectl projects workspace PROJECT_ID pull output/result.json
+
+# 7. Publish a local dev server to the internet
+muveectl tunnel 8080
 ```

@@ -509,6 +509,59 @@ func cmdProjectsDeployments(id string, c *client, jsonMode bool) error {
 	return nil
 }
 
+func cmdProjectsLogs(projectID string, args []string, c *client, jsonMode bool) error {
+	// If a deployment ID is given via --deployment, use it; otherwise pick the latest.
+	var deploymentID string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--deployment" && i+1 < len(args) {
+			deploymentID = args[i+1]
+			i++
+		}
+	}
+
+	items, err := c.doArray("GET", "/api/projects/"+projectID+"/deployments", nil)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		fmt.Println("No deployments found.")
+		return nil
+	}
+
+	if deploymentID == "" {
+		deploymentID = str(items[0].(map[string]interface{}), "id")
+	}
+
+	// Find the deployment in the list to get its logs.
+	var deployment map[string]interface{}
+	for _, d := range items {
+		dm := d.(map[string]interface{})
+		if str(dm, "id") == deploymentID {
+			deployment = dm
+			break
+		}
+	}
+	if deployment == nil {
+		return fmt.Errorf("deployment %s not found", deploymentID)
+	}
+
+	if jsonMode {
+		printJSON(deployment)
+		return nil
+	}
+
+	fmt.Printf("Deployment: %s  Status: %s  Commit: %s\n",
+		str(deployment, "id"), str(deployment, "status"), str(deployment, "commit_sha"))
+	fmt.Println("---")
+	logs := str(deployment, "logs")
+	if logs == "" {
+		fmt.Println("(no logs)")
+	} else {
+		fmt.Print(logs)
+	}
+	return nil
+}
+
 func cmdProjectsMetrics(id string, args []string, c *client, jsonMode bool) error {
 	limit := "60"
 	for i := 0; i < len(args); i++ {
@@ -1337,12 +1390,19 @@ Projects:
     (same flags as create)
   projects deploy ID            Trigger a deployment
   projects deployments ID       List deployment history
+  projects logs ID [--deployment DID]
+                                Show build/deploy logs (latest deployment by default)
   projects metrics ID [--limit N]
                                 Show container resource metrics (CPU, mem, net, disk)
   projects port-forward ID [--port PORT]
                                 Forward a local port to the project's running container
                                 (auth is injected automatically using your CLI identity)
   projects delete ID            Delete a project
+
+Tunnel (adhoc publish):
+  tunnel PORT [flags]           Publish a local port to the internet via tunnel
+    --domain PREFIX             Override auto-generated domain (default: from CWD + port)
+    --no-auth                   Disable ForwardAuth (public access, default is auth-on)
 
 Datasets:
   datasets list                 List datasets
@@ -1487,6 +1547,12 @@ func main() {
 				os.Exit(1)
 			}
 			runErr = cmdProjectsDeployments(subArgs[0], c, jsonMode)
+		case "logs":
+			if len(subArgs) == 0 {
+				fmt.Fprintln(os.Stderr, "Usage: muveectl projects logs <ID> [--deployment DID]")
+				os.Exit(1)
+			}
+			runErr = cmdProjectsLogs(subArgs[0], subArgs[1:], c, jsonMode)
 		case "metrics":
 			if len(subArgs) == 0 {
 				fmt.Fprintln(os.Stderr, "Usage: muveectl projects metrics <ID> [--limit N]")
@@ -1644,6 +1710,13 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Unknown tokens subcommand:", sub)
 			os.Exit(1)
 		}
+
+	case "tunnel":
+		if len(rest) == 0 {
+			fmt.Fprintln(os.Stderr, "Usage: muveectl tunnel <PORT> [--domain PREFIX] [--no-auth]")
+			os.Exit(1)
+		}
+		runErr = cmdTunnel(rest, c)
 
 	case "secrets":
 		if len(rest) == 0 {

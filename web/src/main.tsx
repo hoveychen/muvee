@@ -15,6 +15,7 @@ import NewDataset from './pages/NewDataset'
 import SecretsPage from './pages/Secrets'
 import OnboardPage from './pages/Onboard'
 import AdminSettingsPage from './pages/AdminSettings'
+import TunnelsPage from './pages/Tunnels'
 import Layout, { NodesPage, UsersPage } from './components/Layout'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -57,6 +58,7 @@ function App() {
             <Route path="/datasets/new" element={<NewDataset />} />
             <Route path="/secrets" element={<SecretsPage />} />
             <Route path="/nodes" element={<NodesPage />} />
+            <Route path="/tunnels" element={<TunnelsPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/admin/settings" element={<AdminSettingsPage />} />
           </Route>

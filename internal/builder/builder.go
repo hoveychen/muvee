@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -141,8 +142,11 @@ func runCmdEnv(ctx context.Context, logFn func(string), env []string, name strin
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go readLines(stdout, logFn)
-	go readLines(stderr, logFn)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); readLines(stdout, logFn) }()
+	go func() { defer wg.Done(); readLines(stderr, logFn) }()
+	wg.Wait()
 	return cmd.Wait()
 }
 

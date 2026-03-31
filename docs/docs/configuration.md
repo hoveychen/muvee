@@ -42,6 +42,7 @@ All configuration is via environment variables.
 | `VOLUME_NFS_BASE_PATH` | — | Base NFS directory on the control plane host used for project workspace volumes (e.g. `/mnt/nfs/volumes`). A per-project subdirectory is created automatically under this path. Also distributed to deploy agents via `/api/agent/config` so they can bind-mount the volume into containers. If unset, the workspace feature is disabled. |
 | `DATASET_NFS_BASE_PATH` | — | Base NFS directory for datasets (e.g. `/mnt/nfs/datasets`). Dataset `nfs_path` is treated as a relative sub-path under this base (e.g. `warehouse` → `/mnt/nfs/datasets/warehouse`). Used by both server monitor and deploy agents; mount at the same absolute path on all relevant nodes. |
 | `GIT_REPO_BASE_PATH` | — | Directory where bare git repositories are stored for hosted projects (e.g. `/data/git`). Each hosted project gets a `{project_id}.git` subdirectory. If unset, the hosted repository feature is disabled and all projects must use an external git URL. |
+| `TUNNEL_BACKEND_URL` | — | Internal URL that Traefik uses to route adhoc tunnel traffic back to this server (e.g. `http://muvee-server:8080`). Required to enable `muveectl tunnel`. Set automatically in the default Docker Compose setup. |
 
 ## ForwardAuth Service (`muvee-authservice`)
 
