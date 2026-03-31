@@ -53,6 +53,10 @@ muveectl projects list
 muveectl projects create --name NAME --git-url URL \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
   [--auth-required] [--auth-domains example.com,corp.com]
+# --dockerfile PATH: path to the Dockerfile *file* relative to the repo root
+#   default: "Dockerfile"  (repo root Dockerfile)
+#   example: "web/Dockerfile" for a subdirectory
+#   WRONG: "." or "web/" — must be a file path, not a directory
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS]
 muveectl projects deploy PROJECT_ID
@@ -307,7 +311,7 @@ For a project to deploy successfully the repository must satisfy:
 ### Build
 - Accessible via `git clone --depth=1` over HTTPS (public or with PAT via Secrets) or SSH (SSH key via Secrets)
 - The configured branch must exist (default: `main`)
-- A `Dockerfile` must exist at the configured path (default: `Dockerfile` in repo root)
+- A `Dockerfile` must exist at the configured path (default: `Dockerfile` in repo root). The `--dockerfile` flag takes a **file path** relative to the repo root (e.g. `web/Dockerfile`), not a directory path like `.` or `web/`.
 - Image must build for **`linux/amd64`** (`docker buildx build --platform linux/amd64`)
 
 ### Runtime
