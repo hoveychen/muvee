@@ -1,6 +1,6 @@
 export PATH := $(PATH):/opt/homebrew/bin
 
-.PHONY: build run dev tidy lint \
+.PHONY: build muveectl run dev tidy lint \
         docker-up docker-down docker-build \
         web-install web-dev web-build embed-web
 
@@ -25,6 +25,12 @@ LDFLAGS  = -s -w -X main.version=$(VERSION)
 # Build the single muvee binary (embeds web first).
 build: embed-web
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/muvee ./cmd/muvee
+
+# Build the muveectl CLI binary.
+# Copies the canonical skill file into the package so go:embed can pick it up.
+muveectl:
+	cp .cursor/skills/muveectl/SKILL.md cmd/muveectl/skill.md
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/muveectl ./cmd/muveectl
 
 # Quick server run without re-embedding (assumes dist is current).
 run: build

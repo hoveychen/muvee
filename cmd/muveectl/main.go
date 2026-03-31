@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,102 @@ import (
 	"strings"
 	"time"
 )
+
+//go:embed skill.md
+var embeddedSkill string
+
+var version = "dev"
+
+// ─── Notices ──────────────────────────────────────────────────────────────────
+
+type updateCache struct {
+	LastCheck     time.Time `json:"last_check"`
+	LatestVersion string    `json:"latest_version"`
+}
+
+func updateCachePath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "muveectl", "update_check.json")
+}
+
+func claudeSkillPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude", "skills", "muveectl", "SKILL.md")
+}
+
+func parseSkillVersion(content string) string {
+	for _, line := range strings.SplitN(content, "---", 3) {
+		for _, l := range strings.Split(line, "\n") {
+			l = strings.TrimSpace(l)
+			if strings.HasPrefix(l, "version:") {
+				return strings.TrimSpace(strings.TrimPrefix(l, "version:"))
+			}
+		}
+	}
+	return ""
+}
+
+func checkSkillNotice() {
+	installedData, err := os.ReadFile(claudeSkillPath())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Tip: Run `muveectl install-claude-skill` to add Claude Code skill support.")
+		return
+	}
+	installedVersion := parseSkillVersion(string(installedData))
+	embeddedVersion := parseSkillVersion(embeddedSkill)
+	if embeddedVersion != "" && installedVersion != embeddedVersion {
+		fmt.Fprintln(os.Stderr, "Notice: Claude skill is outdated. Run `muveectl install-claude-skill` to update.")
+	}
+}
+
+func checkUpdateNotice() {
+	cachePath := updateCachePath()
+	var cache updateCache
+	if data, err := os.ReadFile(cachePath); err == nil {
+		_ = json.Unmarshal(data, &cache)
+	}
+	// Print notice if cached result shows a newer version
+	if cache.LatestVersion != "" && cache.LatestVersion != version && version != "dev" {
+		fmt.Fprintf(os.Stderr, "Notice: New version available (%s → %s). Download: https://github.com/hoveychen/muvee/releases/latest\n", version, cache.LatestVersion)
+	}
+	// Refresh cache in background if stale (> 24h)
+	if time.Since(cache.LastCheck) > 24*time.Hour {
+		go func() {
+			cl := &http.Client{Timeout: 5 * time.Second}
+			resp, err := cl.Get("https://api.github.com/repos/hoveychen/muvee/releases/latest")
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+			var result struct {
+				TagName string `json:"tag_name"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.TagName == "" {
+				return
+			}
+			newCache := updateCache{LastCheck: time.Now(), LatestVersion: result.TagName}
+			data, _ := json.MarshalIndent(newCache, "", "  ")
+			_ = os.WriteFile(cachePath, data, 0600)
+		}()
+	}
+}
+
+func printNotices() {
+	checkSkillNotice()
+	checkUpdateNotice()
+}
+
+func cmdInstallClaudeSkill() error {
+	path := claudeSkillPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("creating skill directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(embeddedSkill), 0644); err != nil {
+		return fmt.Errorf("writing skill file: %w", err)
+	}
+	fmt.Printf("Claude Code skill installed at %s\n", path)
+	return nil
+}
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -1485,6 +1582,22 @@ func main() {
 
 	cmd := cleanArgs[0]
 	rest := cleanArgs[1:]
+
+	if cmd == "version" {
+		fmt.Println(version)
+		return
+	}
+
+	if cmd == "install-claude-skill" {
+		if err := cmdInstallClaudeSkill(); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Print notices for all other commands
+	printNotices()
 
 	if cmd == "login" {
 		if err := cmdLogin(rest, cfg); err != nil {

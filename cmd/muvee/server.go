@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -34,7 +35,18 @@ func runServer() {
 	}
 	log.Println("Migrations applied.")
 
-	st := store.New(db)
+	var encryptionKey []byte
+	if keyHex := os.Getenv("SECRET_ENCRYPTION_KEY"); keyHex != "" {
+		key, err := hex.DecodeString(keyHex)
+		if err != nil || len(key) != 32 {
+			log.Fatalf("SECRET_ENCRYPTION_KEY must be a 64-character hex string (32 bytes); got error: %v", err)
+		}
+		encryptionKey = key
+		log.Println("Secret encryption enabled.")
+	} else {
+		log.Println("Warning: SECRET_ENCRYPTION_KEY is not set; secrets feature is disabled")
+	}
+	st := store.NewWithEncryption(db, encryptionKey)
 	authSvc, err := auth.New(st)
 	if err != nil {
 		log.Fatalf("auth service: %v", err)

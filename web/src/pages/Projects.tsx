@@ -197,6 +197,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 function CLIAccessCard() {
   const [open, setOpen] = useState(false)
   const { t } = useTranslation()
+  const installCmd = `curl -fsSL ${window.location.origin}/api/install.sh | sh`
   const skillURL = `${window.location.origin}/api/skill`
 
   return (
@@ -215,7 +216,7 @@ function CLIAccessCard() {
             {t('projects.developerAccess')}
           </p>
           <p style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '2px' }}>
-            {t('projects.skillUrl')}
+            {t('projects.quickInstall')}
           </p>
         </div>
         <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
@@ -226,10 +227,10 @@ function CLIAccessCard() {
       {open && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '1.5rem' }}>
           <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
-            {t('projects.claudeSkillUrl')}
+            {t('projects.installCommand')}
           </p>
           <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.6 }}>
-            {t('projects.skillUrlDesc')}
+            {t('projects.installCmdDesc')}
           </p>
           <div className="flex items-center gap-2">
             <div
@@ -245,9 +246,9 @@ function CLIAccessCard() {
                 whiteSpace: 'nowrap',
               }}
             >
-              {skillURL}
+              {installCmd}
             </div>
-            <CopyButton text={skillURL} label={t('projects.copyUrl')} />
+            <CopyButton text={installCmd} label={t('projects.copy')} />
             <a
               href={skillURL}
               target="_blank"
