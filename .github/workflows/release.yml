@@ -71,6 +71,10 @@ jobs:
               -o "$OUTPUT" ./cmd/muvee
           done
 
+      # ── Prepare muveectl embed files ─────────────────────────────────────
+      - name: Copy skill.md for embed
+        run: cp .cursor/skills/muveectl/SKILL.md cmd/muveectl/skill.md
+
       # ── Cross-compile muveectl CLI (Linux + macOS + Windows) ──────────────
       - name: Build muveectl CLI binaries
         env:
