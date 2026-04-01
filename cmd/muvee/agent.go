@@ -339,6 +339,15 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 			})
 		}
 	}
+	var envVars map[string]string
+	if evRaw, ok := p["env_vars"].(map[string]interface{}); ok {
+		envVars = make(map[string]string, len(evRaw))
+		for k, v := range evRaw {
+			if s, ok := v.(string); ok {
+				envVars[k] = s
+			}
+		}
+	}
 	cfg := deployer.Config{
 		DeploymentID:       str(p, "deployment_id"),
 		ProjectID:          str(p, "project_id"),
@@ -353,6 +362,7 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 		DatasetNFSBasePath: datasetNFSBasePath,
 		Datasets:           datasets,
 		BaseDomain:         baseDomain,
+		EnvVars:            envVars,
 	}
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }

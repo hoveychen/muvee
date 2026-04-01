@@ -137,7 +137,17 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 	}
 
 	dockerArgs = append(dockerArgs, cfg.ImageTag)
-	logFn(fmt.Sprintf("Starting container: docker %s", strings.Join(dockerArgs, " ")))
+	// Log the command with secret values redacted.
+	redactedArgs := make([]string, len(dockerArgs))
+	copy(redactedArgs, dockerArgs)
+	for i, arg := range redactedArgs {
+		if i > 0 && redactedArgs[i-1] == "-e" {
+			if eqIdx := strings.Index(arg, "="); eqIdx >= 0 {
+				redactedArgs[i] = arg[:eqIdx+1] + "***"
+			}
+		}
+	}
+	logFn(fmt.Sprintf("Starting container: docker %s", strings.Join(redactedArgs, " ")))
 	if err := runCmd(ctx, logFn, "docker", dockerArgs...); err != nil {
 		return 0, fmt.Errorf("docker run: %w", err)
 	}
