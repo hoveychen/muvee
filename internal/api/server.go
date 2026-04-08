@@ -342,7 +342,21 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "failed to create token", http.StatusInternalServerError)
 			return
 		}
-		http.Redirect(w, r, fmt.Sprintf("http://127.0.0.1:%s?token=%s", port, apiToken.Token), http.StatusFound)
+		// Show the token on the page for remote/headless use, and also attempt
+		// the local redirect via JS so the normal flow still works seamlessly.
+		callbackURL := fmt.Sprintf("http://127.0.0.1:%s?token=%s", port, apiToken.Token)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<html><head><meta charset="utf-8"></head>
+<body style="font-family:system-ui,monospace;background:#0f0f0f;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto">
+<h2>✓ Authentication successful</h2>
+<p>If the CLI did not log in automatically, copy the token below and paste it into your terminal:</p>
+<pre id="token" style="background:#1a1a2e;padding:1rem;border-radius:8px;word-break:break-all;user-select:all;cursor:pointer">%s</pre>
+<button onclick="navigator.clipboard.writeText(document.getElementById('token').textContent).then(()=>{this.textContent='Copied!'})" style="padding:0.5rem 1rem;border-radius:4px;border:none;background:#4a9eff;color:#fff;cursor:pointer;font-size:14px">Copy Token</button>
+<p style="color:#888;margin-top:2rem;font-size:13px">Attempting automatic callback...</p>
+<script>
+fetch(%q).catch(function(){});
+</script>
+</body></html>`, apiToken.Token, callbackURL)
 		return
 	}
 

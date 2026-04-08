@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -375,6 +376,9 @@ func cmdLogin(args []string, cfg *Config) error {
 	// Open the login page with the port so the user can pick a provider in the browser.
 	loginURL := fmt.Sprintf("%s/login?port=%d", cfg.Server, port)
 	fmt.Printf("Opening browser for authentication...\n%s\n\n", loginURL)
+	fmt.Println("If you are on a remote server, open the URL above in your local browser.")
+	fmt.Println("After authentication, paste the token shown on the page below.")
+	fmt.Print("\nToken (or wait for automatic callback): ")
 	openBrowser(loginURL)
 
 	tokenCh := make(chan string, 1)
@@ -391,6 +395,17 @@ func cmdLogin(args []string, cfg *Config) error {
 		}),
 	}
 
+	// Also accept token from stdin for headless/remote server use.
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			t := strings.TrimSpace(scanner.Text())
+			if t != "" {
+				tokenCh <- t
+			}
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -405,7 +420,7 @@ func cmdLogin(args []string, cfg *Config) error {
 		if err := saveConfig(cfg); err != nil {
 			return fmt.Errorf("save config: %w", err)
 		}
-		fmt.Println("Logged in successfully. Token saved to", configPath())
+		fmt.Println("\nLogged in successfully. Token saved to", configPath())
 		return nil
 	case <-ctx.Done():
 		_ = srv.Shutdown(context.Background())
