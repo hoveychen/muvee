@@ -269,7 +269,7 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 
 	var bodyB64 string
 	if r.Body != nil {
-		body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err == nil && len(body) > 0 {
 			bodyB64 = base64.StdEncoding.EncodeToString(body)
 		}

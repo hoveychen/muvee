@@ -156,6 +156,8 @@ func tunnelSession(wsURL string, header http.Header, localTarget string, httpCli
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   16 * 1024,
+		WriteBufferSize:  16 * 1024,
 	}
 	ws, _, err := dialer.Dial(wsURL, header)
 	if err != nil {
@@ -165,11 +167,12 @@ func tunnelSession(wsURL string, header http.Header, localTarget string, httpCli
 
 	writer := &wsMutexWriter{ws: ws}
 
-	// Configure Pong handler — reset read deadline on every Pong.
+	// Configure Ping handler — the server sends Pings every 30s; reset the
+	// read deadline on each Ping and reply with a Pong.
 	ws.SetReadDeadline(time.Now().Add(pongTimeout))
-	ws.SetPongHandler(func(string) error {
+	ws.SetPingHandler(func(msg string) error {
 		ws.SetReadDeadline(time.Now().Add(pongTimeout))
-		return nil
+		return ws.WriteControl(websocket.PongMessage, []byte(msg), time.Now().Add(10*time.Second))
 	})
 
 	fmt.Println("Connected.")
@@ -247,8 +250,8 @@ func proxyToLocal(httpClient *http.Client, localTarget string, req tunnelMsg) tu
 	}
 	defer httpResp.Body.Close()
 
-	// Read response body (limit to 10MB).
-	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
+	// Read response body (limit to 50MB).
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 50<<20))
 	if err != nil {
 		resp.StatusCode = 502
 		resp.Body = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("read body: %v", err)))
