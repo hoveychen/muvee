@@ -18,7 +18,35 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/spf13/cobra"
 )
+
+// ─── Tunnel command ──────────────────────────────────────────────────────────
+
+var tunnelCmd = &cobra.Command{
+	Use:   "tunnel PORT",
+	Short: "Publish a local port to the internet via tunnel",
+	Long: `Publish a local port directly to the internet — no deployment, no Docker, no git repo required.
+The domain is deterministically generated from the current working directory and port number,
+so reconnecting from the same directory reuses the same URL.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := requireAuth(); err != nil {
+			return err
+		}
+		domain, _ := cmd.Flags().GetString("domain")
+		noAuth, _ := cmd.Flags().GetBool("no-auth")
+		return cmdTunnel(args[0], domain, noAuth, cl)
+	},
+}
+
+func init() {
+	tunnelCmd.Flags().String("domain", "", "Override auto-generated domain prefix")
+	tunnelCmd.Flags().Bool("no-auth", false, "Disable ForwardAuth (public access)")
+	rootCmd.AddCommand(tunnelCmd)
+}
+
+// ─── Tunnel implementation ───────────────────────────────────────────────────
 
 // tunnelMsg is the wire format for HTTP-over-WebSocket tunnel communication.
 type tunnelMsg struct {
@@ -49,23 +77,7 @@ func (w *wsMutexWriter) writeControl(msgType int, data []byte, deadline time.Tim
 	return w.ws.WriteControl(msgType, data, deadline)
 }
 
-func cmdTunnel(args []string, c *client) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: muveectl tunnel <PORT> [--domain DOMAIN]")
-	}
-
-	port := args[0]
-	customDomain := ""
-	noAuth := false
-	for i := 1; i < len(args); i++ {
-		if args[i] == "--domain" && i+1 < len(args) {
-			customDomain = args[i+1]
-			i++
-		} else if args[i] == "--no-auth" {
-			noAuth = true
-		}
-	}
-
+func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 	// Compute deterministic domain from CWD + port.
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -166,6 +178,7 @@ func tunnelSession(wsURL string, header http.Header, localTarget string, httpCli
 	defer ws.Close()
 
 	writer := &wsMutexWriter{ws: ws}
+	_ = writer // used below
 
 	// Configure Ping handler — the server sends Pings every 30s; reset the
 	// read deadline on each Ping and reply with a Pong.
