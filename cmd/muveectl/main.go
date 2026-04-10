@@ -1490,7 +1490,8 @@ Projects:
   projects list                 List projects
   projects create [flags]       Create a project
     --name NAME                 Project name (required)
-    --git-url URL               Git repository URL (required)
+    --git-url URL               Git repository URL (required unless --git-source hosted)
+    --git-source hosted         Use server-hosted git repo (push via returned URL)
     --branch BRANCH             Git branch (default: main)
     --domain PREFIX             Domain prefix (defaults to project name)
     --dockerfile PATH           Dockerfile path (default: Dockerfile)

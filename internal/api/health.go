@@ -113,7 +113,12 @@ func (s *Server) handleGetSystemHealth(w http.ResponseWriter, r *http.Request) {
 
 // checkHTTP probes a URL with a GET request and returns a HealthCheck.
 func checkHTTP(name, url string, timeout time.Duration) HealthCheck {
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := client.Get(url)
 	if err != nil {
 		return HealthCheck{Name: name, Status: HealthCheckError, Message: fmt.Sprintf("cannot reach %s: %v", url, err)}
