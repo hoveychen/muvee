@@ -1,18 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
-	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -46,20 +43,25 @@ func init() {
 	rootCmd.AddCommand(tunnelCmd)
 }
 
-// ─── Tunnel implementation ───────────────────────────────────────────────────
+// ─── L4 tunnel protocol ─────────────────────────────────────────────────────
+//
+// The tunnel multiplexes raw TCP streams from muvee-server over a single
+// WebSocket. Each binary message is one frame:
+//
+//	[type:1][streamID:4 BE][payload...]
+//
+// frameOpen  (1): server asks the CLI to dial the local service for a new stream.
+// frameData  (2): raw byte chunk; the CLI writes it to the local conn (or
+//                 the server writes it to the browser-side hijacked conn).
+// frameClose (3): either side closes the stream.
+const (
+	frameOpen  byte = 1
+	frameData  byte = 2
+	frameClose byte = 3
+)
 
-// tunnelMsg is the wire format for HTTP-over-WebSocket tunnel communication.
-type tunnelMsg struct {
-	Type       string              `json:"type"`               // "request" or "response"
-	ID         string              `json:"id"`                 // unique per-request
-	Method     string              `json:"method,omitempty"`   // request only
-	Path       string              `json:"path,omitempty"`     // request only (path + query)
-	StatusCode int                 `json:"status,omitempty"`   // response only
-	Headers    map[string][]string `json:"headers,omitempty"`
-	Body       string              `json:"body,omitempty"`     // base64-encoded
-}
-
-// wsMutexWriter wraps a *websocket.Conn with a mutex to make concurrent writes safe.
+// wsMutexWriter wraps a *websocket.Conn with a mutex so concurrent writes
+// from multiple stream goroutines are safe.
 type wsMutexWriter struct {
 	ws *websocket.Conn
 	mu sync.Mutex
@@ -77,8 +79,15 @@ func (w *wsMutexWriter) writeControl(msgType int, data []byte, deadline time.Tim
 	return w.ws.WriteControl(msgType, data, deadline)
 }
 
+func (w *wsMutexWriter) writeFrame(fType byte, streamID uint32, payload []byte) error {
+	buf := make([]byte, 5+len(payload))
+	buf[0] = fType
+	binary.BigEndian.PutUint32(buf[1:5], streamID)
+	copy(buf[5:], payload)
+	return w.writeMessage(websocket.BinaryMessage, buf)
+}
+
 func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
-	// Compute deterministic domain from CWD + port.
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
@@ -90,9 +99,8 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 		domain = tunnelDomain(cwd, portNum)
 	}
 
-	localTarget := "http://127.0.0.1:" + port
+	localAddr := "127.0.0.1:" + port
 
-	// Fetch base domain from server.
 	rc, err := c.do("GET", "/api/runtime/config", nil)
 	if err != nil {
 		return fmt.Errorf("fetch runtime config: %w", err)
@@ -103,7 +111,6 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 	}
 	publicURL := fmt.Sprintf("https://%s.%s", domain, baseDomain)
 
-	// Build WebSocket URL.
 	wsScheme := "wss"
 	serverURL, _ := url.Parse(c.server)
 	if serverURL != nil && serverURL.Scheme == "http" {
@@ -123,22 +130,19 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 		authLabel = "off (public)"
 	}
 	fmt.Printf("Tunnel:\n")
-	fmt.Printf("  %s → 127.0.0.1:%s\n", publicURL, port)
+	fmt.Printf("  %s → %s\n", publicURL, localAddr)
 	fmt.Printf("  Domain: %s\n", domain)
 	fmt.Printf("  Auth:   %s\n", authLabel)
 	fmt.Println("Press Ctrl+C to stop.")
 
-	// Handle graceful shutdown.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Reconnect loop.
-	httpClient := &http.Client{Timeout: 60 * time.Second}
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 
 	for {
-		err := tunnelSession(wsURL, wsHeader, localTarget, httpClient)
+		err := tunnelSession(wsURL, wsHeader, localAddr)
 		if ctx.Err() != nil {
 			fmt.Println("\nTunnel stopped.")
 			return nil
@@ -153,7 +157,6 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 			fmt.Println("\nTunnel stopped.")
 			return nil
 		}
-		// Exponential backoff, capped.
 		backoff = backoff * 2
 		if backoff > maxBackoff {
 			backoff = maxBackoff
@@ -163,13 +166,13 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 
 // tunnelSession runs a single WebSocket connection. It returns when the
 // connection is lost or closed. The caller decides whether to reconnect.
-func tunnelSession(wsURL string, header http.Header, localTarget string, httpClient *http.Client) error {
+func tunnelSession(wsURL string, header http.Header, localAddr string) error {
 	const pongTimeout = 45 * time.Second
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
-		ReadBufferSize:   16 * 1024,
-		WriteBufferSize:  16 * 1024,
+		ReadBufferSize:   32 * 1024,
+		WriteBufferSize:  32 * 1024,
 	}
 	ws, _, err := dialer.Dial(wsURL, header)
 	if err != nil {
@@ -178,108 +181,99 @@ func tunnelSession(wsURL string, header http.Header, localTarget string, httpCli
 	defer ws.Close()
 
 	writer := &wsMutexWriter{ws: ws}
-	_ = writer // used below
 
-	// Configure Ping handler — the server sends Pings every 30s; reset the
-	// read deadline on each Ping and reply with a Pong.
 	ws.SetReadDeadline(time.Now().Add(pongTimeout))
 	ws.SetPingHandler(func(msg string) error {
 		ws.SetReadDeadline(time.Now().Add(pongTimeout))
-		return ws.WriteControl(websocket.PongMessage, []byte(msg), time.Now().Add(10*time.Second))
+		return writer.writeControl(websocket.PongMessage, []byte(msg), time.Now().Add(10*time.Second))
 	})
 
 	fmt.Println("Connected.")
 
-	// Read loop: read requests from server, proxy to local, send responses back.
+	var streamsMu sync.Mutex
+	streams := make(map[uint32]net.Conn)
+
+	closeStream := func(sid uint32) {
+		streamsMu.Lock()
+		c, ok := streams[sid]
+		delete(streams, sid)
+		streamsMu.Unlock()
+		if ok {
+			c.Close()
+		}
+	}
+
+	defer func() {
+		streamsMu.Lock()
+		for _, c := range streams {
+			c.Close()
+		}
+		streams = map[uint32]net.Conn{}
+		streamsMu.Unlock()
+	}()
+
 	for {
-		_, raw, err := ws.ReadMessage()
+		msgType, raw, err := ws.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return nil
 			}
 			return fmt.Errorf("read: %w", err)
 		}
-
-		var req tunnelMsg
-		if err := json.Unmarshal(raw, &req); err != nil {
-			log.Printf("bad tunnel message: %v", err)
+		if msgType != websocket.BinaryMessage || len(raw) < 5 {
 			continue
 		}
-		if req.Type != "request" {
-			continue
-		}
+		fType := raw[0]
+		sid := binary.BigEndian.Uint32(raw[1:5])
+		payload := raw[5:]
 
-		// Handle each request concurrently.
-		go func(req tunnelMsg) {
-			resp := proxyToLocal(httpClient, localTarget, req)
-			data, _ := json.Marshal(resp)
-			if err := writer.writeMessage(websocket.TextMessage, data); err != nil {
-				log.Printf("ws write error: %v", err)
+		switch fType {
+		case frameOpen:
+			c, err := net.Dial("tcp", localAddr)
+			if err != nil {
+				log.Printf("tunnel: dial %s: %v", localAddr, err)
+				_ = writer.writeFrame(frameClose, sid, nil)
+				continue
 			}
-		}(req)
-	}
-}
+			streamsMu.Lock()
+			streams[sid] = c
+			streamsMu.Unlock()
 
-// proxyToLocal forwards a tunnel request to the local service and returns the response.
-func proxyToLocal(httpClient *http.Client, localTarget string, req tunnelMsg) tunnelMsg {
-	resp := tunnelMsg{Type: "response", ID: req.ID}
+			// local → tunnel
+			go func(c net.Conn, sid uint32) {
+				buf := make([]byte, 16*1024)
+				for {
+					n, rerr := c.Read(buf)
+					if n > 0 {
+						if werr := writer.writeFrame(frameData, sid, buf[:n]); werr != nil {
+							closeStream(sid)
+							return
+						}
+					}
+					if rerr != nil {
+						_ = writer.writeFrame(frameClose, sid, nil)
+						closeStream(sid)
+						return
+					}
+				}
+			}(c, sid)
 
-	// Decode request body.
-	var bodyReader io.Reader
-	if req.Body != "" {
-		bodyBytes, err := base64.StdEncoding.DecodeString(req.Body)
-		if err != nil {
-			resp.StatusCode = 502
-			resp.Body = base64.StdEncoding.EncodeToString([]byte("bad request body encoding"))
-			return resp
+		case frameData:
+			streamsMu.Lock()
+			c := streams[sid]
+			streamsMu.Unlock()
+			if c != nil {
+				// Copy payload since the WebSocket read buffer is reused.
+				data := make([]byte, len(payload))
+				copy(data, payload)
+				if _, err := c.Write(data); err != nil {
+					closeStream(sid)
+					_ = writer.writeFrame(frameClose, sid, nil)
+				}
+			}
+
+		case frameClose:
+			closeStream(sid)
 		}
-		bodyReader = bytes.NewReader(bodyBytes)
 	}
-
-	targetURL := localTarget + req.Path
-	httpReq, err := http.NewRequest(req.Method, targetURL, bodyReader)
-	if err != nil {
-		resp.StatusCode = 502
-		resp.Body = base64.StdEncoding.EncodeToString([]byte(err.Error()))
-		return resp
-	}
-
-	// Copy headers from tunnel request, skip hop-by-hop headers.
-	for k, vv := range req.Headers {
-		kl := strings.ToLower(k)
-		if kl == "host" || kl == "connection" || kl == "upgrade" || kl == "transfer-encoding" {
-			continue
-		}
-		for _, v := range vv {
-			httpReq.Header.Add(k, v)
-		}
-	}
-
-	httpResp, err := httpClient.Do(httpReq)
-	if err != nil {
-		resp.StatusCode = 502
-		resp.Body = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("local service error: %v", err)))
-		return resp
-	}
-	defer httpResp.Body.Close()
-
-	// Read response body (limit to 50MB).
-	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 50<<20))
-	if err != nil {
-		resp.StatusCode = 502
-		resp.Body = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("read body: %v", err)))
-		return resp
-	}
-
-	resp.StatusCode = httpResp.StatusCode
-	resp.Headers = make(map[string][]string)
-	for k, vv := range httpResp.Header {
-		kl := strings.ToLower(k)
-		if kl == "transfer-encoding" || kl == "connection" {
-			continue
-		}
-		resp.Headers[k] = vv
-	}
-	resp.Body = base64.StdEncoding.EncodeToString(body)
-	return resp
 }

@@ -1,9 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,62 +12,137 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/hoveychen/muvee/internal/auth"
 )
 
-// ─── Tunnel message protocol ────────────────────────────────────────────────
-
-type tunnelMsg struct {
-	Type       string              `json:"type"`               // "request" or "response"
-	ID         string              `json:"id"`                 // unique per-request
-	Method     string              `json:"method,omitempty"`   // request only
-	Path       string              `json:"path,omitempty"`     // request only (path + query)
-	StatusCode int                 `json:"status,omitempty"`   // response only
-	Headers    map[string][]string `json:"headers,omitempty"`
-	Body       string              `json:"body,omitempty"`     // base64-encoded
-}
+// ─── L4 tunnel frame protocol ───────────────────────────────────────────────
+//
+// Each binary WebSocket message between muvee-server and muveectl is one
+// frame, encoded as:
+//
+//	[type:1][streamID:4 BE][payload...]
+//
+// Types:
+//   - frameOpen  (1): server asks CLI to dial the local service. Payload empty.
+//   - frameData  (2): raw byte chunk for an existing stream.
+//   - frameClose (3): one side is closing the stream. Payload empty.
+//
+// Streams multiplex multiple concurrent browser connections over a single
+// tunnel WebSocket. The server allocates stream IDs starting at 1.
+const (
+	frameOpen  byte = 1
+	frameData  byte = 2
+	frameClose byte = 3
+)
 
 // ─── Tunnel registry ────────────────────────────────────────────────────────
+
+type tunnelStream struct {
+	id        uint32
+	inbox     chan []byte
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (ts *tunnelStream) close() {
+	ts.closeOnce.Do(func() { close(ts.closed) })
+}
 
 type tunnelConn struct {
 	ws           *websocket.Conn
 	userEmail    string
-	authRequired bool      // whether ForwardAuth is enabled for this tunnel
-	connectedAt  time.Time // when the tunnel was established
-	historyID    string    // tunnel_history row ID (for updating disconnected_at)
-	mu           sync.Mutex                // guards ws writes
-	pending      map[string]chan *tunnelMsg // requestID → response channel
-	pendingMu    sync.Mutex
+	authRequired bool
+	connectedAt  time.Time
+	historyID    string
+
+	mu sync.Mutex // guards ws writes
+
+	streamMu     sync.Mutex
+	streams      map[uint32]*tunnelStream
+	nextStreamID uint32
 }
 
-func (tc *tunnelConn) writeJSON(v interface{}) error {
+func (tc *tunnelConn) writeFrame(fType byte, streamID uint32, payload []byte) error {
+	buf := make([]byte, 5+len(payload))
+	buf[0] = fType
+	binary.BigEndian.PutUint32(buf[1:5], streamID)
+	copy(buf[5:], payload)
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
-	return tc.ws.WriteJSON(v)
+	return tc.ws.WriteMessage(websocket.BinaryMessage, buf)
 }
 
-func (tc *tunnelConn) addPending(id string) chan *tunnelMsg {
-	ch := make(chan *tunnelMsg, 1)
-	tc.pendingMu.Lock()
-	tc.pending[id] = ch
-	tc.pendingMu.Unlock()
-	return ch
+func (tc *tunnelConn) newStream() *tunnelStream {
+	tc.streamMu.Lock()
+	defer tc.streamMu.Unlock()
+	tc.nextStreamID++
+	s := &tunnelStream{
+		id:     tc.nextStreamID,
+		inbox:  make(chan []byte, 32),
+		closed: make(chan struct{}),
+	}
+	tc.streams[s.id] = s
+	return s
 }
 
-func (tc *tunnelConn) removePending(id string) {
-	tc.pendingMu.Lock()
-	delete(tc.pending, id)
-	tc.pendingMu.Unlock()
+func (tc *tunnelConn) getStream(id uint32) *tunnelStream {
+	tc.streamMu.Lock()
+	defer tc.streamMu.Unlock()
+	return tc.streams[id]
 }
 
-func (tc *tunnelConn) dispatchResponse(msg *tunnelMsg) {
-	tc.pendingMu.Lock()
-	ch, ok := tc.pending[msg.ID]
-	tc.pendingMu.Unlock()
+func (tc *tunnelConn) removeStream(id uint32) {
+	tc.streamMu.Lock()
+	s, ok := tc.streams[id]
+	delete(tc.streams, id)
+	tc.streamMu.Unlock()
 	if ok {
-		ch <- msg
+		s.close()
+	}
+}
+
+func (tc *tunnelConn) closeAllStreams() {
+	tc.streamMu.Lock()
+	for _, s := range tc.streams {
+		s.close()
+	}
+	tc.streams = make(map[uint32]*tunnelStream)
+	tc.streamMu.Unlock()
+}
+
+// serveConn runs the server-side frame read loop until the WebSocket is closed.
+// It dispatches incoming DATA frames to the matching stream's inbox and closes
+// streams on CLOSE frames or connection error.
+func (tc *tunnelConn) serveConn() {
+	defer tc.closeAllStreams()
+	for {
+		msgType, raw, err := tc.ws.ReadMessage()
+		if err != nil {
+			return
+		}
+		if msgType != websocket.BinaryMessage || len(raw) < 5 {
+			continue
+		}
+		fType := raw[0]
+		sid := binary.BigEndian.Uint32(raw[1:5])
+		payload := raw[5:]
+		stream := tc.getStream(sid)
+		if stream == nil {
+			continue
+		}
+		switch fType {
+		case frameData:
+			// Copy payload — the WebSocket buffer is reused across reads.
+			data := make([]byte, len(payload))
+			copy(data, payload)
+			select {
+			case stream.inbox <- data:
+			case <-stream.closed:
+			}
+		case frameClose:
+			tc.removeStream(sid)
+		}
 	}
 }
 
@@ -82,7 +158,6 @@ func newTunnelRegistry() *tunnelRegistry {
 
 func (tr *tunnelRegistry) register(domain string, tc *tunnelConn) {
 	tr.mu.Lock()
-	// Close any existing tunnel for the same domain.
 	if old, ok := tr.tunnels[domain]; ok && old.ws != nil {
 		old.ws.Close()
 	}
@@ -112,7 +187,6 @@ type tunnelInfo struct {
 	ConnectedAt  time.Time `json:"connected_at"`
 }
 
-// activeTunnels returns a snapshot of all currently registered tunnels.
 func (tr *tunnelRegistry) activeTunnels() []tunnelInfo {
 	tr.mu.RLock()
 	defer tr.mu.RUnlock()
@@ -131,9 +205,9 @@ func (tr *tunnelRegistry) activeTunnels() []tunnelInfo {
 // ─── WebSocket upgrade ──────────────────────────────────────────────────────
 
 var wsUpgrader = websocket.Upgrader{
-	CheckOrigin:  func(r *http.Request) bool { return true },
-	ReadBufferSize:  16 * 1024,
-	WriteBufferSize: 16 * 1024,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+	ReadBufferSize:  32 * 1024,
+	WriteBufferSize: 32 * 1024,
 }
 
 // handleTunnelConnect upgrades the connection to a WebSocket and registers a tunnel.
@@ -156,8 +230,6 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Configure Ping/Pong keepalive.  The server sends a Ping every 30s;
-	// if no Pong is received within 45s the connection is considered dead.
 	const (
 		pingInterval = 30 * time.Second
 		pongTimeout  = 45 * time.Second
@@ -174,10 +246,9 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 		userEmail:    user.Email,
 		authRequired: authRequired,
 		connectedAt:  now,
-		pending:      make(map[string]chan *tunnelMsg),
+		streams:      make(map[uint32]*tunnelStream),
 	}
 
-	// Record tunnel connection in DB history.
 	historyID := s.recordTunnelConnect(domain, user.Email, authRequired)
 	tc.historyID = historyID
 
@@ -190,7 +261,6 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Tunnel closed: %s.%s", domain, s.baseDomain)
 	}()
 
-	// Ping ticker — runs in a separate goroutine.
 	pingDone := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(pingInterval)
@@ -211,42 +281,20 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 	}()
 	defer close(pingDone)
 
-	// Read loop: dispatch response messages back to pending HTTP handlers.
-	for {
-		_, raw, err := ws.ReadMessage()
-		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return
-			}
-			if !websocket.IsUnexpectedCloseError(err) {
-				return
-			}
-			log.Printf("tunnel read error (%s): %v", domain, err)
-			return
-		}
-
-		var msg tunnelMsg
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			continue
-		}
-		if msg.Type == "response" {
-			tc.dispatchResponse(&msg)
-		}
-	}
+	tc.serveConn()
 }
 
-// ─── Tunnel HTTP proxy ──────────────────────────────────────────────────────
+// ─── Tunnel HTTP proxy (L4 passthrough via Hijack) ──────────────────────────
 
-// handleTunnelTraffic proxies an incoming HTTP request through the tunnel WebSocket
-// to the CLI client's local service.  It is called when the request's Host header
-// matches a registered tunnel domain.
+// handleTunnelTraffic hijacks the incoming HTTP connection and pipes raw bytes
+// through the tunnel WebSocket to the CLI client's local service. Because the
+// forwarding is byte-level, any protocol that runs over HTTP (including
+// WebSocket upgrades) works transparently.
 func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
-	// Strip port if present.
 	if idx := strings.LastIndex(host, ":"); idx != -1 {
 		host = host[:idx]
 	}
-	// Extract the domain prefix (everything before .baseDomain).
 	suffix := "." + s.baseDomain
 	if !strings.HasSuffix(host, suffix) {
 		http.Error(w, "unknown tunnel host", http.StatusBadGateway)
@@ -260,70 +308,115 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serialize the incoming HTTP request.
-	reqID := uuid.New().String()
-	path := r.URL.Path
-	if r.URL.RawQuery != "" {
-		path += "?" + r.URL.RawQuery
-	}
-
-	var bodyB64 string
-	if r.Body != nil {
-		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
-		if err == nil && len(body) > 0 {
-			bodyB64 = base64.StdEncoding.EncodeToString(body)
-		}
-	}
-
-	// Copy headers, skip hop-by-hop.
-	headers := make(map[string][]string)
-	for k, vv := range r.Header {
-		kl := strings.ToLower(k)
-		if kl == "connection" || kl == "upgrade" || kl == "transfer-encoding" {
-			continue
-		}
-		headers[k] = vv
-	}
-
-	msg := tunnelMsg{
-		Type:    "request",
-		ID:      reqID,
-		Method:  r.Method,
-		Path:    path,
-		Headers: headers,
-		Body:    bodyB64,
-	}
-
-	// Register a pending response channel before sending.
-	ch := tc.addPending(reqID)
-	defer tc.removePending(reqID)
-
-	if err := tc.writeJSON(msg); err != nil {
-		http.Error(w, "tunnel send error", http.StatusBadGateway)
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijack not supported", http.StatusInternalServerError)
 		return
 	}
 
-	// Wait for the response from the CLI (timeout: 120s).
-	select {
-	case resp := <-ch:
-		// Write response headers.
-		for k, vv := range resp.Headers {
-			for _, v := range vv {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		if resp.Body != "" {
-			body, err := base64.StdEncoding.DecodeString(resp.Body)
-			if err == nil {
-				w.Write(body)
-			}
-		}
-	case <-time.After(120 * time.Second):
-		http.Error(w, "tunnel timeout", http.StatusGatewayTimeout)
-	case <-r.Context().Done():
-		// Client disconnected.
+	// Reconstruct the original HTTP/1.1 request bytes. The net/http server has
+	// already consumed the request line and headers from the wire; we need to
+	// replay them to the local service verbatim so that Connection/Upgrade and
+	// friends survive the trip.
+	//
+	// For non-empty bodies we read via r.Body (which handles chunked decoding)
+	// and emit a fixed Content-Length. For WebSocket upgrades the body is
+	// empty so this is a no-op.
+	const maxBody = 50 << 20
+	body, err := readRequestBody(r, maxBody)
+	if err != nil {
+		http.Error(w, "request body read error", http.StatusBadRequest)
+		return
 	}
+
+	var reqBuf bytes.Buffer
+	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, r.URL.RequestURI())
+	fmt.Fprintf(&reqBuf, "Host: %s\r\n", r.Host)
+	for k, vv := range r.Header {
+		if strings.EqualFold(k, "Host") ||
+			strings.EqualFold(k, "Content-Length") ||
+			strings.EqualFold(k, "Transfer-Encoding") {
+			continue
+		}
+		for _, v := range vv {
+			fmt.Fprintf(&reqBuf, "%s: %s\r\n", k, v)
+		}
+	}
+	if len(body) > 0 {
+		fmt.Fprintf(&reqBuf, "Content-Length: %d\r\n", len(body))
+	}
+	reqBuf.WriteString("\r\n")
+	reqBuf.Write(body)
+
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = bufrw.Flush()
+
+	stream := tc.newStream()
+	defer tc.removeStream(stream.id)
+
+	if err := tc.writeFrame(frameOpen, stream.id, nil); err != nil {
+		return
+	}
+	// Send the reconstructed request in 16KB chunks so one huge frame doesn't
+	// blow the WebSocket read buffer on the CLI side.
+	for off := 0; off < reqBuf.Len(); {
+		end := off + 16*1024
+		if end > reqBuf.Len() {
+			end = reqBuf.Len()
+		}
+		if err := tc.writeFrame(frameData, stream.id, reqBuf.Bytes()[off:end]); err != nil {
+			return
+		}
+		off = end
+	}
+
+	// browser → tunnel: pipe everything after the headers+body we already
+	// replayed. bufrw.Reader transparently handles whatever bytes were
+	// pre-buffered by the HTTP server before Hijack.
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		buf := make([]byte, 16*1024)
+		for {
+			n, err := bufrw.Reader.Read(buf)
+			if n > 0 {
+				if werr := tc.writeFrame(frameData, stream.id, buf[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// tunnel → browser
+	for {
+		select {
+		case data := <-stream.inbox:
+			if _, err := conn.Write(data); err != nil {
+				_ = tc.writeFrame(frameClose, stream.id, nil)
+				return
+			}
+		case <-stream.closed:
+			return
+		case <-clientDone:
+			_ = tc.writeFrame(frameClose, stream.id, nil)
+			return
+		}
+	}
+}
+
+// readRequestBody reads up to max bytes from r.Body and returns them.
+func readRequestBody(r *http.Request, max int64) ([]byte, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	return io.ReadAll(io.LimitReader(r.Body, max))
 }
 
 // isTunnelRequest returns true if the Host header matches a tunnel domain pattern.

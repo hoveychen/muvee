@@ -1,12 +1,14 @@
 package api
 
 import (
-	"encoding/base64"
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,7 +54,7 @@ func TestTunnelRegistry_RegisterAndGet(t *testing.T) {
 	tc := &tunnelConn{
 		userEmail:    "alice@example.com",
 		authRequired: true,
-		pending:      make(map[string]chan *tunnelMsg),
+		streams:      make(map[uint32]*tunnelStream),
 	}
 	tr.register("t-bold-fox", tc)
 
@@ -69,7 +71,7 @@ func TestTunnelRegistry_RegisterAndGet(t *testing.T) {
 func TestTunnelRegistry_Unregister(t *testing.T) {
 	tr := newTunnelRegistry()
 
-	tc := &tunnelConn{pending: make(map[string]chan *tunnelMsg)}
+	tc := &tunnelConn{streams: make(map[uint32]*tunnelStream)}
 	tr.register("t-bold-fox", tc)
 	tr.unregister("t-bold-fox", tc)
 
@@ -81,8 +83,8 @@ func TestTunnelRegistry_Unregister(t *testing.T) {
 func TestTunnelRegistry_UnregisterIgnoresStale(t *testing.T) {
 	tr := newTunnelRegistry()
 
-	tc1 := &tunnelConn{pending: make(map[string]chan *tunnelMsg)}
-	tc2 := &tunnelConn{pending: make(map[string]chan *tunnelMsg)}
+	tc1 := &tunnelConn{streams: make(map[uint32]*tunnelStream)}
+	tc2 := &tunnelConn{streams: make(map[uint32]*tunnelStream)}
 	tr.register("t-bold-fox", tc1)
 	tr.register("t-bold-fox", tc2) // replaces tc1
 
@@ -96,8 +98,8 @@ func TestTunnelRegistry_UnregisterIgnoresStale(t *testing.T) {
 func TestTunnelRegistry_ActiveTunnels(t *testing.T) {
 	tr := newTunnelRegistry()
 
-	tc1 := &tunnelConn{authRequired: true, pending: make(map[string]chan *tunnelMsg)}
-	tc2 := &tunnelConn{authRequired: false, pending: make(map[string]chan *tunnelMsg)}
+	tc1 := &tunnelConn{authRequired: true, streams: make(map[uint32]*tunnelStream)}
+	tc2 := &tunnelConn{authRequired: false, streams: make(map[uint32]*tunnelStream)}
 	tr.register("t-bold-fox", tc1)
 	tr.register("t-calm-owl", tc2)
 
@@ -118,32 +120,33 @@ func TestTunnelRegistry_ActiveTunnels(t *testing.T) {
 	}
 }
 
-// ─── tunnelConn dispatch ────────────────────────────────────────────────────
+// ─── tunnelConn stream management ───────────────────────────────────────────
 
-func TestTunnelConn_DispatchResponse(t *testing.T) {
-	tc := &tunnelConn{pending: make(map[string]chan *tunnelMsg)}
+func TestTunnelConn_StreamLifecycle(t *testing.T) {
+	tc := &tunnelConn{streams: make(map[uint32]*tunnelStream)}
 
-	ch := tc.addPending("req-1")
-	resp := &tunnelMsg{Type: "response", ID: "req-1", StatusCode: 200}
-
-	tc.dispatchResponse(resp)
-
-	select {
-	case got := <-ch:
-		if got.StatusCode != 200 {
-			t.Errorf("expected 200, got %d", got.StatusCode)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for response dispatch")
+	s1 := tc.newStream()
+	if s1.id != 1 {
+		t.Errorf("expected first stream id 1, got %d", s1.id)
+	}
+	if got := tc.getStream(1); got != s1 {
+		t.Fatal("getStream returned wrong stream")
 	}
 
-	tc.removePending("req-1")
-}
+	s2 := tc.newStream()
+	if s2.id != 2 {
+		t.Errorf("expected second stream id 2, got %d", s2.id)
+	}
 
-func TestTunnelConn_DispatchResponse_UnknownID(t *testing.T) {
-	tc := &tunnelConn{pending: make(map[string]chan *tunnelMsg)}
-	// Should not panic on unknown ID.
-	tc.dispatchResponse(&tunnelMsg{Type: "response", ID: "unknown"})
+	tc.removeStream(s1.id)
+	if got := tc.getStream(1); got != nil {
+		t.Fatal("stream should be gone after removeStream")
+	}
+	select {
+	case <-s1.closed:
+	default:
+		t.Fatal("stream.closed should be closed after removeStream")
+	}
 }
 
 // ─── isTunnelRequest ────────────────────────────────────────────────────────
@@ -177,131 +180,187 @@ func TestIsTunnelRequest(t *testing.T) {
 
 // ─── Tunnel WebSocket + HTTP proxy integration ──────────────────────────────
 
-// TestTunnelEndToEnd starts a server with tunnel support, connects a fake CLI
-// via WebSocket, sends an HTTP request through the tunnel, and verifies the
-// response is proxied correctly.
-func TestTunnelEndToEnd(t *testing.T) {
-	// Create a minimal server with tunnel support.
+// TestTunnelEndToEnd_HTTP verifies a plain HTTP GET can traverse the L4
+// tunnel: the server hijacks the connection, pipes reconstructed request
+// bytes to the CLI, and pipes the local service's raw HTTP response back.
+func TestTunnelEndToEnd_HTTP(t *testing.T) {
+	// Local HTTP server that returns a fixed payload.
+	localSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/some/path" || r.URL.RawQuery != "q=1" {
+			t.Errorf("local got unexpected URL: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("hello from tunnel"))
+	}))
+	defer localSrv.Close()
+	localAddr := strings.TrimPrefix(localSrv.URL, "http://")
+
 	s := &Server{
 		baseDomain:       "example.com",
-		tunnelBackendURL: "http://localhost:9999", // not used in this test
+		tunnelBackendURL: "http://localhost:9999",
 		tunnels:          newTunnelRegistry(),
 		authServiceURL:   "http://authservice:4181",
 	}
 
-	// Start a test HTTP server that exposes the tunnel connect endpoint
-	// (without auth middleware for test simplicity) and the tunnel traffic handler.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tunnel/connect", func(w http.ResponseWriter, r *http.Request) {
-		// Simulate auth: inject a fake user into context.
-		// In production this would come from s.auth.Middleware.
-		// For testing, we call handleTunnelConnect directly after patching.
 		domain := r.URL.Query().Get("domain")
-		if domain == "" || !isValidTunnelDomain(domain) {
+		if !isValidTunnelDomain(domain) {
 			http.Error(w, "bad domain", 400)
 			return
 		}
 		authRequired := r.URL.Query().Get("noauth") != "1"
-
 		ws, err := wsUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			t.Logf("upgrade error: %v", err)
 			return
 		}
-
 		tc := &tunnelConn{
 			ws:           ws,
 			userEmail:    "test@example.com",
 			authRequired: authRequired,
-			pending:      make(map[string]chan *tunnelMsg),
+			streams:      make(map[uint32]*tunnelStream),
 		}
 		s.tunnels.register(domain, tc)
 		defer func() {
 			s.tunnels.unregister(domain, tc)
 			ws.Close()
 		}()
-
-		// Read loop.
-		for {
-			_, raw, err := ws.ReadMessage()
-			if err != nil {
-				return
-			}
-			var msg tunnelMsg
-			if err := json.Unmarshal(raw, &msg); err != nil {
-				continue
-			}
-			if msg.Type == "response" {
-				tc.dispatchResponse(&msg)
-			}
-		}
+		tc.serveConn()
 	})
-
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "t-test-fox.example.com"
+		s.handleTunnelTraffic(w, r)
+	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	// Connect a fake CLI via WebSocket.
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/tunnel/connect?domain=t-test-fox"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	cliWsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/tunnel/connect?domain=t-test-fox"
+	cliWs, _, err := websocket.DefaultDialer.Dial(cliWsURL, nil)
 	if err != nil {
-		t.Fatalf("ws dial: %v", err)
+		t.Fatalf("cli dial: %v", err)
 	}
-	defer ws.Close()
+	defer cliWs.Close()
+	go runL4ClientSimulator(t, cliWs, localAddr)
 
-	// Give the server a moment to register the tunnel.
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify tunnel is registered.
+	waitForTunnel(t, s, "t-test-fox")
 	tc := s.tunnels.get("t-test-fox")
-	if tc == nil {
-		t.Fatal("tunnel not registered")
-	}
 	if !tc.authRequired {
 		t.Error("expected authRequired=true by default")
 	}
 
-	// Start a goroutine to simulate the CLI: read requests, return a fixed response.
-	go func() {
-		for {
-			_, raw, err := ws.ReadMessage()
-			if err != nil {
-				return
-			}
-			var req tunnelMsg
-			if err := json.Unmarshal(raw, &req); err != nil {
-				continue
-			}
-			if req.Type != "request" {
-				continue
-			}
-
-			resp := tunnelMsg{
-				Type:       "response",
-				ID:         req.ID,
-				StatusCode: 200,
-				Headers:    map[string][]string{"Content-Type": {"text/plain"}},
-				Body:       base64.StdEncoding.EncodeToString([]byte("hello from tunnel")),
-			}
-			data, _ := json.Marshal(resp)
-			ws.WriteMessage(websocket.TextMessage, data)
-		}
-	}()
-
-	// Now send an HTTP request through the tunnel traffic handler.
-	req := httptest.NewRequest("GET", "/some/path?q=1", nil)
+	// Send an HTTP request through the tunnel and verify the response.
+	req, _ := http.NewRequest("GET", ts.URL+"/some/path?q=1", nil)
 	req.Host = "t-test-fox.example.com"
-	rec := httptest.NewRecorder()
-
-	s.handleTunnelTraffic(rec, req)
-
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("http get: %v", err)
 	}
-	if body := rec.Body.String(); body != "hello from tunnel" {
-		t.Fatalf("expected 'hello from tunnel', got %q", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != "text/plain" {
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	if string(bodyBytes) != "hello from tunnel" {
+		t.Fatalf("expected 'hello from tunnel', got %q", string(bodyBytes))
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
 		t.Fatalf("expected Content-Type text/plain, got %q", ct)
+	}
+}
+
+// waitForTunnel polls the registry until the tunnel is registered or times out.
+func waitForTunnel(t *testing.T, s *Server, domain string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.tunnels.get(domain) != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("tunnel %q not registered within 2s", domain)
+}
+
+// runL4ClientSimulator implements the CLI-side of the L4 tunnel frame
+// protocol: read binary frames from the server's tunnel WebSocket, dial
+// localAddr on OPEN, and pipe bytes in both directions.
+func runL4ClientSimulator(t *testing.T, ws *websocket.Conn, localAddr string) {
+	t.Helper()
+	var wmu sync.Mutex
+	writeFrame := func(fType byte, sid uint32, payload []byte) error {
+		buf := make([]byte, 5+len(payload))
+		buf[0] = fType
+		binary.BigEndian.PutUint32(buf[1:5], sid)
+		copy(buf[5:], payload)
+		wmu.Lock()
+		defer wmu.Unlock()
+		return ws.WriteMessage(websocket.BinaryMessage, buf)
+	}
+
+	var smu sync.Mutex
+	streams := make(map[uint32]net.Conn)
+	closeStream := func(sid uint32) {
+		smu.Lock()
+		c, ok := streams[sid]
+		delete(streams, sid)
+		smu.Unlock()
+		if ok {
+			c.Close()
+		}
+	}
+
+	for {
+		mt, raw, err := ws.ReadMessage()
+		if err != nil {
+			return
+		}
+		if mt != websocket.BinaryMessage || len(raw) < 5 {
+			continue
+		}
+		fType := raw[0]
+		sid := binary.BigEndian.Uint32(raw[1:5])
+		payload := raw[5:]
+		switch fType {
+		case frameOpen:
+			c, err := net.Dial("tcp", localAddr)
+			if err != nil {
+				_ = writeFrame(frameClose, sid, nil)
+				continue
+			}
+			smu.Lock()
+			streams[sid] = c
+			smu.Unlock()
+			go func(c net.Conn, sid uint32) {
+				buf := make([]byte, 16*1024)
+				for {
+					n, rerr := c.Read(buf)
+					if n > 0 {
+						if werr := writeFrame(frameData, sid, buf[:n]); werr != nil {
+							closeStream(sid)
+							return
+						}
+					}
+					if rerr != nil {
+						_ = writeFrame(frameClose, sid, nil)
+						closeStream(sid)
+						return
+					}
+				}
+			}(c, sid)
+		case frameData:
+			smu.Lock()
+			c := streams[sid]
+			smu.Unlock()
+			if c != nil {
+				if _, err := c.Write(payload); err != nil {
+					closeStream(sid)
+					_ = writeFrame(frameClose, sid, nil)
+				}
+			}
+		case frameClose:
+			closeStream(sid)
+		}
 	}
 }
 
@@ -326,7 +385,7 @@ func TestTunnelNoAuth(t *testing.T) {
 			ws:           ws,
 			userEmail:    "test@example.com",
 			authRequired: authRequired,
-			pending:      make(map[string]chan *tunnelMsg),
+			streams:      make(map[uint32]*tunnelStream),
 		}
 		s.tunnels.register(domain, tc)
 		defer func() {
@@ -375,7 +434,7 @@ func TestTraefikConfig_TunnelWithAuth(t *testing.T) {
 	}
 
 	// Register a tunnel with auth.
-	tc := &tunnelConn{authRequired: true, pending: make(map[string]chan *tunnelMsg)}
+	tc := &tunnelConn{authRequired: true, streams: make(map[uint32]*tunnelStream)}
 	s.tunnels.register("t-bold-fox", tc)
 
 	// Call handleTraefikConfig — we need a store stub that returns empty deployments.
@@ -456,7 +515,7 @@ func TestTraefikConfig_TunnelNoAuth(t *testing.T) {
 	}
 
 	// Register a tunnel WITHOUT auth.
-	tc := &tunnelConn{authRequired: false, pending: make(map[string]chan *tunnelMsg)}
+	tc := &tunnelConn{authRequired: false, streams: make(map[uint32]*tunnelStream)}
 	s.tunnels.register("t-open-fox", tc)
 
 	cfg := traefikDynamicConfig{
@@ -502,6 +561,96 @@ func TestTraefikConfig_TunnelNoAuth(t *testing.T) {
 	}
 	if cfg.HTTP.Middlewares != nil {
 		t.Errorf("expected no middlewares map, got %v", cfg.HTTP.Middlewares)
+	}
+}
+
+// ─── WebSocket upgrade through tunnel (regression) ──────────────────────────
+
+// TestTunnelWebSocket_E2E is the regression test for the WebSocket-through-
+// tunnel bug. It starts a local WS echo server, wires up the L4 tunnel, and
+// verifies a browser-side WebSocket client can complete its upgrade and echo
+// messages. On the old HTTP-over-JSON protocol this failed because the
+// Connection/Upgrade hop-by-hop headers were stripped on both sides.
+func TestTunnelWebSocket_E2E(t *testing.T) {
+	echoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		up := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		for {
+			mt, msg, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := c.WriteMessage(mt, msg); err != nil {
+				return
+			}
+		}
+	}))
+	defer echoSrv.Close()
+	localAddr := strings.TrimPrefix(echoSrv.URL, "http://")
+
+	s := &Server{
+		baseDomain: "example.com",
+		tunnels:    newTunnelRegistry(),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnel/connect", func(w http.ResponseWriter, r *http.Request) {
+		domain := r.URL.Query().Get("domain")
+		ws, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		tc := &tunnelConn{
+			ws:        ws,
+			userEmail: "test@example.com",
+			streams:   make(map[uint32]*tunnelStream),
+		}
+		s.tunnels.register(domain, tc)
+		defer func() {
+			s.tunnels.unregister(domain, tc)
+			ws.Close()
+		}()
+		tc.serveConn()
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "t-test-fox.example.com"
+		s.handleTunnelTraffic(w, r)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	cliWsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/tunnel/connect?domain=t-test-fox"
+	cliWs, _, err := websocket.DefaultDialer.Dial(cliWsURL, nil)
+	if err != nil {
+		t.Fatalf("cli dial: %v", err)
+	}
+	defer cliWs.Close()
+	go runL4ClientSimulator(t, cliWs, localAddr)
+
+	waitForTunnel(t, s, "t-test-fox")
+
+	// Open a real WebSocket client through the tunnel and verify echo works.
+	clientWsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/"
+	clientWs, _, err := websocket.DefaultDialer.Dial(clientWsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket handshake through tunnel failed: %v", err)
+	}
+	defer clientWs.Close()
+
+	if err := clientWs.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	clientWs.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, msg, err := clientWs.ReadMessage()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(msg) != "ping" {
+		t.Fatalf("expected echo 'ping', got %q", string(msg))
 	}
 }
 
