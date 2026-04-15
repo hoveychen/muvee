@@ -139,9 +139,13 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 	defer cancel()
 
 	backoff := time.Second
-	const maxBackoff = 30 * time.Second
+	const (
+		maxBackoff    = 30 * time.Second
+		stableSession = 30 * time.Second
+	)
 
 	for {
+		sessionStart := time.Now()
 		err := tunnelSession(wsURL, wsHeader, localAddr)
 		if ctx.Err() != nil {
 			fmt.Println("\nTunnel stopped.")
@@ -149,6 +153,11 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 		}
 		if err != nil {
 			log.Printf("tunnel disconnected: %v", err)
+		}
+		// If the session lasted long enough, it was healthy — this drop is a
+		// fresh incident, not part of a failure streak, so reset the backoff.
+		if time.Since(sessionStart) >= stableSession {
+			backoff = time.Second
 		}
 		fmt.Printf("Reconnecting in %s...\n", backoff)
 		select {
