@@ -16,6 +16,7 @@ import (
 	"github.com/hoveychen/muvee/internal/monitor"
 	"github.com/hoveychen/muvee/internal/scheduler"
 	"github.com/hoveychen/muvee/internal/store"
+	"github.com/hoveychen/muvee/internal/traefiklog"
 	webui "github.com/hoveychen/muvee/web/embed"
 )
 
@@ -119,11 +120,16 @@ func runServer() {
 		GitRepoBasePath:    gitRepoBasePath,
 		BrandingDir:        brandingDir,
 		TunnelBackendURL:   tunnelBackendURL,
+		ACMEStoragePath:    os.Getenv("ACME_STORAGE_PATH"),
 	})
 	handler := srv.TunnelAwareHandler(mountFrontend(srv.Router()))
 
 	go processBuildCompletions(ctx, st, sched)
 	go processNodeFailovers(ctx, st, sched)
+
+	if p := os.Getenv("TRAEFIK_ACCESS_LOG_PATH"); p != "" {
+		go traefiklog.New(st, p, baseDomain).Start(ctx)
+	}
 
 	log.Printf("muvee server listening on :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))

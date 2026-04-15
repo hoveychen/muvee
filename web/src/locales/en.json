@@ -454,6 +454,28 @@
       "recheck": "Re-run",
       "running": "Running checks...",
       "updatedAt": "Updated at {{time}}"
+    },
+    "certs": {
+      "title": "HTTPS Certificates",
+      "hint": "ACME state for every domain muvee expects Traefik to serve. A deploy is only fully ready once its certificate is issued — before that, browsers see the default self-signed cert.",
+      "recheck": "Reload",
+      "running": "Reading acme.json...",
+      "updatedAt": "Updated at {{time}}",
+      "empty": "No domains configured — set BASE_DOMAIN in .env to start managing certificates.",
+      "storeError": "Cannot read {{path}}. Make sure the letsencrypt volume is mounted read-only into muvee-server.",
+      "expiresIn": "Expires in {{days}} day(s) — {{date}}",
+      "status": {
+        "issued": "Issued",
+        "pending": "Pending",
+        "unknown": "Unknown"
+      },
+      "kind": {
+        "base": "Control plane",
+        "registry": "Registry",
+        "traefik": "Traefik",
+        "project": "Project",
+        "tunnel": "Tunnel"
+      }
     }
   }
 }

@@ -3,7 +3,7 @@ import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save, Upload } fr
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useSettings } from '../lib/settings'
-import type { SystemSettings, HealthReport } from '../lib/types'
+import type { SystemSettings, HealthReport, CertReport, CertStatus } from '../lib/types'
 
 const MONO = 'var(--font-mono)'
 
@@ -145,6 +145,54 @@ function HealthRow({ check }: { check: import('../lib/types').HealthCheck }) {
   )
 }
 
+// ─── Certificate row ──────────────────────────────────────────────────────────
+
+function CertRow({ cert, t }: { cert: CertStatus; t: (key: string, opts?: Record<string, unknown>) => string }) {
+  const icon = cert.status === 'issued'
+    ? <CheckCircle size={14} color="#3fb950" />
+    : cert.status === 'pending'
+    ? <AlertCircle size={14} color="#d29922" />
+    : <XCircle size={14} color="var(--danger)" />
+
+  const statusLabel = t(`adminSettings.certs.status.${cert.status}`)
+  const kindLabel = t(`adminSettings.certs.kind.${cert.kind}`)
+
+  // Expiry line: only shown for issued certs. Highlight when <14 days left.
+  let expiryLine: string | null = null
+  if (cert.status === 'issued' && cert.not_after) {
+    const daysLeft = cert.days_left ?? 0
+    expiryLine = t('adminSettings.certs.expiresIn', {
+      days: daysLeft,
+      date: new Date(cert.not_after).toLocaleDateString(),
+    })
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '8px 10px', borderRadius: '5px', background: 'var(--bg-base)' }}>
+      <div style={{ marginTop: '1px', flexShrink: 0 }}>{icon}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: MONO, fontSize: '0.72rem', fontWeight: 600, color: 'var(--fg-primary)', wordBreak: 'break-all' }}>
+            {cert.domain}
+          </span>
+          <span style={{ fontFamily: MONO, fontSize: '0.6rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            {kindLabel}
+          </span>
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: '0.67rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
+          {statusLabel}
+          {cert.message ? ` — ${cert.message}` : ''}
+        </div>
+        {expiryLine && (
+          <div style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', marginTop: '1px' }}>
+            {expiryLine}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AdminSettingsPage() {
@@ -160,6 +208,9 @@ export default function AdminSettingsPage() {
 
   const [healthReport, setHealthReport] = useState<HealthReport | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
+
+  const [certReport, setCertReport] = useState<CertReport | null>(null)
+  const [certLoading, setCertLoading] = useState(false)
 
   useEffect(() => {
     api.admin.getSettings()
@@ -185,6 +236,20 @@ export default function AdminSettingsPage() {
   }, [])
 
   useEffect(() => { runHealthChecks() }, [runHealthChecks])
+
+  const loadCerts = useCallback(async () => {
+    setCertLoading(true)
+    try {
+      const report = await api.admin.certs()
+      setCertReport(report)
+    } catch {
+      // ignore
+    } finally {
+      setCertLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadCerts() }, [loadCerts])
 
   const saveSettings = async () => {
     setSaving(true)
@@ -295,6 +360,61 @@ export default function AdminSettingsPage() {
               {healthReport.checks.map(c => <HealthRow key={c.name} check={c} />)}
               <div style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', marginTop: '6px', textAlign: 'right' }}>
                 {t('adminSettings.health.updatedAt', { time: new Date(healthReport.updated_at).toLocaleTimeString() })}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* ── Certificates ──────────────────────────────────────────────────── */}
+        <section style={{ gridColumn: '1 / -1', border: '1px solid var(--border)', borderRadius: '8px', padding: '20px', background: 'var(--bg-card)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{t('adminSettings.certs.title')}</h2>
+            <button
+              onClick={loadCerts}
+              disabled={certLoading}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '4px',
+                background: 'none', border: '1px solid var(--border)', borderRadius: '5px',
+                padding: '4px 10px', fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)',
+                cursor: 'pointer',
+              }}
+            >
+              <RefreshCw size={11} style={{ animation: certLoading ? 'spin 1s linear infinite' : 'none' }} />
+              {t('adminSettings.certs.recheck')}
+            </button>
+          </div>
+          <p style={{ fontFamily: MONO, fontSize: '0.67rem', color: 'var(--fg-muted)', marginBottom: '14px' }}>
+            {t('adminSettings.certs.hint')}
+          </p>
+
+          {certLoading && !certReport && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 0', color: 'var(--fg-muted)', fontFamily: MONO, fontSize: '0.75rem' }}>
+              <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
+              {t('adminSettings.certs.running')}
+            </div>
+          )}
+
+          {certReport?.store_error && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '8px 10px', borderRadius: '5px', background: 'var(--bg-base)', marginBottom: '8px' }}>
+              <XCircle size={14} color="var(--danger)" style={{ marginTop: '1px', flexShrink: 0 }} />
+              <div style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>
+                {t('adminSettings.certs.storeError', { path: certReport.store_path })}
+                <div style={{ marginTop: '2px', color: 'var(--danger)' }}>{certReport.store_error}</div>
+              </div>
+            </div>
+          )}
+
+          {certReport && certReport.items.length === 0 && !certReport.store_error && (
+            <div style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>
+              {t('adminSettings.certs.empty')}
+            </div>
+          )}
+
+          {certReport && certReport.items.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {certReport.items.map(c => <CertRow key={`${c.kind}-${c.domain}`} cert={c} t={t} />)}
+              <div style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', marginTop: '6px', textAlign: 'right' }}>
+                {t('adminSettings.certs.updatedAt', { time: new Date(certReport.updated_at).toLocaleTimeString() })}
               </div>
             </div>
           )}

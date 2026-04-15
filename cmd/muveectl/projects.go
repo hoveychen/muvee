@@ -49,7 +49,7 @@ func init() {
 
 func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("name", "", "Project name")
-	cmd.Flags().String("git-url", "", "Git repository URL (required unless --git-source hosted)")
+	cmd.Flags().String("git-url", "", "Git repository URL (required unless --git-source hosted or --domain-only)")
 	cmd.Flags().String("git-source", "", "Git source (use 'hosted' for server-hosted repo)")
 	cmd.Flags().String("branch", "", "Git branch (default: main)")
 	cmd.Flags().String("domain", "", "Domain prefix (defaults to project name)")
@@ -57,6 +57,7 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("auth-required", false, "Enable OAuth protection via Traefik ForwardAuth")
 	cmd.Flags().Bool("no-auth", false, "Disable OAuth protection")
 	cmd.Flags().String("auth-domains", "", "Comma-separated allowed email domains")
+	cmd.Flags().Bool("domain-only", false, "Reserve a tunnel domain prefix without a git repo (no deployment)")
 }
 
 func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
@@ -95,6 +96,11 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		v, _ := cmd.Flags().GetString("auth-domains")
 		p["auth_allowed_domains"] = v
 	}
+	if cmd.Flags().Changed("domain-only") {
+		if v, _ := cmd.Flags().GetBool("domain-only"); v {
+			p["project_type"] = "domain_only"
+		}
+	}
 	return p
 }
 
@@ -119,7 +125,7 @@ var projectsListCmd = &cobra.Command{
 			fmt.Println("No projects found.")
 			return nil
 		}
-		printTable(items, []string{"id", "name", "domain_prefix", "git_branch"})
+		printTable(items, []string{"id", "name", "project_type", "domain_prefix", "git_branch"})
 		return nil
 	},
 }
@@ -134,9 +140,17 @@ var projectsCreateCmd = &cobra.Command{
 			return err
 		}
 		p := collectProjectFlags(cmd)
+		domainOnly, _ := cmd.Flags().GetBool("domain-only")
 		isHosted, _ := cmd.Flags().GetString("git-source")
-		if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
-			return fmt.Errorf("--git-url is required (or use --git-source hosted)")
+		if domainOnly {
+			if !cmd.Flags().Changed("domain") {
+				return fmt.Errorf("--domain is required when --domain-only is set")
+			}
+			if cmd.Flags().Changed("git-url") || cmd.Flags().Changed("git-source") {
+				return fmt.Errorf("--git-url and --git-source are not allowed with --domain-only")
+			}
+		} else if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
+			return fmt.Errorf("--git-url is required (or use --git-source hosted, or --domain-only)")
 		}
 		result, err := cl.do("POST", "/api/projects", p)
 		if err != nil {
@@ -174,8 +188,8 @@ var projectsGetCmd = &cobra.Command{
 			printJSON(result)
 			return nil
 		}
-		fmt.Printf("ID:            %s\nName:          %s\nGit Source:    %s\nGit URL:       %s\nBranch:        %s\nDomain Prefix: %s\nDockerfile:    %s\n",
-			str(result, "id"), str(result, "name"), str(result, "git_source"), str(result, "git_url"), str(result, "git_branch"),
+		fmt.Printf("ID:            %s\nName:          %s\nType:          %s\nGit Source:    %s\nGit URL:       %s\nBranch:        %s\nDomain Prefix: %s\nDockerfile:    %s\n",
+			str(result, "id"), str(result, "name"), str(result, "project_type"), str(result, "git_source"), str(result, "git_url"), str(result, "git_branch"),
 			str(result, "domain_prefix"), str(result, "dockerfile_path"))
 		if pushURL := str(result, "git_push_url"); pushURL != "" {
 			fmt.Printf("Git Push URL:  %s\n", pushURL)

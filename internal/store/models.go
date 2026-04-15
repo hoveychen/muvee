@@ -27,22 +27,30 @@ const (
 	GitSourceHosted   = "hosted"
 )
 
+type ProjectType string
+
+const (
+	ProjectTypeDeployment ProjectType = "deployment"
+	ProjectTypeDomainOnly ProjectType = "domain_only"
+)
+
 type Project struct {
-	ID                 uuid.UUID `db:"id"                   json:"id"`
-	Name               string    `db:"name"                 json:"name"`
-	GitURL             string    `db:"git_url"              json:"git_url"`
-	GitBranch          string    `db:"git_branch"           json:"git_branch"`
-	GitSource          string    `db:"git_source"           json:"git_source"`
-	DomainPrefix       string    `db:"domain_prefix"        json:"domain_prefix"`
-	DockerfilePath     string    `db:"dockerfile_path"      json:"dockerfile_path"`
-	OwnerID            uuid.UUID `db:"owner_id"             json:"owner_id"`
-	AuthRequired       bool      `db:"auth_required"        json:"auth_required"`
-	AuthAllowedDomains string    `db:"auth_allowed_domains" json:"auth_allowed_domains"`
-	ContainerPort      int       `db:"container_port"       json:"container_port"`
-	MemoryLimit        string    `db:"memory_limit"         json:"memory_limit"`
-	VolumeMountPath    string    `db:"volume_mount_path"    json:"volume_mount_path"`
-	CreatedAt          time.Time `db:"created_at"           json:"created_at"`
-	UpdatedAt          time.Time `db:"updated_at"           json:"updated_at"`
+	ID                 uuid.UUID   `db:"id"                   json:"id"`
+	Name               string      `db:"name"                 json:"name"`
+	ProjectType        ProjectType `db:"project_type"         json:"project_type"`
+	GitURL             string      `db:"git_url"              json:"git_url"`
+	GitBranch          string      `db:"git_branch"           json:"git_branch"`
+	GitSource          string      `db:"git_source"           json:"git_source"`
+	DomainPrefix       string      `db:"domain_prefix"        json:"domain_prefix"`
+	DockerfilePath     string      `db:"dockerfile_path"      json:"dockerfile_path"`
+	OwnerID            uuid.UUID   `db:"owner_id"             json:"owner_id"`
+	AuthRequired       bool        `db:"auth_required"        json:"auth_required"`
+	AuthAllowedDomains string      `db:"auth_allowed_domains" json:"auth_allowed_domains"`
+	ContainerPort      int         `db:"container_port"       json:"container_port"`
+	MemoryLimit        string      `db:"memory_limit"         json:"memory_limit"`
+	VolumeMountPath    string      `db:"volume_mount_path"    json:"volume_mount_path"`
+	CreatedAt          time.Time   `db:"created_at"           json:"created_at"`
+	UpdatedAt          time.Time   `db:"updated_at"           json:"updated_at"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 }
@@ -292,6 +300,23 @@ type NodeMetric struct {
 	Load1          float64   `db:"load1"           json:"load1"`
 	Load5          float64   `db:"load5"           json:"load5"`
 	Load15         float64   `db:"load15"          json:"load15"`
+}
+
+// ProjectTraffic is a single HTTP request observed by Traefik and attributed
+// to a project via its domain_prefix.
+type ProjectTraffic struct {
+	ID         uuid.UUID `db:"id"           json:"id"`
+	ProjectID  uuid.UUID `db:"project_id"   json:"project_id"`
+	ObservedAt time.Time `db:"observed_at"  json:"observed_at"`
+	ClientIP   string    `db:"client_ip"    json:"client_ip"`
+	Host       string    `db:"host"         json:"host"`
+	Method     string    `db:"method"       json:"method"`
+	Path       string    `db:"path"         json:"path"`
+	Status     int       `db:"status"       json:"status"`
+	DurationMs int64     `db:"duration_ms"  json:"duration_ms"`
+	BytesSent  int64     `db:"bytes_sent"   json:"bytes_sent"`
+	UserAgent  string    `db:"user_agent"   json:"user_agent"`
+	Referer    string    `db:"referer"      json:"referer"`
 }
 
 // ContainerMetric is a single point-in-time sample of container resource usage

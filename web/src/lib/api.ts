@@ -36,6 +36,7 @@ export const api = {
     deploy: (id: string) => request<import('./types').Deployment>(`/api/projects/${id}/deploy`, { method: 'POST' }),
     deployments: (id: string) => request<import('./types').Deployment[]>(`/api/projects/${id}/deployments`),
     metrics: (id: string, limit = 60) => request<import('./types').ContainerMetric[]>(`/api/projects/${id}/metrics?limit=${limit}`),
+    traffic: (id: string, limit = 100) => request<import('./types').ProjectTraffic[]>(`/api/projects/${id}/traffic?limit=${limit}`),
     workspaceList: (id: string, path?: string) =>
       request<import('./types').WorkspaceEntry[]>(`/api/projects/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ''}`),
     workspaceDownloadUrl: (id: string, path: string) =>
@@ -126,6 +127,7 @@ export const api = {
     updateSettings: (data: Partial<import('./types').SystemSettings>) =>
       request<import('./types').SystemSettings>('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) }),
     health: () => request<import('./types').HealthReport>('/api/admin/health'),
+    certs: () => request<import('./types').CertReport>('/api/admin/certs'),
     tunnels: () => request<import('./types').ActiveTunnel[]>('/api/admin/tunnels'),
     tunnelHistory: () => request<import('./types').TunnelHistoryEntry[]>('/api/admin/tunnels/history'),
     uploadBranding: async (type: 'logo' | 'favicon', file: File): Promise<{ url: string }> => {

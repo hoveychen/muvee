@@ -25,21 +25,27 @@ var tunnelCmd = &cobra.Command{
 	Short: "Publish a local port to the internet via tunnel",
 	Long: `Publish a local port directly to the internet — no deployment, no Docker, no git repo required.
 The domain is deterministically generated from the current working directory and port number,
-so reconnecting from the same directory reuses the same URL.`,
+so reconnecting from the same directory reuses the same URL.
+
+Use --project <name> to mount the tunnel on a reserved domain_only project's
+domain_prefix instead of an ephemeral t-* name.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
 		domain, _ := cmd.Flags().GetString("domain")
+		project, _ := cmd.Flags().GetString("project")
 		noAuth, _ := cmd.Flags().GetBool("no-auth")
-		return cmdTunnel(args[0], domain, noAuth, cl)
+		return cmdTunnel(args[0], domain, project, noAuth, cl)
 	},
 }
 
 func init() {
 	tunnelCmd.Flags().String("domain", "", "Override auto-generated domain prefix")
+	tunnelCmd.Flags().String("project", "", "Mount tunnel on a reserved domain_only project (by name)")
 	tunnelCmd.Flags().Bool("no-auth", false, "Disable ForwardAuth (public access)")
+	tunnelCmd.MarkFlagsMutuallyExclusive("domain", "project")
 	rootCmd.AddCommand(tunnelCmd)
 }
 
@@ -87,18 +93,7 @@ func (w *wsMutexWriter) writeFrame(fType byte, streamID uint32, payload []byte) 
 	return w.writeMessage(websocket.BinaryMessage, buf)
 }
 
-func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getwd: %w", err)
-	}
-	domain := customDomain
-	if domain == "" {
-		portNum := 0
-		fmt.Sscanf(port, "%d", &portNum)
-		domain = tunnelDomain(cwd, portNum)
-	}
-
+func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) error {
 	localAddr := "127.0.0.1:" + port
 
 	rc, err := c.do("GET", "/api/runtime/config", nil)
@@ -109,6 +104,44 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 	if baseDomain == "" {
 		baseDomain = "localhost"
 	}
+
+	// Resolve domain for the public URL banner. For --project we fetch the
+	// project's current domain_prefix up front so the displayed URL is accurate;
+	// the server still enforces ownership and type at handshake time.
+	var domain string
+	switch {
+	case projectName != "":
+		items, lerr := c.doArray("GET", "/api/projects", nil)
+		if lerr != nil {
+			return fmt.Errorf("fetch projects: %w", lerr)
+		}
+		var matched map[string]interface{}
+		for _, it := range items {
+			m, _ := it.(map[string]interface{})
+			if str(m, "name") == projectName {
+				matched = m
+				break
+			}
+		}
+		if matched == nil {
+			return fmt.Errorf("project %q not found", projectName)
+		}
+		if str(matched, "project_type") != "domain_only" {
+			return fmt.Errorf("project %q is not a domain_only project", projectName)
+		}
+		domain = str(matched, "domain_prefix")
+	case customDomain != "":
+		domain = customDomain
+	default:
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getwd: %w", err)
+		}
+		portNum := 0
+		fmt.Sscanf(port, "%d", &portNum)
+		domain = tunnelDomain(cwd, portNum)
+	}
+
 	publicURL := fmt.Sprintf("https://%s.%s", domain, baseDomain)
 
 	wsScheme := "wss"
@@ -117,7 +150,12 @@ func cmdTunnel(port, customDomain string, noAuth bool, c *client) error {
 		wsScheme = "ws"
 	}
 	wsHost := serverURL.Host
-	wsURL := fmt.Sprintf("%s://%s/api/tunnel/connect?domain=%s", wsScheme, wsHost, url.QueryEscape(domain))
+	var wsURL string
+	if projectName != "" {
+		wsURL = fmt.Sprintf("%s://%s/api/tunnel/connect?project=%s", wsScheme, wsHost, url.QueryEscape(projectName))
+	} else {
+		wsURL = fmt.Sprintf("%s://%s/api/tunnel/connect?domain=%s", wsScheme, wsHost, url.QueryEscape(domain))
+	}
 	if noAuth {
 		wsURL += "&noauth=1"
 	}

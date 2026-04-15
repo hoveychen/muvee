@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/store"
 )
 
 // ─── L4 tunnel frame protocol ───────────────────────────────────────────────
@@ -55,6 +56,9 @@ type tunnelConn struct {
 	authRequired bool
 	connectedAt  time.Time
 	historyID    string
+	// projectName is the optional domain_only project name this tunnel is
+	// bound to. Empty for ephemeral t-* tunnels.
+	projectName string
 
 	mu sync.Mutex // guards ws writes
 
@@ -156,13 +160,17 @@ func newTunnelRegistry() *tunnelRegistry {
 	return &tunnelRegistry{tunnels: make(map[string]*tunnelConn)}
 }
 
-func (tr *tunnelRegistry) register(domain string, tc *tunnelConn) {
+// register inserts tc into the registry under domain. Returns false if another
+// live tunnel already owns the domain (first-come-first-served). Callers that
+// successfully register must pair with unregister on disconnect.
+func (tr *tunnelRegistry) register(domain string, tc *tunnelConn) bool {
 	tr.mu.Lock()
-	if old, ok := tr.tunnels[domain]; ok && old.ws != nil {
-		old.ws.Close()
+	defer tr.mu.Unlock()
+	if _, ok := tr.tunnels[domain]; ok {
+		return false
 	}
 	tr.tunnels[domain] = tc
-	tr.mu.Unlock()
+	return true
 }
 
 func (tr *tunnelRegistry) unregister(domain string, tc *tunnelConn) {
@@ -212,17 +220,67 @@ var wsUpgrader = websocket.Upgrader{
 
 // handleTunnelConnect upgrades the connection to a WebSocket and registers a tunnel.
 // Route: GET /api/tunnel/connect?domain=t-happy-fox  (authenticated)
+//
+// Two mutually exclusive modes:
+//   - domain=<prefix>: ephemeral tunnel, prefix must match the t-word-word
+//     format. The domain is not persisted; it's gone when the socket closes.
+//   - project=<name>: project-scoped tunnel, prefix is the domain_prefix of a
+//     domain_only project owned by the caller. The reservation survives even
+//     when no tunnel is live (handleTunnelTraffic serves an offline placeholder).
+//
+// Both modes are first-come-first-served: a second connect while a tunnel is
+// already live for the same prefix is rejected with 409.
 func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
-	domain := r.URL.Query().Get("domain")
-	if domain == "" || !isValidTunnelDomain(domain) {
-		http.Error(w, "invalid or missing domain parameter", http.StatusBadRequest)
+	user := auth.UserFromCtx(r.Context())
+
+	rawDomain := r.URL.Query().Get("domain")
+	projectName := r.URL.Query().Get("project")
+	if rawDomain != "" && projectName != "" {
+		http.Error(w, "domain and project parameters are mutually exclusive", http.StatusBadRequest)
 		return
 	}
 
-	user := auth.UserFromCtx(r.Context())
+	var (
+		domain      string
+		boundProject string
+	)
+	switch {
+	case projectName != "":
+		proj, err := s.store.GetProjectByOwnerAndName(r.Context(), user.ID, projectName)
+		if err != nil {
+			http.Error(w, "project lookup failed", http.StatusInternalServerError)
+			return
+		}
+		if proj == nil {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return
+		}
+		if proj.ProjectType != store.ProjectTypeDomainOnly {
+			http.Error(w, "project is not a domain_only project", http.StatusConflict)
+			return
+		}
+		domain = proj.DomainPrefix
+		boundProject = proj.Name
+	case rawDomain != "":
+		if !isValidTunnelDomain(rawDomain) {
+			http.Error(w, "invalid domain parameter", http.StatusBadRequest)
+			return
+		}
+		domain = rawDomain
+	default:
+		http.Error(w, "domain or project parameter is required", http.StatusBadRequest)
+		return
+	}
 
 	// By default tunnels require ForwardAuth; the CLI sends noauth=1 to opt out.
 	authRequired := r.URL.Query().Get("noauth") != "1"
+
+	// First-come-first-served: reject early before the WS upgrade so the
+	// second client gets a proper HTTP 409 instead of a surprise WS close.
+	if s.tunnels.get(domain) != nil {
+		http.Error(w, "a tunnel is already connected to this domain", http.StatusConflict)
+		return
+	}
 
 	ws, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -246,13 +304,19 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 		userEmail:    user.Email,
 		authRequired: authRequired,
 		connectedAt:  now,
+		projectName:  boundProject,
 		streams:      make(map[uint32]*tunnelStream),
+	}
+
+	if !s.tunnels.register(domain, tc) {
+		// Lost the race between the pre-upgrade check and the register call.
+		ws.Close()
+		return
 	}
 
 	historyID := s.recordTunnelConnect(domain, user.Email, authRequired)
 	tc.historyID = historyID
 
-	s.tunnels.register(domain, tc)
 	log.Printf("Tunnel registered: %s.%s (user: %s)", domain, s.baseDomain, user.Email)
 	defer func() {
 		s.tunnels.unregister(domain, tc)
@@ -304,6 +368,13 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 
 	tc := s.tunnels.get(domain)
 	if tc == nil {
+		// If this prefix belongs to a domain_only project, the reservation
+		// outlives the tunnel connection — serve a friendly placeholder so the
+		// user can confirm the domain is correct and the service is just down.
+		if s.isDomainOnlyPrefix(domain) {
+			writeTunnelOfflinePage(w, domain)
+			return
+		}
 		http.Error(w, "tunnel not connected", http.StatusBadGateway)
 		return
 	}
@@ -420,6 +491,9 @@ func readRequestBody(r *http.Request, max int64) ([]byte, error) {
 }
 
 // isTunnelRequest returns true if the Host header matches a tunnel domain pattern.
+// It matches both ephemeral t-* tunnels and registered domain_only projects,
+// so that a request for a reserved prefix is routed through the tunnel handler
+// (and gets either live traffic or the offline placeholder).
 func (s *Server) isTunnelRequest(r *http.Request) bool {
 	host := r.Host
 	if idx := strings.LastIndex(host, ":"); idx != -1 {
@@ -430,7 +504,49 @@ func (s *Server) isTunnelRequest(r *http.Request) bool {
 		return false
 	}
 	prefix := strings.TrimSuffix(host, suffix)
-	return strings.HasPrefix(prefix, "t-")
+	if strings.HasPrefix(prefix, "t-") {
+		return true
+	}
+	return s.isDomainOnlyPrefix(prefix)
+}
+
+// tunnelOfflineHTML is served for a domain_only project whose reserved prefix
+// has no live tunnel. It reassures the user that the domain is correct and the
+// service is simply down rather than missing.
+const tunnelOfflineHTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Service Offline — %s</title>
+<style>
+html,body{height:100%%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+.wrap{min-height:100%%;display:flex;align-items:center;justify-content:center;padding:2rem}
+.card{max-width:32rem;text-align:center;padding:2.5rem 2rem;background:#1e293b;border:1px solid #334155;border-radius:12px;box-shadow:0 20px 40px rgba(0,0,0,.35)}
+.dot{display:inline-block;width:.7rem;height:.7rem;border-radius:50%%;background:#f59e0b;margin-right:.5rem;vertical-align:middle}
+h1{margin:0 0 .75rem;font-size:1.5rem;font-weight:600}
+p{margin:.5rem 0;color:#94a3b8;line-height:1.55}
+code{background:#0f172a;border:1px solid #334155;padding:.1rem .45rem;border-radius:4px;color:#e2e8f0;font-size:.95em}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card">
+<h1><span class="dot"></span>Service offline</h1>
+<p>The reserved domain <code>%s</code> is correct,<br>but nothing is currently tunneling to it.</p>
+<p>If this is your project, start the tunnel with<br><code>muveectl tunnel --project %s &lt;PORT&gt;</code>.</p>
+</div></div>
+</body>
+</html>`
+
+// writeTunnelOfflinePage renders the offline placeholder for a reserved
+// domain_only prefix with no live tunnel. Responds 503 + Retry-After so HTTP
+// monitors see a retryable "service unavailable" state rather than a hard 404.
+func writeTunnelOfflinePage(w http.ResponseWriter, domain string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Retry-After", "5")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	fmt.Fprintf(w, tunnelOfflineHTML, domain, domain, domain)
 }
 
 // ─── Tunnel history (DB) ────────────────────────────────────────────────────

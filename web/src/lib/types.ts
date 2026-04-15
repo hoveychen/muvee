@@ -169,6 +169,19 @@ export interface ContainerMetric {
   block_write_bytes: number
 }
 
+export interface ProjectTraffic {
+  observed_at: number // epoch seconds
+  client_ip: string
+  host: string
+  method: string
+  path: string
+  status: number
+  duration_ms: number
+  bytes_sent: number
+  user_agent: string
+  referer: string
+}
+
 export interface SystemSettings {
   onboarded: string       // 'true' | 'false'
   site_name: string
@@ -187,6 +200,26 @@ export interface HealthCheck {
 
 export interface HealthReport {
   checks: HealthCheck[]
+  updated_at: string
+}
+
+export type CertKind = 'base' | 'registry' | 'traefik' | 'project' | 'tunnel'
+export type CertStatusKind = 'issued' | 'pending' | 'unknown'
+
+export interface CertStatus {
+  domain: string
+  kind: CertKind
+  status: CertStatusKind
+  not_after?: string
+  days_left?: number
+  issuer?: string
+  message?: string
+}
+
+export interface CertReport {
+  store_path: string
+  store_error?: string
+  items: CertStatus[]
   updated_at: string
 }
 

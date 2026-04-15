@@ -43,4 +43,14 @@ providers:
 log:
   level: DEBUG
 
-accessLog: {}
+accessLog:
+  filePath: /var/log/traefik/access.log
+  format: json
+  bufferingSize: 0
+  fields:
+    defaultMode: keep
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+        Referer: keep

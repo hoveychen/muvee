@@ -147,6 +147,9 @@ func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stopp
 
 // DispatchBuild creates a build task on the best builder node.
 func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
+	if project.ProjectType == store.ProjectTypeDomainOnly {
+		return fmt.Errorf("cannot dispatch build for domain_only project")
+	}
 	builderNode, err := s.PickBuilderNode(ctx)
 	if err != nil {
 		return err
@@ -215,6 +218,9 @@ func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deploym
 
 // DispatchDeploy selects a deploy node and creates a deploy task.
 func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deployment, project *store.Project, imageTag string) error {
+	if project.ProjectType == store.ProjectTypeDomainOnly {
+		return fmt.Errorf("cannot dispatch deploy for domain_only project")
+	}
 	pds, err := s.store.GetProjectDatasets(ctx, project.ID)
 	if err != nil {
 		return err

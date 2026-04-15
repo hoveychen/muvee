@@ -80,18 +80,27 @@ func TestTunnelRegistry_Unregister(t *testing.T) {
 	}
 }
 
-func TestTunnelRegistry_UnregisterIgnoresStale(t *testing.T) {
+func TestTunnelRegistry_RegisterIsFirstComeFirstServed(t *testing.T) {
 	tr := newTunnelRegistry()
 
 	tc1 := &tunnelConn{streams: make(map[uint32]*tunnelStream)}
 	tc2 := &tunnelConn{streams: make(map[uint32]*tunnelStream)}
-	tr.register("t-bold-fox", tc1)
-	tr.register("t-bold-fox", tc2) // replaces tc1
-
-	// Unregistering tc1 (stale) should not remove tc2.
+	if !tr.register("t-bold-fox", tc1) {
+		t.Fatal("first register should succeed")
+	}
+	if tr.register("t-bold-fox", tc2) {
+		t.Fatal("second register should be rejected while tc1 is live")
+	}
+	if got := tr.get("t-bold-fox"); got != tc1 {
+		t.Fatal("expected tc1 to remain the registered conn")
+	}
+	// After tc1 unregisters, tc2 can claim the slot.
 	tr.unregister("t-bold-fox", tc1)
+	if !tr.register("t-bold-fox", tc2) {
+		t.Fatal("register should succeed after previous unregister")
+	}
 	if got := tr.get("t-bold-fox"); got != tc2 {
-		t.Fatal("stale unregister should not remove the current conn")
+		t.Fatal("expected tc2 to be the current registered conn")
 	}
 }
 
@@ -455,7 +464,10 @@ func TestTraefikConfig_TunnelWithAuth(t *testing.T) {
 			Rule:        fmt.Sprintf("Host(`%s`)", host),
 			EntryPoints: []string{"websecure"},
 			Service:     name,
-			TLS:         &traefikTLS{CertResolver: "letsencrypt"},
+			TLS: &traefikTLS{
+				CertResolver: "letsencrypt",
+				Domains:      []traefikTLSDomain{{Main: host}},
+			},
 		}
 
 		if ti.AuthRequired {
@@ -533,7 +545,10 @@ func TestTraefikConfig_TunnelNoAuth(t *testing.T) {
 			Rule:        fmt.Sprintf("Host(`%s`)", host),
 			EntryPoints: []string{"websecure"},
 			Service:     name,
-			TLS:         &traefikTLS{CertResolver: "letsencrypt"},
+			TLS: &traefikTLS{
+				CertResolver: "letsencrypt",
+				Domains:      []traefikTLSDomain{{Main: host}},
+			},
 		}
 
 		if ti.AuthRequired {
@@ -670,5 +685,104 @@ func TestTunnelTraffic_NotConnected(t *testing.T) {
 
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("expected 502, got %d", rec.Code)
+	}
+}
+
+// ─── domain_only prefix routing ─────────────────────────────────────────────
+
+func TestIsTunnelRequest_DomainOnlyPrefix(t *testing.T) {
+	s := &Server{
+		baseDomain:         "example.com",
+		domainOnlyPrefixes: map[string]bool{"reserved": true},
+	}
+
+	tests := []struct {
+		host string
+		want bool
+	}{
+		{"reserved.example.com", true},       // matches domain_only cache
+		{"reserved.example.com:443", true},   // with port
+		{"t-bold-fox.example.com", true},     // ephemeral tunnel
+		{"unreserved.example.com", false},    // neither tunnel nor domain_only
+		{"reserved.other.com", false},        // wrong base domain
+	}
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/", nil)
+			r.Host = tt.host
+			if got := s.isTunnelRequest(r); got != tt.want {
+				t.Errorf("isTunnelRequest(%q) = %v, want %v", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTunnelTraffic_DomainOnlyOfflinePlaceholder(t *testing.T) {
+	s := &Server{
+		baseDomain:         "example.com",
+		tunnels:            newTunnelRegistry(),
+		domainOnlyPrefixes: map[string]bool{"reserved": true},
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "reserved.example.com"
+	rec := httptest.NewRecorder()
+
+	s.handleTunnelTraffic(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+	if ra := rec.Header().Get("Retry-After"); ra == "" {
+		t.Error("expected Retry-After header")
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "reserved") {
+		t.Error("offline page should mention the prefix")
+	}
+	if !strings.Contains(body, "muveectl tunnel --project") {
+		t.Error("offline page should show reconnect hint")
+	}
+}
+
+func TestTunnelTraffic_UnknownPrefixStillBadGateway(t *testing.T) {
+	// A non-t-* host that is NOT in the domain_only cache must still 502, not
+	// accidentally serve the offline page.
+	s := &Server{
+		baseDomain:         "example.com",
+		tunnels:            newTunnelRegistry(),
+		domainOnlyPrefixes: map[string]bool{"reserved": true},
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "mystery.example.com"
+	rec := httptest.NewRecorder()
+
+	s.handleTunnelTraffic(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d", rec.Code)
+	}
+}
+
+func TestWriteTunnelOfflinePage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeTunnelOfflinePage(rec, "mine")
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("expected Retry-After=5, got %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("expected Cache-Control=no-store, got %q", got)
+	}
+	// Prefix must appear in the rendered HTML (title + body + hint).
+	if n := strings.Count(rec.Body.String(), "mine"); n < 3 {
+		t.Errorf("expected prefix 'mine' to appear 3+ times, got %d", n)
 	}
 }

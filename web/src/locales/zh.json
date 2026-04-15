@@ -454,6 +454,28 @@
       "recheck": "重新检测",
       "running": "正在检测...",
       "updatedAt": "更新于 {{time}}"
+    },
+    "certs": {
+      "title": "HTTPS 证书",
+      "hint": "muvee 所有应由 Traefik 托管的域名的 ACME 状态。只有对应证书已签发时部署才算真正就绪；在此之前浏览器看到的是默认自签证书。",
+      "recheck": "重新加载",
+      "running": "正在读取 acme.json...",
+      "updatedAt": "更新于 {{time}}",
+      "empty": "尚未配置域名——请在 .env 中设置 BASE_DOMAIN。",
+      "storeError": "无法读取 {{path}}。请确认 letsencrypt 卷已以只读方式挂载到 muvee-server。",
+      "expiresIn": "{{days}} 天后过期 — {{date}}",
+      "status": {
+        "issued": "已签发",
+        "pending": "待处理",
+        "unknown": "未知"
+      },
+      "kind": {
+        "base": "控制面",
+        "registry": "镜像仓库",
+        "traefik": "Traefik",
+        "project": "项目",
+        "tunnel": "隧道"
+      }
     }
   }
 }

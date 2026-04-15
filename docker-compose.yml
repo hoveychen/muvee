@@ -52,6 +52,9 @@ services:
       - "traefik.http.routers.registry.rule=Host(`registry.${BASE_DOMAIN}`)"
       - "traefik.http.routers.registry.entrypoints=websecure"
       - "traefik.http.routers.registry.tls.certresolver=letsencrypt"
+      # Declaring the domain up-front makes Traefik pre-fetch the ACME cert on
+      # startup instead of lazily on the first HTTPS request.
+      - "traefik.http.routers.registry.tls.domains[0].main=registry.${BASE_DOMAIN}"
       - "traefik.http.services.registry.loadbalancer.server.port=5000"
 
   # ── Control-plane server (API + embedded React UI) ─────────────────────────
@@ -110,11 +113,17 @@ services:
       GIT_REPO_BASE_PATH: ${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}
       # Tunnel backend URL: how Traefik reaches this server for adhoc tunnel traffic.
       TUNNEL_BACKEND_URL: ${TUNNEL_BACKEND_URL:-http://muvee-server:8080}
+      # Path (inside the container) of the Traefik JSON access log tailed for per-project traffic metrics.
+      TRAEFIK_ACCESS_LOG_PATH: /var/log/traefik/access.log
     volumes:
       - ./db/migrations:/app/db/migrations:ro
       - ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:rw
       - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:ro
       - ${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:rw
+      - traefik_logs:/var/log/traefik:ro
+      # Read-only view of Traefik's ACME store so the admin "Certificates"
+      # panel can report per-domain issuance state.
+      - letsencrypt_data:/letsencrypt:ro
     ports:
       - "8080:8080"
     depends_on:
@@ -127,6 +136,7 @@ services:
       - "traefik.http.routers.muvee.rule=Host(`${BASE_DOMAIN}`)"
       - "traefik.http.routers.muvee.entrypoints=websecure"
       - "traefik.http.routers.muvee.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.muvee.tls.domains[0].main=${BASE_DOMAIN}"
       - "traefik.http.services.muvee.loadbalancer.server.port=8080"
 
   # ── Traefik ForwardAuth sidecar ────────────────────────────────────────────
@@ -161,6 +171,7 @@ services:
       - "traefik.http.routers.muvee-authservice.rule=Host(`${BASE_DOMAIN}`) && PathPrefix(`/_oauth`)"
       - "traefik.http.routers.muvee-authservice.entrypoints=websecure"
       - "traefik.http.routers.muvee-authservice.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.muvee-authservice.tls.domains[0].main=${BASE_DOMAIN}"
       - "traefik.http.services.muvee-authservice.loadbalancer.server.port=4181"
 
   traefik:
@@ -179,6 +190,7 @@ services:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
       - letsencrypt_data:/letsencrypt
+      - traefik_logs:/var/log/traefik
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
       BASE_DOMAIN: ${BASE_DOMAIN}
@@ -189,6 +201,7 @@ services:
       - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${BASE_DOMAIN}`)"
       - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
       - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.tls.domains[0].main=traefik.${BASE_DOMAIN}"
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.middlewares=muvee-forward-auth-admin@file"
 
@@ -246,6 +259,7 @@ volumes:
   registry_data:
   letsencrypt_data:
   muvee_data:
+  traefik_logs:
 
 networks:
   # Standalone mode: the network is created by this Compose file.

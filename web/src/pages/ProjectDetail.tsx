@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, Secret, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 
@@ -264,6 +264,7 @@ export default function ProjectDetail() {
 function DeployTab({ deployments, projectId }: { deployments: Deployment[]; projectId: string }) {
   const [expanded, setExpanded] = useState<string | null>(deployments[0]?.id ?? null)
   const [metrics, setMetrics] = useState<ContainerMetric[]>([])
+  const [traffic, setTraffic] = useState<ProjectTraffic[]>([])
   const { t } = useTranslation()
 
   // Fetch metrics for the running deployment when the tab mounts or deployments change.
@@ -276,6 +277,15 @@ function DeployTab({ deployments, projectId }: { deployments: Deployment[]; proj
     }, 30_000)
     return () => clearInterval(iv)
   }, [projectId, deployments])
+
+  // Fetch traffic history (independent of running state — past requests are still interesting).
+  useEffect(() => {
+    api.projects.traffic(projectId, 100).then(setTraffic).catch(() => setTraffic([]))
+    const iv = setInterval(() => {
+      api.projects.traffic(projectId, 100).then(setTraffic).catch(() => {})
+    }, 15_000)
+    return () => clearInterval(iv)
+  }, [projectId])
 
   if (deployments.length === 0) {
     return (
@@ -293,7 +303,9 @@ function DeployTab({ deployments, projectId }: { deployments: Deployment[]; proj
       {runningDeploymentId && metrics.length > 0 && (
         <MetricsPanel metrics={metrics} />
       )}
-      <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', marginTop: runningDeploymentId && metrics.length > 0 ? '1.5rem' : 0 }}>
+      {/* Traffic panel — recent HTTP requests observed by Traefik */}
+      <TrafficPanel traffic={traffic} />
+      <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', marginTop: '1.5rem' }}>
         {deployments.map((d, i) => {
           const color = statusColor(d.status)
           const isOpen = expanded === d.id
@@ -472,6 +484,120 @@ function MetricsPanel({ metrics }: { metrics: ContainerMetric[] }) {
       </div>
     </div>
   )
+}
+
+// ─── Traffic Panel ────────────────────────────────────────────────────────────
+
+function TrafficPanel({ traffic }: { traffic: ProjectTraffic[] }) {
+  const { t } = useTranslation()
+  const hasRows = traffic.length > 0
+
+  const last5m = traffic.filter(r => Date.now() / 1000 - r.observed_at < 300).length
+  const last1h = traffic.filter(r => Date.now() / 1000 - r.observed_at < 3600).length
+  const uniqueIPs = new Set(traffic.map(r => r.client_ip)).size
+  const errRate = hasRows
+    ? (traffic.filter(r => r.status >= 500).length / traffic.length) * 100
+    : 0
+
+  const statusColorFor = (s: number) => {
+    if (s >= 500) return '#ff6b6b'
+    if (s >= 400) return '#ffa94d'
+    if (s >= 300) return 'var(--fg-muted)'
+    return 'var(--accent)'
+  }
+
+  return (
+    <div style={{ marginTop: '1.5rem' }}>
+      <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
+        <Activity size={12} />
+        {t('projectDetail.traffic.title', 'Traffic')}
+        <span style={{ marginLeft: '1rem' }}>
+          {t('projectDetail.traffic.last5m', '5m')}: {last5m}
+        </span>
+        <span>·</span>
+        <span>{t('projectDetail.traffic.last1h', '1h')}: {last1h}</span>
+        <span>·</span>
+        <span>{t('projectDetail.traffic.uniqueIps', 'unique IPs')}: {uniqueIPs}</span>
+        {errRate > 0 && (
+          <>
+            <span>·</span>
+            <span style={{ color: '#ff6b6b' }}>
+              5xx: {errRate.toFixed(1)}%
+            </span>
+          </>
+        )}
+      </div>
+      {!hasRows ? (
+        <div style={{
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          padding: '1.5rem',
+          textAlign: 'center',
+          fontFamily: MONO,
+          fontSize: '0.75rem',
+          color: 'var(--fg-muted)',
+        }}>
+          {t('projectDetail.traffic.empty', 'No traffic recorded yet.')}
+        </div>
+      ) : (
+        <div style={{
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          overflow: 'hidden',
+          maxHeight: '360px',
+          overflowY: 'auto',
+          background: 'var(--bg-card)',
+        }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: MONO, fontSize: '0.72rem' }}>
+            <thead>
+              <tr style={{ background: 'var(--bg-hover)', position: 'sticky', top: 0 }}>
+                <th style={thStyle}>{t('projectDetail.traffic.time', 'TIME')}</th>
+                <th style={thStyle}>{t('projectDetail.traffic.ip', 'CLIENT IP')}</th>
+                <th style={thStyle}>{t('projectDetail.traffic.method', 'METHOD')}</th>
+                <th style={{ ...thStyle, width: '100%' }}>{t('projectDetail.traffic.path', 'PATH')}</th>
+                <th style={thStyle}>{t('projectDetail.traffic.status', 'STATUS')}</th>
+                <th style={thStyle}>{t('projectDetail.traffic.duration', 'MS')}</th>
+                <th style={thStyle}>{t('projectDetail.traffic.size', 'BYTES')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {traffic.map((r, i) => (
+                <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={tdStyle} title={new Date(r.observed_at * 1000).toLocaleString()}>
+                    {timeAgo(new Date(r.observed_at * 1000).toISOString())}
+                  </td>
+                  <td style={tdStyle}>{r.client_ip}</td>
+                  <td style={tdStyle}>{r.method}</td>
+                  <td style={{ ...tdStyle, maxWidth: '400px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.path}>
+                    {r.path}
+                  </td>
+                  <td style={{ ...tdStyle, color: statusColorFor(r.status), fontWeight: 600 }}>{r.status}</td>
+                  <td style={tdStyle}>{r.duration_ms}</td>
+                  <td style={tdStyle}>{formatBytes(r.bytes_sent)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const thStyle: CSSProperties = {
+  textAlign: 'left',
+  padding: '0.5rem 0.75rem',
+  color: 'var(--fg-muted)',
+  fontSize: '0.65rem',
+  letterSpacing: '0.08em',
+  fontWeight: 500,
+  whiteSpace: 'nowrap',
+}
+
+const tdStyle: CSSProperties = {
+  padding: '0.45rem 0.75rem',
+  color: 'var(--fg-primary)',
+  whiteSpace: 'nowrap',
 }
 
 function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {

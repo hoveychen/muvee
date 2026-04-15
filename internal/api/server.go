@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"crypto/sha256"
@@ -45,9 +46,19 @@ type Server struct {
 	gitRepoBasePath    string   // base path for hosted bare git repos
 	brandingDir        string   // directory for uploaded branding assets (logo, favicon)
 	tunnelBackendURL   string   // URL that Traefik uses to reach this server for tunnel traffic
+	acmeStoragePath    string   // path to Traefik's acme.json (admin cert-status panel)
 	tunnels            *tunnelRegistry
 	cliPending         sync.Map // state -> cli_port (string)
 	oauthPending       sync.Map // state -> provider name (string); fallback when cookie is missing
+
+	// domainOnlyMu guards domainOnlyPrefixes, a cache of the current set of
+	// domain_only project subdomains. Refreshed whenever the Traefik config is
+	// generated (polled periodically by Traefik) and on project CRUD. Used by
+	// TunnelAwareHandler to decide whether a non-"t-*" subdomain request should
+	// be routed through the tunnel handler (serving live traffic or the offline
+	// placeholder page).
+	domainOnlyMu       sync.RWMutex
+	domainOnlyPrefixes map[string]bool
 }
 
 type ServerConfig struct {
@@ -62,6 +73,7 @@ type ServerConfig struct {
 	GitRepoBasePath    string
 	BrandingDir        string
 	TunnelBackendURL   string // URL Traefik uses to reach this server for tunnel proxy (e.g. http://muvee-server:8080)
+	ACMEStoragePath    string // path to Traefik's acme.json (defaults to /letsencrypt/acme.json)
 }
 
 func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Scheduler, mon *monitor.Monitor, cfg ServerConfig) *Server {
@@ -84,8 +96,34 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		gitRepoBasePath:    cfg.GitRepoBasePath,
 		brandingDir:        cfg.BrandingDir,
 		tunnelBackendURL:   cfg.TunnelBackendURL,
+		acmeStoragePath:    cfg.ACMEStoragePath,
 		tunnels:            newTunnelRegistry(),
+		domainOnlyPrefixes: make(map[string]bool),
 	}
+}
+
+// refreshDomainOnlyCache replaces the in-memory set of domain_only project
+// prefixes with a fresh snapshot from the database. Called after project CRUD
+// and from handleTraefikConfig on every Traefik poll.
+func (s *Server) refreshDomainOnlyCache(ctx context.Context) {
+	projects, err := s.store.ListDomainOnlyProjects(ctx)
+	if err != nil {
+		log.Printf("refresh domain_only cache: %v", err)
+		return
+	}
+	set := make(map[string]bool, len(projects))
+	for _, p := range projects {
+		set[p.DomainPrefix] = true
+	}
+	s.domainOnlyMu.Lock()
+	s.domainOnlyPrefixes = set
+	s.domainOnlyMu.Unlock()
+}
+
+func (s *Server) isDomainOnlyPrefix(prefix string) bool {
+	s.domainOnlyMu.RLock()
+	defer s.domainOnlyMu.RUnlock()
+	return s.domainOnlyPrefixes[prefix]
 }
 
 // agentSecretMiddleware rejects requests that do not carry the correct X-Agent-Secret header.
@@ -174,6 +212,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/projects/{id}/deploy", s.triggerDeploy)
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
 		r.Get("/api/projects/{id}/metrics", s.getProjectMetrics)
+		r.Get("/api/projects/{id}/traffic", s.getProjectTraffic)
 		r.Get("/api/projects/{id}/workspace", s.workspaceList)
 		r.Get("/api/projects/{id}/workspace/download", s.workspaceDownload)
 		r.Post("/api/projects/{id}/workspace/upload", s.workspaceUpload)
@@ -216,6 +255,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/api/admin/branding/upload", s.handleBrandingUpload)
 			// Server-side health checks
 			r.Get("/api/admin/health", s.handleGetSystemHealth)
+			// ACME / TLS certificate status per expected domain
+			r.Get("/api/admin/certs", s.handleGetCertificateStatus)
 			// Active tunnels and history
 			r.Get("/api/admin/tunnels", s.listActiveTunnels)
 			r.Get("/api/admin/tunnels/history", s.listTunnelHistory)
@@ -773,20 +814,52 @@ func validateProject(p *store.Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("project name must not be empty")
 	}
-	if p.GitSource == "" {
-		p.GitSource = store.GitSourceExternal
+	if p.ProjectType == "" {
+		p.ProjectType = store.ProjectTypeDeployment
 	}
-	if p.GitSource != store.GitSourceExternal && p.GitSource != store.GitSourceHosted {
-		return fmt.Errorf("git_source must be 'external' or 'hosted'")
-	}
-	if p.DomainPrefix == "" {
-		if err := validateDomainPrefix(p.Name); err != nil {
-			return fmt.Errorf("domain_prefix is required because project name %q cannot be used as a subdomain: %w", p.Name, err)
+	switch p.ProjectType {
+	case store.ProjectTypeDeployment:
+		if p.GitSource == "" {
+			p.GitSource = store.GitSourceExternal
 		}
-		p.DomainPrefix = p.Name
+		if p.GitSource != store.GitSourceExternal && p.GitSource != store.GitSourceHosted {
+			return fmt.Errorf("git_source must be 'external' or 'hosted'")
+		}
+		if p.DomainPrefix == "" {
+			if err := validateDomainPrefix(p.Name); err != nil {
+				return fmt.Errorf("domain_prefix is required because project name %q cannot be used as a subdomain: %w", p.Name, err)
+			}
+			p.DomainPrefix = p.Name
+			return nil
+		}
+		return validateDomainPrefix(p.DomainPrefix)
+	case store.ProjectTypeDomainOnly:
+		// Git-related fields are forbidden and silently zeroed so that they do
+		// not end up stored against a project that will never be built.
+		if p.GitURL != "" || p.GitSource == store.GitSourceHosted {
+			return fmt.Errorf("domain_only projects must not specify git_url or git_source")
+		}
+		p.GitURL = ""
+		p.GitBranch = ""
+		p.GitSource = ""
+		p.DockerfilePath = ""
+		p.ContainerPort = 0
+		p.MemoryLimit = ""
+		p.VolumeMountPath = ""
+		if p.DomainPrefix == "" {
+			return fmt.Errorf("domain_prefix is required for domain_only projects")
+		}
+		if err := validateDomainPrefix(p.DomainPrefix); err != nil {
+			return err
+		}
+		// The "t-" namespace is reserved for ephemeral tunnel domains.
+		if strings.HasPrefix(p.DomainPrefix, "t-") {
+			return fmt.Errorf("domain_prefix %q conflicts with the ephemeral tunnel namespace (t-*)", p.DomainPrefix)
+		}
 		return nil
+	default:
+		return fmt.Errorf("project_type must be 'deployment' or 'domain_only'")
 	}
-	return validateDomainPrefix(p.DomainPrefix)
 }
 
 // handlePublicProjects returns all currently running projects with owner info.
@@ -857,9 +930,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, fmt.Errorf("domain prefix %q is already in use by another project", p.DomainPrefix), 409)
 		return
 	}
+	if existing, err := s.store.GetProjectByOwnerAndName(r.Context(), user.ID, p.Name); err != nil {
+		jsonErr(w, err, 500)
+		return
+	} else if existing != nil {
+		jsonErr(w, fmt.Errorf("project name %q is already taken", p.Name), 409)
+		return
+	}
 
 	// For hosted repos: initialize a bare git repo and set the sentinel git_url.
-	if p.GitSource == store.GitSourceHosted {
+	if p.ProjectType == store.ProjectTypeDeployment && p.GitSource == store.GitSourceHosted {
 		if s.gitRepoBasePath == "" {
 			jsonErr(w, fmt.Errorf("hosted git repositories are not enabled on this server (GIT_REPO_BASE_PATH not set)"), 400)
 			return
@@ -873,7 +953,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if created.GitSource == store.GitSourceHosted {
+	if created.ProjectType == store.ProjectTypeDeployment && created.GitSource == store.GitSourceHosted {
 		repoPath := gitrepo.RepoPath(s.gitRepoBasePath, created.ID)
 		if err := gitrepo.InitBareRepo(repoPath); err != nil {
 			// Clean up the project if repo init fails.
@@ -884,6 +964,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		created.GitURL = "hosted://" + created.ID.String()
 		_ = s.store.UpdateProject(r.Context(), created)
 		created.GitPushURL = s.hostedGitPushURL(created.ID)
+	}
+
+	if created.ProjectType == store.ProjectTypeDomainOnly {
+		s.refreshDomainOnlyCache(r.Context())
 	}
 
 	jsonOK(w, created)
@@ -916,26 +1000,51 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, nil, 403)
 		return
 	}
+	existing, err := s.store.GetProject(r.Context(), id)
+	if err != nil || existing == nil {
+		jsonErr(w, err, 404)
+		return
+	}
 	var p store.Project
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
+	// project_type is immutable after creation — the client cannot switch a
+	// deployment project into a domain_only one (or vice versa).
+	if p.ProjectType != "" && p.ProjectType != existing.ProjectType {
+		jsonErr(w, fmt.Errorf("project_type cannot be changed after creation"), 400)
+		return
+	}
+	p.ProjectType = existing.ProjectType
 	if err := validateProject(&p); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
-	if existing, err := s.store.GetProjectByDomainPrefix(r.Context(), p.DomainPrefix); err != nil {
+	if byPrefix, err := s.store.GetProjectByDomainPrefix(r.Context(), p.DomainPrefix); err != nil {
 		jsonErr(w, err, 500)
 		return
-	} else if existing != nil && existing.ID != id {
+	} else if byPrefix != nil && byPrefix.ID != id {
 		jsonErr(w, fmt.Errorf("domain prefix %q is already in use by another project", p.DomainPrefix), 409)
 		return
 	}
+	if p.Name != existing.Name {
+		if byName, err := s.store.GetProjectByOwnerAndName(r.Context(), existing.OwnerID, p.Name); err != nil {
+			jsonErr(w, err, 500)
+			return
+		} else if byName != nil && byName.ID != id {
+			jsonErr(w, fmt.Errorf("project name %q is already taken", p.Name), 409)
+			return
+		}
+	}
 	p.ID = id
+	p.OwnerID = existing.OwnerID
 	if err := s.store.UpdateProject(r.Context(), &p); err != nil {
 		jsonErr(w, err, 500)
 		return
+	}
+	if p.ProjectType == store.ProjectTypeDomainOnly {
+		s.refreshDomainOnlyCache(r.Context())
 	}
 	jsonOK(w, p)
 }
@@ -948,14 +1057,16 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, nil, 403)
 		return
 	}
+	proj, _ := s.store.GetProject(r.Context(), id)
 	// Clean up hosted git repo if applicable.
-	if s.gitRepoBasePath != "" {
-		if p, err := s.store.GetProject(r.Context(), id); err == nil && p != nil && p.GitSource == store.GitSourceHosted {
-			_ = gitrepo.DeleteRepo(gitrepo.RepoPath(s.gitRepoBasePath, id))
-		}
+	if proj != nil && s.gitRepoBasePath != "" && proj.GitSource == store.GitSourceHosted {
+		_ = gitrepo.DeleteRepo(gitrepo.RepoPath(s.gitRepoBasePath, id))
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
 	_ = s.store.DeleteProject(r.Context(), id)
+	if proj != nil && proj.ProjectType == store.ProjectTypeDomainOnly {
+		s.refreshDomainOnlyCache(r.Context())
+	}
 }
 
 func (s *Server) getProjectDatasets(w http.ResponseWriter, r *http.Request) {
@@ -1008,6 +1119,10 @@ func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
 	project, err := s.store.GetProject(r.Context(), id)
 	if err != nil || project == nil {
 		jsonErr(w, err, 404)
+		return
+	}
+	if project.ProjectType == store.ProjectTypeDomainOnly {
+		jsonErr(w, fmt.Errorf("domain_only projects cannot be deployed"), 400)
 		return
 	}
 	deployment, err := s.store.CreateDeployment(r.Context(), &store.Deployment{ProjectID: id})
@@ -1409,6 +1524,56 @@ func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
+// getProjectTraffic returns the most recent HTTP requests observed by Traefik
+// for this project. Query param: limit (default 100, max 1000).
+func (s *Server) getProjectTraffic(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &limit); n == 1 && err == nil {
+			if limit > 1000 {
+				limit = 1000
+			}
+			if limit < 1 {
+				limit = 1
+			}
+		}
+	}
+	entries, err := s.store.GetProjectTraffic(r.Context(), id, limit)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	type trafficOut struct {
+		ObservedAt int64  `json:"observed_at"`
+		ClientIP   string `json:"client_ip"`
+		Host       string `json:"host"`
+		Method     string `json:"method"`
+		Path       string `json:"path"`
+		Status     int    `json:"status"`
+		DurationMs int64  `json:"duration_ms"`
+		BytesSent  int64  `json:"bytes_sent"`
+		UserAgent  string `json:"user_agent"`
+		Referer    string `json:"referer"`
+	}
+	out := make([]trafficOut, 0, len(entries))
+	for _, t := range entries {
+		out = append(out, trafficOut{
+			ObservedAt: t.ObservedAt.Unix(),
+			ClientIP:   t.ClientIP,
+			Host:       t.Host,
+			Method:     t.Method,
+			Path:       t.Path,
+			Status:     t.Status,
+			DurationMs: t.DurationMs,
+			BytesSent:  t.BytesSent,
+			UserAgent:  t.UserAgent,
+			Referer:    t.Referer,
+		})
+	}
+	jsonOK(w, out)
+}
+
 func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 	var n store.Node
 	if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
@@ -1564,7 +1729,16 @@ type traefikRouter struct {
 }
 
 type traefikTLS struct {
-	CertResolver string `json:"certResolver,omitempty"`
+	CertResolver string             `json:"certResolver,omitempty"`
+	Domains      []traefikTLSDomain `json:"domains,omitempty"`
+}
+
+// Declaring the host here makes Traefik pre-fetch the ACME cert when the
+// router is registered, instead of lazily on the first HTTPS request (which
+// would otherwise serve the default self-signed cert until the challenge
+// completes).
+type traefikTLSDomain struct {
+	Main string `json:"main"`
 }
 
 type traefikService struct {
@@ -1592,6 +1766,10 @@ type traefikForwardAuth struct {
 // handleTraefikConfig generates a Traefik dynamic configuration for all running deployments.
 // Traefik polls this endpoint via its HTTP provider.
 func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
+	// Refresh the domain_only cache on every Traefik poll so TunnelAwareHandler
+	// picks up newly created or deleted reservations without a restart.
+	s.refreshDomainOnlyCache(r.Context())
+
 	deployments, err := s.store.GetRunningDeployments(r.Context())
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -1619,7 +1797,10 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			Rule:        fmt.Sprintf("Host(`%s`)", host),
 			EntryPoints: []string{"websecure"},
 			Service:     name,
-			TLS:         &traefikTLS{CertResolver: "letsencrypt"},
+			TLS: &traefikTLS{
+				CertResolver: "letsencrypt",
+				Domains:      []traefikTLSDomain{{Main: host}},
+			},
 		}
 
 		// Per-project ForwardAuth middleware (if auth is required)
@@ -1661,7 +1842,10 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				Rule:        fmt.Sprintf("Host(`%s`)", host),
 				EntryPoints: []string{"websecure"},
 				Service:     name,
-				TLS:         &traefikTLS{CertResolver: "letsencrypt"},
+				TLS: &traefikTLS{
+					CertResolver: "letsencrypt",
+					Domains:      []traefikTLSDomain{{Main: host}},
+				},
 			}
 
 			// Per-tunnel ForwardAuth middleware (enabled by default).
@@ -1682,6 +1866,40 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			}
 
 			cfg.HTTP.Routers[name] = router
+			cfg.HTTP.Services[name] = traefikService{
+				LoadBalancer: traefikLB{
+					Servers: []traefikServer{{URL: s.tunnelBackendURL}},
+				},
+			}
+		}
+
+		// Domain-only projects: emit a stable route for every reserved prefix
+		// regardless of whether a tunnel is currently connected. Traefik forwards
+		// the request to this server, where handleTunnelTraffic either proxies
+		// through the live tunnel or renders the offline placeholder.
+		domainOnly, _ := s.store.ListDomainOnlyProjects(r.Context())
+		for _, p := range domainOnly {
+			name := "domain-" + p.DomainPrefix
+			// Skip if a deployment or live-tunnel router already owns this prefix
+			// (a domain_only prefix cannot collide with a deployment prefix because
+			// domain_prefix is globally unique, but an active tunnel_t-* entry
+			// would not collide either; this guard is just belt-and-suspenders).
+			if _, exists := cfg.HTTP.Routers[p.DomainPrefix]; exists {
+				continue
+			}
+			if _, exists := cfg.HTTP.Routers["tunnel-"+p.DomainPrefix]; exists {
+				continue
+			}
+			host := fmt.Sprintf("%s.%s", p.DomainPrefix, s.baseDomain)
+			cfg.HTTP.Routers[name] = traefikRouter{
+				Rule:        fmt.Sprintf("Host(`%s`)", host),
+				EntryPoints: []string{"websecure"},
+				Service:     name,
+				TLS: &traefikTLS{
+					CertResolver: "letsencrypt",
+					Domains:      []traefikTLSDomain{{Main: host}},
+				},
+			}
 			cfg.HTTP.Services[name] = traefikService{
 				LoadBalancer: traefikLB{
 					Servers: []traefikServer{{URL: s.tunnelBackendURL}},
