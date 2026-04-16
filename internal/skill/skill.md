@@ -58,6 +58,12 @@ muveectl projects create --name NAME --git-url URL \
 muveectl projects create --name NAME --git-source hosted \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
   [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
+muveectl projects create --name NAME --domain-only --domain PREFIX \
+  [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
+# --domain-only: reserves a tunnel domain prefix without a git repo or deployment.
+#   Use with `muveectl tunnel <port> --project NAME` to route traffic to a local process.
+#   The domain reservation persists even when no tunnel is connected (visitors see an offline page).
+#   --domain is required; --git-url and --git-source are not allowed.
 # --git-source hosted: creates a server-hosted bare git repo; returns a push URL
 # --dockerfile PATH: path to the Dockerfile *file* relative to the repo root
 #   default: "Dockerfile"  (repo root Dockerfile)
