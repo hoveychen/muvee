@@ -4,12 +4,14 @@ export interface User {
   name: string
   avatar_url: string
   role: 'admin' | 'member'
+  authorized: boolean
   created_at: string
 }
 
 export interface Project {
   id: string
   name: string
+  project_type: 'deployment' | 'domain_only'
   git_url: string
   git_branch: string
   git_source: 'external' | 'hosted'
@@ -21,6 +23,9 @@ export interface Project {
   auth_allowed_domains: string
   memory_limit: string
   volume_mount_path: string
+  description: string
+  icon: string
+  tags: string
   created_at: string
   updated_at: string
 }
@@ -187,6 +192,25 @@ export interface SystemSettings {
   site_name: string
   logo_url: string
   favicon_url: string
+  require_authorization: string  // 'true' | 'false'
+}
+
+export interface AuthorizationRequest {
+  id: string
+  user_id: string
+  status: 'pending' | 'approved' | 'rejected'
+  reviewed_by: string | null
+  created_at: string
+  updated_at: string
+  user_name?: string
+  user_email?: string
+  user_avatar_url?: string
+}
+
+export interface AuthorizationStatus {
+  require_authorization: boolean
+  authorized: boolean
+  request?: AuthorizationRequest | null
 }
 
 export type HealthStatus = 'ok' | 'warning' | 'error'
@@ -228,6 +252,7 @@ export interface ActiveTunnel {
   user_email: string
   auth_required: boolean
   connected_at: string
+  project_name: string
 }
 
 export interface TunnelHistoryEntry {

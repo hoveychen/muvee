@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLink } from 'lucide-react'
+import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLink, Radio } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project } from '../lib/types'
 import { timeAgo, statusColor } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
+
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case 'running': return 'badge badge-success'
+    case 'building': case 'deploying': return 'badge badge-warning'
+    case 'failed': return 'badge badge-danger'
+    case 'stopped': return 'badge badge-neutral'
+    default: return 'badge badge-neutral'
+  }
+}
 
 export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -19,24 +29,19 @@ export default function Projects() {
 
   return (
     <div className="page-enter">
-      <div className="flex items-end justify-between mb-8">
+      <div className="page-header flex items-end justify-between">
         <div>
-          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
+          <p className="page-subtitle">
             {t('projects.sectionLabel')}
           </p>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>
+          <h1 className="page-title">
             {t('projects.heading')}
           </h1>
         </div>
         <Link
           to="/projects/new"
-          className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-150"
-          style={{
-            background: 'var(--accent)',
-            color: '#ffffff',
-            fontWeight: 500,
-            textDecoration: 'none',
-          }}
+          className="btn-primary flex items-center gap-2"
+          style={{ textDecoration: 'none' }}
         >
           <PlusCircle size={14} />
           {t('projects.newProject')}
@@ -44,11 +49,11 @@ export default function Projects() {
       </div>
 
       {loading ? (
-        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>{t('projects.loading')}</div>
+        <div style={{ color: 'var(--fg-muted)', fontSize: '0.875rem' }}>{t('projects.loading')}</div>
       ) : projects.length === 0 ? (
         <EmptyState />
       ) : (
-        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+        <div className="card" style={{ overflow: 'hidden' }}>
           {projects.map((p, i) => (
             <ProjectRow key={p.id} project={p} index={i} total={projects.length} />
           ))}
@@ -63,15 +68,17 @@ export default function Projects() {
 function ProjectRow({ project, index, total }: { project: Project; index: number; total: number }) {
   const [latestDeploy, setLatestDeploy] = useState<import('../lib/types').Deployment | null>(null)
   const { t } = useTranslation()
+  const isTunnel = project.project_type === 'domain_only'
 
   useEffect(() => {
+    if (isTunnel) return
     api.projects.deployments(project.id)
       .then(ds => setLatestDeploy(ds?.[0] ?? null))
       .catch(() => {})
-  }, [project.id])
+  }, [project.id, isTunnel])
 
-  const status = latestDeploy?.status ?? 'pending'
-  const color = statusColor(status)
+  const status = isTunnel ? 'tunnel' : (latestDeploy?.status ?? 'pending')
+  const color = isTunnel ? 'var(--accent)' : statusColor(latestDeploy?.status ?? 'pending')
 
   const STATUS_LABELS: Record<string, string> = {
     running: t('projects.status.running'),
@@ -80,6 +87,7 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
     failed: t('projects.status.failed'),
     stopped: t('projects.status.stopped'),
     pending: t('projects.status.pending'),
+    tunnel: t('projects.status.tunnel'),
   }
 
   return (
@@ -106,43 +114,43 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
 
       {/* Name */}
       <div className="flex-1 min-w-0">
-        <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.3 }}>
+        <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.3 }}>
           {project.name}
         </div>
-        <div className="flex items-center gap-2 mt-1">
-          <span style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
-            <GitBranch size={10} className="inline mr-1" />
-            {project.git_branch}
-          </span>
-          <span style={{ color: 'var(--border)' }}>·</span>
-          <span style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>
-            {project.git_url.replace(/^https?:\/\//, '')}
-          </span>
-        </div>
+        {isTunnel ? (
+          <div className="flex items-center gap-2 mt-1">
+            <span style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
+              <Radio size={10} className="inline mr-1" />
+              tunnel
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 mt-1">
+            <span style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
+              <GitBranch size={10} className="inline mr-1" />
+              {project.git_branch}
+            </span>
+            <span style={{ color: 'var(--border)' }}>·</span>
+            <span style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>
+              {project.git_url.replace(/^https?:\/\//, '')}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Domain */}
-      <div className="hidden md:flex items-center gap-1 flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+      <div className="hidden md:flex items-center gap-1 flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
         <Globe size={11} />
         {project.domain_prefix}.domain
       </div>
 
       {/* Status badge */}
-      <div
-        className="flex-shrink-0 px-2 py-0.5 rounded-full"
-        style={{
-          fontFamily: MONO,
-          fontSize: '0.68rem',
-          color: color,
-          border: `1px solid ${color}44`,
-          background: `${color}18`,
-        }}
-      >
+      <div className={`flex-shrink-0 ${statusBadgeClass(status)}`}>
         {STATUS_LABELS[status]}
       </div>
 
       {/* Time */}
-      <div className="hidden lg:block flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', minWidth: '60px', textAlign: 'right' }}>
+      <div className="hidden lg:block flex-shrink-0" style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', minWidth: '60px', textAlign: 'right' }}>
         {latestDeploy ? timeAgo(latestDeploy.updated_at) : '—'}
       </div>
     </Link>
@@ -156,7 +164,7 @@ function EmptyState() {
       <div style={{ fontSize: '2.5rem', fontWeight: 700, color: 'var(--border)' }}>
         {t('projects.noProjects')}
       </div>
-      <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>
+      <p style={{ color: 'var(--fg-muted)', fontSize: '0.875rem' }}>
         {t('projects.noProjectsHint')}
       </p>
     </div>
@@ -177,14 +185,13 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   return (
     <button
       onClick={copy}
-      className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all duration-150"
+      className="btn-secondary flex items-center gap-1.5"
       style={{
         fontFamily: MONO,
-        fontSize: '0.72rem',
-        background: copied ? 'rgba(88,166,255,0.1)' : 'var(--bg-hover)',
-        color: copied ? 'var(--accent)' : 'var(--fg-muted)',
-        border: `1px solid ${copied ? 'rgba(88,166,255,0.4)' : 'var(--border)'}`,
-        cursor: 'pointer',
+        fontSize: '0.8125rem',
+        background: copied ? 'rgba(88,166,255,0.1)' : undefined,
+        color: copied ? 'var(--accent)' : undefined,
+        borderColor: copied ? 'rgba(88,166,255,0.4)' : undefined,
       }}
       title={`Copy ${label ?? text}`}
     >
@@ -201,7 +208,7 @@ function CLIAccessCard() {
   const skillURL = `${window.location.origin}/api/skill`
 
   return (
-    <div className="mt-8" style={{ border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--bg-card)', overflow: 'hidden' }}>
+    <div className="card mt-8" style={{ overflow: 'hidden' }}>
       {/* Header toggle */}
       <button
         className="w-full flex items-center gap-3 px-5 py-4 text-left transition-all duration-150"
@@ -212,24 +219,24 @@ function CLIAccessCard() {
       >
         <Terminal size={15} style={{ color: 'var(--accent)' }} />
         <div className="flex-1">
-          <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em' }}>
+          <p className="page-subtitle" style={{ marginBottom: '2px' }}>
             {t('projects.developerAccess')}
           </p>
-          <p style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '2px' }}>
+          <p style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', lineHeight: 1.2 }}>
             {t('projects.quickInstall')}
           </p>
         </div>
-        <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
           {open ? '▲' : '▼'}
         </span>
       </button>
 
       {open && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '1.5rem' }}>
-          <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', letterSpacing: '0.04em', marginBottom: '0.4rem', fontWeight: 500 }}>
             {t('projects.installCommand')}
           </p>
-          <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.6 }}>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.6 }}>
             {t('projects.installCmdDesc')}
           </p>
           <div className="flex items-center gap-2">
@@ -237,7 +244,7 @@ function CLIAccessCard() {
               className="flex-1 px-3 py-2 rounded-md"
               style={{
                 fontFamily: MONO,
-                fontSize: '0.75rem',
+                fontSize: '0.8125rem',
                 color: 'var(--accent)',
                 background: 'var(--bg-hover)',
                 border: '1px solid var(--border)',
@@ -253,13 +260,10 @@ function CLIAccessCard() {
               href={skillURL}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all duration-150"
+              className="btn-secondary flex items-center gap-1.5"
               style={{
                 fontFamily: MONO,
-                fontSize: '0.72rem',
-                background: 'var(--bg-hover)',
-                color: 'var(--fg-muted)',
-                border: '1px solid var(--border)',
+                fontSize: '0.8125rem',
                 textDecoration: 'none',
               }}
             >

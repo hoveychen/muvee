@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSettings } from '../lib/settings'
 
-const MONO = 'var(--font-mono)'
-
 interface ProviderInfo {
   id: string
   display_name: string
@@ -30,22 +28,12 @@ export default function LoginPage() {
       {/* Left panel */}
       <div
         className="hidden lg:flex flex-col justify-between w-1/2 p-16 relative overflow-hidden"
-        style={{ background: 'var(--bg-card)', borderRight: '1px solid var(--border)' }}
+        style={{ background: 'var(--sidebar-bg)' }}
       >
-        {/* Subtle grid pattern */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage: `radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0)`,
-            backgroundSize: '28px 28px',
-            opacity: 0.4,
-          }}
-        />
-
         <div className="relative z-10">
           <span
             className="text-xs tracking-widest uppercase"
-            style={{ color: 'var(--fg-muted)', fontFamily: MONO }}
+            style={{ color: 'var(--sidebar-fg)', fontSize: '0.8125rem' }}
           >
             {t('login.tagline')}
           </span>
@@ -57,24 +45,24 @@ export default function LoginPage() {
           ) : (
             <h1
               className="font-bold leading-none tracking-tight"
-              style={{ fontSize: '6rem', color: 'var(--fg-primary)', lineHeight: '1' }}
+              style={{ fontSize: '6rem', color: '#ffffff', lineHeight: '1' }}
             >
               {brandName}
             </h1>
           )}
           <p
             className="mt-6 text-lg max-w-sm"
-            style={{ color: 'var(--fg-muted)', lineHeight: '1.7', whiteSpace: 'pre-line' }}
+            style={{ color: 'var(--sidebar-fg)', lineHeight: '1.7', whiteSpace: 'pre-line', fontSize: '1rem' }}
           >
             {t('login.description')}
           </p>
         </div>
 
-        <div className="relative z-10 flex gap-6" style={{ color: 'var(--fg-muted)', fontFamily: MONO, fontSize: '0.78rem' }}>
+        <div className="relative z-10 flex gap-6" style={{ color: '#e2e8f0', fontSize: '0.875rem' }}>
           <span>{t('login.feat1')}</span>
-          <span style={{ color: 'var(--border)' }}>·</span>
+          <span style={{ color: 'var(--sidebar-border)' }}>·</span>
           <span>{t('login.feat2')}</span>
-          <span style={{ color: 'var(--border)' }}>·</span>
+          <span style={{ color: 'var(--sidebar-border)' }}>·</span>
           <span>{t('login.feat3')}</span>
         </div>
       </div>
@@ -100,24 +88,24 @@ export default function LoginPage() {
           </div>
 
           <div
-            className="rounded-md p-8"
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+            className="card"
+            style={{ padding: '32px' }}
           >
             <h2
-              className="text-xl font-semibold mb-1"
-              style={{ color: 'var(--fg-primary)' }}
+              className="font-semibold mb-1"
+              style={{ color: 'var(--fg-primary)', fontSize: '1.25rem' }}
             >
               {t('login.signIn')}
             </h2>
             <p
-              className="text-sm mb-8"
-              style={{ fontFamily: MONO, color: 'var(--fg-muted)' }}
+              className="mb-8"
+              style={{ color: 'var(--fg-muted)', fontSize: '0.875rem' }}
             >
               {t('login.authorizedOnly')}
             </p>
 
             {cliPort && (
-              <p className="text-sm mb-4 px-3 py-2 rounded" style={{ fontFamily: MONO, color: 'var(--fg-muted)', background: 'var(--bg-hover)', border: '1px solid var(--border)' }}>
+              <p className="mb-4 px-3 py-2 rounded" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)', background: 'var(--bg-hover)', border: '1px solid var(--border)', fontSize: '0.8125rem' }}>
                 {t('login.cliAuthPrompt')}
               </p>
             )}
@@ -129,8 +117,8 @@ export default function LoginPage() {
           </div>
 
           <p
-            className="text-center mt-5 text-xs"
-            style={{ fontFamily: MONO, color: 'var(--fg-muted)' }}
+            className="text-center mt-5"
+            style={{ color: 'var(--fg-muted)', fontSize: '0.8125rem' }}
           >
             {t('login.accessRestricted')}
           </p>
@@ -148,13 +136,15 @@ function ProviderButton({ provider, cliPort }: { provider: ProviderInfo; cliPort
   return (
     <a
       href={href}
-      className="flex items-center justify-center gap-3 w-full py-2.5 px-4 rounded-md text-sm transition-all duration-150"
+      className="btn-secondary"
       style={{
-        background: 'var(--bg-hover)',
-        color: 'var(--fg-primary)',
-        border: '1px solid var(--border)',
-        fontWeight: 500,
-        textDecoration: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '10px',
+        width: '100%',
+        padding: '10px 16px',
+        fontSize: '0.875rem',
       }}
       onMouseEnter={e => {
         (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--accent)'

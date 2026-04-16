@@ -359,11 +359,18 @@ muveectl tunnel 8080
 # Override the auto-generated domain prefix
 muveectl tunnel 3000 --domain t-my-demo
 
+# Use a project-scoped tunnel (domain_only project, persistent domain)
+muveectl tunnel 8080 --project my-api
+
 # Disable ForwardAuth (make the tunnel publicly accessible)
 muveectl tunnel 8080 --no-auth
 ```
 
 The tunnel stays open until you press Ctrl+C. All HTTP traffic to the generated `t-*.BASE_DOMAIN` URL is forwarded through a WebSocket connection to your local machine. By default, ForwardAuth is enabled — only authenticated users can access the tunnel. Pass `--no-auth` to make it publicly accessible.
+
+**Ephemeral vs project-scoped tunnels:**
+- `--domain t-*` (default): ephemeral domain, goes away when the tunnel disconnects.
+- `--project <name>`: uses the `domain_prefix` of a `domain_only` project. The domain reservation persists even when no tunnel is connected (visitors see a friendly offline page). Traffic is logged in the project's traffic panel on the hub dashboard.
 
 **How the domain is generated:** SHA-256 of `cwd + port` selects an adjective-noun pair from a built-in word list, producing names like `t-bold-fox`, `t-calm-owl`, `t-keen-elk`. The same directory + port always produces the same name.
 
@@ -376,3 +383,4 @@ The tunnel stays open until you press Ctrl+C. All HTTP traffic to the generated 
 3. Check deployment status: `muveectl projects deployments PROJECT_ID`
 4. Forward to local port: `muveectl projects port-forward PROJECT_ID --port 3000`
 5. Publish a local dev server: `muveectl tunnel 8080`
+6. Use a project-bound tunnel: `muveectl tunnel 8080 --project my-api`

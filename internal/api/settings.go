@@ -6,7 +6,7 @@ import (
 )
 
 // publicSettingsKeys are safe to expose to unauthenticated callers.
-var publicSettingsKeys = []string{"onboarded", "site_name", "logo_url", "favicon_url"}
+var publicSettingsKeys = []string{"onboarded", "site_name", "logo_url", "favicon_url", "require_authorization"}
 
 // handleGetPublicSettings returns branding and onboarding-state settings
 // that the frontend needs before the user is authenticated.
@@ -44,10 +44,11 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 
 	// Allowed keys (extend as needed)
 	allowed := map[string]bool{
-		"onboarded":   true,
-		"site_name":   true,
-		"logo_url":    true,
-		"favicon_url": true,
+		"onboarded":             true,
+		"site_name":             true,
+		"logo_url":              true,
+		"favicon_url":           true,
+		"require_authorization": true,
 	}
 
 	ctx := r.Context()
@@ -58,6 +59,10 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		if err := s.store.SetSetting(ctx, k, v); err != nil {
 			jsonErr(w, err, http.StatusInternalServerError)
 			return
+		}
+		// When disabling require_authorization, clear all pending requests.
+		if k == "require_authorization" && v != "true" {
+			_ = s.store.ClearPendingAuthorizationRequests(ctx)
 		}
 	}
 

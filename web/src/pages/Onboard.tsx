@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { CheckCircle, XCircle, AlertCircle, Loader, ChevronRight, RefreshCw, Server, Globe, HardDrive, Cpu, Copy, Check, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import { useSettings } from '../lib/settings'
 import type { HealthCheck, HealthReport, Node } from '../lib/types'
 
@@ -18,7 +19,7 @@ function StepBar({ current, total }: { current: number; total: number }) {
           height: '3px',
           flex: 1,
           borderRadius: '2px',
-          background: i < current ? 'var(--accent)' : i === current ? 'var(--accent)' : 'var(--bg-hover)',
+          background: i <= current ? 'var(--accent)' : 'var(--bg-hover)',
           opacity: i <= current ? 1 : 0.35,
           transition: 'all 300ms',
         }} />
@@ -34,24 +35,24 @@ function HintBlock({ hint }: { hint: string }) {
   const { t } = useTranslation()
   return (
     <div style={{
-      marginTop: '6px', padding: '8px 10px', borderRadius: '4px',
+      marginTop: '6px', padding: '8px 10px', borderRadius: '6px',
       background: 'var(--bg-hover)', border: '1px solid var(--border)',
       position: 'relative',
     }}>
-      <div style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', marginBottom: '4px', fontWeight: 600 }}>
+      <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginBottom: '4px', fontWeight: 600 }}>
         {t('health.fixCommand', 'Fix command')}
       </div>
       <pre style={{
-        fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-primary)',
+        fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-primary)',
         margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5,
       }}>{hint}</pre>
       <button
         onClick={() => { navigator.clipboard.writeText(hint); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
+        className="btn-secondary"
         style={{
           position: 'absolute', top: '6px', right: '6px',
-          background: 'none', border: '1px solid var(--border)', borderRadius: '4px',
-          padding: '3px 6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
-          fontFamily: MONO, fontSize: '0.58rem', color: 'var(--fg-muted)',
+          padding: '3px 6px', display: 'flex', alignItems: 'center', gap: '4px',
+          fontSize: '0.75rem',
         }}
       >
         {copied ? <Check size={10} /> : <Copy size={10} />}
@@ -64,25 +65,23 @@ function HintBlock({ hint }: { hint: string }) {
 function HealthItem({ check }: { check: HealthCheck }) {
   const { t } = useTranslation()
   const icon = check.status === 'ok'
-    ? <CheckCircle size={16} color="#3fb950" />
+    ? <CheckCircle size={16} color="var(--success)" />
     : check.status === 'warning'
-    ? <AlertCircle size={16} color="#d29922" />
+    ? <AlertCircle size={16} color="var(--warning)" />
     : <XCircle size={16} color="var(--danger)" />
 
   return (
-    <div style={{
+    <div className="card" style={{
       display: 'flex', alignItems: 'flex-start', gap: '10px',
       padding: '10px 12px',
-      borderRadius: '6px',
-      background: 'var(--bg-card)',
-      border: `1px solid ${check.status === 'ok' ? 'rgba(63,185,80,0.25)' : check.status === 'warning' ? 'rgba(210,153,34,0.25)' : 'rgba(248,81,73,0.25)'}`,
+      borderColor: check.status === 'ok' ? 'rgba(22,163,74,0.25)' : check.status === 'warning' ? 'rgba(217,119,6,0.25)' : 'rgba(220,38,38,0.25)',
     }}>
       <div style={{ marginTop: '1px', flexShrink: 0 }}>{icon}</div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontFamily: MONO, fontSize: '0.75rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '2px' }}>
+        <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '2px' }}>
           {t(`onboard.checks.${check.name}`, check.name)}
         </div>
-        <div style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>
+        <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
           {check.message}
         </div>
         {check.hint && check.status !== 'ok' && <HintBlock hint={check.hint} />}
@@ -105,18 +104,16 @@ function AgentRow({ node }: { node: Node }) {
   })()
 
   return (
-    <div style={{
+    <div className="card" style={{
       padding: '12px 14px',
-      borderRadius: '6px',
-      background: 'var(--bg-card)',
-      border: `1px solid ${online ? 'rgba(63,185,80,0.3)' : 'var(--border)'}`,
+      borderColor: online ? 'rgba(22,163,74,0.3)' : 'var(--border)',
       marginBottom: '8px',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <div style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, background: online ? '#3fb950' : 'var(--fg-muted)' }} className={online ? 'status-running' : ''} />
-        <div style={{ fontFamily: MONO, fontSize: '0.8rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{node.hostname}</div>
-        <span style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', padding: '1px 6px', borderRadius: '3px', background: 'var(--bg-hover)' }}>{node.role}</span>
-        <span style={{ fontFamily: MONO, fontSize: '0.65rem', marginLeft: 'auto', color: online ? '#3fb950' : 'var(--fg-muted)' }}>
+        <div style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, background: online ? 'var(--success)' : 'var(--fg-muted)' }} className={online ? 'status-running' : ''} />
+        <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{node.hostname}</div>
+        <span style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', padding: '1px 8px', borderRadius: '6px', background: 'var(--bg-hover)' }}>{node.role}</span>
+        <span style={{ fontSize: '0.8125rem', marginLeft: 'auto', color: online ? 'var(--success)' : 'var(--fg-muted)' }}>
           {online ? '● online' : '○ offline'}
         </span>
       </div>
@@ -124,10 +121,10 @@ function AgentRow({ node }: { node: Node }) {
         <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
           {healthChecks.map(c => (
             <span key={c.name} title={c.hint ? `${c.message}\n\nFix: ${c.hint}` : c.message} style={{
-              fontFamily: MONO, fontSize: '0.62rem', padding: '2px 7px', borderRadius: '3px',
-              background: c.status === 'ok' ? 'rgba(63,185,80,0.12)' : c.status === 'warning' ? 'rgba(210,153,34,0.12)' : 'rgba(248,81,73,0.12)',
-              color: c.status === 'ok' ? '#3fb950' : c.status === 'warning' ? '#d29922' : 'var(--danger)',
-              border: `1px solid ${c.status === 'ok' ? 'rgba(63,185,80,0.3)' : c.status === 'warning' ? 'rgba(210,153,34,0.3)' : 'rgba(248,81,73,0.3)'}`,
+              fontSize: '0.75rem', padding: '2px 7px', borderRadius: '6px',
+              background: c.status === 'ok' ? 'rgba(22,163,74,0.12)' : c.status === 'warning' ? 'rgba(217,119,6,0.12)' : 'rgba(220,38,38,0.12)',
+              color: c.status === 'ok' ? 'var(--success)' : c.status === 'warning' ? 'var(--warning)' : 'var(--danger)',
+              border: `1px solid ${c.status === 'ok' ? 'rgba(22,163,74,0.3)' : c.status === 'warning' ? 'rgba(217,119,6,0.3)' : 'rgba(220,38,38,0.3)'}`,
               cursor: 'help',
             }}>
               {c.name}
@@ -146,8 +143,16 @@ const TOTAL_STEPS = 4
 export default function OnboardPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const { refetch: refetchSettings } = useSettings()
   const [step, setStep] = useState(0)
+
+  // Only admins can access the onboard flow
+  useEffect(() => {
+    if (user && user.role !== 'admin') {
+      navigate('/projects', { replace: true })
+    }
+  }, [user, navigate])
 
   // Step 1 – Branding
   const [siteName, setSiteName] = useState('')
@@ -231,20 +236,14 @@ export default function OnboardPage() {
 
   const field = (label: string, value: string, onChange: (v: string) => void, placeholder?: string) => (
     <div style={{ marginBottom: '16px' }}>
-      <label style={{ display: 'block', fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.06em', marginBottom: '6px' }}>
+      <label className="form-label">
         {label}
       </label>
       <input
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        style={{
-          width: '100%', padding: '8px 10px',
-          background: 'var(--bg-base)', border: '1px solid var(--border)',
-          borderRadius: '6px', color: 'var(--fg-primary)',
-          fontFamily: MONO, fontSize: '0.85rem',
-          outline: 'none', boxSizing: 'border-box',
-        }}
+        className="form-input"
       />
     </div>
   )
@@ -262,7 +261,7 @@ export default function OnboardPage() {
     }
     return (
       <div style={{ marginBottom: '16px' }}>
-        <label style={{ display: 'block', fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.06em', marginBottom: '6px' }}>
+        <label className="form-label">
           {label}
         </label>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -270,23 +269,17 @@ export default function OnboardPage() {
             value={value}
             onChange={e => onChange(e.target.value)}
             placeholder={placeholder}
-            style={{
-              flex: 1, padding: '8px 10px',
-              background: 'var(--bg-base)', border: '1px solid var(--border)',
-              borderRadius: '6px', color: 'var(--fg-primary)',
-              fontFamily: MONO, fontSize: '0.85rem',
-              outline: 'none', boxSizing: 'border-box',
-            }}
+            className="form-input"
+            style={{ flex: 1 }}
           />
           <button
             onClick={() => inputRef.current?.click()}
             disabled={uploading}
+            className="btn-secondary"
             style={{
               display: 'flex', alignItems: 'center', gap: '4px',
-              padding: '8px 12px', background: 'var(--bg-hover)',
-              border: '1px solid var(--border)', borderRadius: '6px',
-              fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)',
-              cursor: uploading ? 'default' : 'pointer', flexShrink: 0,
+              padding: '8px 12px', flexShrink: 0,
+              cursor: uploading ? 'default' : 'pointer',
             }}
           >
             {uploading ? <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Upload size={12} />}
@@ -307,7 +300,7 @@ export default function OnboardPage() {
         {value && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
             <img src={value} alt="" style={{ width: '32px', height: '32px', borderRadius: '6px', objectFit: 'contain', border: '1px solid var(--border)' }} />
-            <span style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>{t('onboard.branding.logoPreview')}</span>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>{t('onboard.branding.logoPreview')}</span>
           </div>
         )}
       </div>
@@ -318,15 +311,11 @@ export default function OnboardPage() {
     <button
       onClick={onClick}
       disabled={disabled || loading}
+      className="btn-primary"
       style={{
         display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '9px 20px',
-        background: disabled ? 'var(--bg-hover)' : 'var(--accent)',
-        color: disabled ? 'var(--fg-muted)' : '#fff',
-        border: 'none', borderRadius: '6px',
-        fontFamily: MONO, fontSize: '0.85rem', fontWeight: 600,
         cursor: disabled ? 'default' : 'pointer',
-        transition: 'opacity 150ms',
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       {loading && <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />}
@@ -350,10 +339,10 @@ export default function OnboardPage() {
       <div style={{ width: '100%', maxWidth: '580px' }}>
         {/* Header */}
         <div style={{ marginBottom: '32px' }}>
-          <div style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.1em', marginBottom: '8px' }}>
+          <div className="page-subtitle" style={{ marginBottom: '8px' }}>
             {t('onboard.stepLabel', { current: step + 1, total: TOTAL_STEPS })}
           </div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2 }}>
+          <h1 className="page-title">
             {t(`onboard.steps.${step}.title`)}
           </h1>
           <p style={{ marginTop: '6px', color: 'var(--fg-muted)', fontSize: '0.9rem', lineHeight: 1.55 }}>
@@ -374,7 +363,7 @@ export default function OnboardPage() {
               {btn(t('onboard.branding.save'), saveBranding, brandingSaving, brandingSaving)}
               <button
                 onClick={() => setStep(1)}
-                style={{ background: 'none', border: 'none', color: 'var(--fg-muted)', fontFamily: MONO, fontSize: '0.8rem', cursor: 'pointer', padding: '4px' }}
+                className="btn-secondary"
               >
                 {t('onboard.skip')}
               </button>
@@ -389,12 +378,9 @@ export default function OnboardPage() {
               <button
                 onClick={runHealthChecks}
                 disabled={healthLoading}
+                className="btn-secondary"
                 style={{
                   display: 'flex', alignItems: 'center', gap: '5px',
-                  background: 'none', border: '1px solid var(--border)',
-                  borderRadius: '6px', padding: '5px 12px',
-                  fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)',
-                  cursor: 'pointer',
                 }}
               >
                 <RefreshCw size={12} style={{ animation: healthLoading ? 'spin 1s linear infinite' : 'none' }} />
@@ -403,7 +389,7 @@ export default function OnboardPage() {
             </div>
 
             {healthLoading && !healthReport && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '20px 0', color: 'var(--fg-muted)', fontFamily: MONO, fontSize: '0.8rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '20px 0', color: 'var(--fg-muted)', fontSize: '0.875rem' }}>
                 <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
                 {t('onboard.health.running')}
               </div>
@@ -412,22 +398,21 @@ export default function OnboardPage() {
             {healthReport && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '24px' }}>
                 {healthReport.checks.map(c => (
-                  <div key={c.name} style={{
+                  <div key={c.name} className="card" style={{
                     display: 'flex', alignItems: 'flex-start', gap: '10px',
-                    padding: '10px 12px', borderRadius: '6px',
-                    background: 'var(--bg-card)',
-                    border: `1px solid ${c.status === 'ok' ? 'rgba(63,185,80,0.2)' : c.status === 'warning' ? 'rgba(210,153,34,0.2)' : 'rgba(248,81,73,0.2)'}`,
+                    padding: '10px 12px',
+                    borderColor: c.status === 'ok' ? 'rgba(22,163,74,0.2)' : c.status === 'warning' ? 'rgba(217,119,6,0.2)' : 'rgba(220,38,38,0.2)',
                   }}>
-                    <div style={{ marginTop: '1px', flexShrink: 0, color: c.status === 'ok' ? '#3fb950' : c.status === 'warning' ? '#d29922' : 'var(--danger)' }}>
+                    <div style={{ marginTop: '1px', flexShrink: 0, color: c.status === 'ok' ? 'var(--success)' : c.status === 'warning' ? 'var(--warning)' : 'var(--danger)' }}>
                       {c.status === 'ok' ? <CheckCircle size={15} /> : c.status === 'warning' ? <AlertCircle size={15} /> : <XCircle size={15} />}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1 }}>
                       <span style={{ color: 'var(--fg-muted)', flexShrink: 0 }}>{iconForCheck(c.name)}</span>
                       <div>
-                        <div style={{ fontFamily: MONO, fontSize: '0.73rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
+                        <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
                           {t(`onboard.checks.${c.name}`, { defaultValue: c.name })}
                         </div>
-                        <div style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', marginTop: '2px' }}>{c.message}</div>
+                        <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '2px' }}>{c.message}</div>
                       </div>
                     </div>
                   </div>
@@ -436,10 +421,10 @@ export default function OnboardPage() {
             )}
 
             {healthReport && !healthOK && (
-              <div style={{
-                padding: '10px 14px', borderRadius: '6px',
-                background: 'rgba(248,81,73,0.08)', border: '1px solid rgba(248,81,73,0.3)',
-                fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)',
+              <div className="card" style={{
+                padding: '10px 14px',
+                background: 'rgba(220,38,38,0.08)', borderColor: 'rgba(220,38,38,0.3)',
+                fontSize: '0.875rem', color: 'var(--fg-muted)',
                 marginBottom: '20px',
               }}>
                 {t('onboard.health.hasErrors')}
@@ -449,7 +434,7 @@ export default function OnboardPage() {
             <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
               {btn(t('onboard.next'), () => setStep(2), false, false)}
               {step > 0 && (
-                <button onClick={() => setStep(s => s - 1)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '6px', padding: '9px 16px', fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)', cursor: 'pointer' }}>
+                <button onClick={() => setStep(s => s - 1)} className="btn-secondary" style={{ padding: '9px 16px' }}>
                   {t('onboard.back')}
                 </button>
               )}
@@ -461,52 +446,52 @@ export default function OnboardPage() {
         {step === 2 && (
           <div className="page-enter">
             {/* Instructions card */}
-            <div style={{ padding: '16px', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border)', marginBottom: '20px', fontFamily: MONO, fontSize: '0.78rem', lineHeight: 1.6 }}>
-              <div style={{ color: 'var(--fg-muted)', marginBottom: '10px', fontSize: '0.68rem', letterSpacing: '0.06em' }}>
+            <div className="card" style={{ padding: '16px', marginBottom: '20px', fontSize: '0.875rem', lineHeight: 1.6 }}>
+              <div style={{ color: 'var(--fg-muted)', marginBottom: '10px', fontSize: '0.8125rem', letterSpacing: '0.06em' }}>
                 {t('onboard.agents.instructions')}
               </div>
               <div style={{ color: 'var(--fg-primary)', fontWeight: 600, marginBottom: '6px' }}>1. {t('onboard.agents.step1')}</div>
-              <pre style={{ background: 'var(--bg-base)', padding: '8px 12px', borderRadius: '4px', fontSize: '0.72rem', overflowX: 'auto', color: 'var(--fg-primary)', margin: '0 0 12px' }}>
+              <pre style={{ fontFamily: MONO, background: 'var(--bg-base)', padding: '8px 12px', borderRadius: '6px', fontSize: '0.8125rem', overflowX: 'auto', color: 'var(--fg-primary)', margin: '0 0 12px' }}>
                 {`NODE_ROLE=builder CONTROL_PLANE_URL=<server_url> \\\n  AGENT_SECRET=<agent_secret> \\\n  ./muvee agent`}
               </pre>
               <div style={{ color: 'var(--fg-primary)', fontWeight: 600, marginBottom: '6px' }}>2. {t('onboard.agents.step2')}</div>
-              <pre style={{ background: 'var(--bg-base)', padding: '8px 12px', borderRadius: '4px', fontSize: '0.72rem', overflowX: 'auto', color: 'var(--fg-primary)', margin: '0 0 4px' }}>
+              <pre style={{ fontFamily: MONO, background: 'var(--bg-base)', padding: '8px 12px', borderRadius: '6px', fontSize: '0.8125rem', overflowX: 'auto', color: 'var(--fg-primary)', margin: '0 0 4px' }}>
                 {`NODE_ROLE=deploy CONTROL_PLANE_URL=<server_url> \\\n  AGENT_SECRET=<agent_secret> \\\n  ./muvee agent`}
               </pre>
             </div>
 
             {/* Status */}
             <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-              <div style={{
-                flex: 1, padding: '10px 14px', borderRadius: '6px',
-                background: onlineBuilders.length > 0 ? 'rgba(63,185,80,0.08)' : 'var(--bg-card)',
-                border: `1px solid ${onlineBuilders.length > 0 ? 'rgba(63,185,80,0.3)' : 'var(--border)'}`,
+              <div className="card" style={{
+                flex: 1, padding: '10px 14px',
+                background: onlineBuilders.length > 0 ? 'rgba(22,163,74,0.08)' : 'var(--bg-card)',
+                borderColor: onlineBuilders.length > 0 ? 'rgba(22,163,74,0.3)' : 'var(--border)',
                 display: 'flex', alignItems: 'center', gap: '8px',
               }}>
                 {onlineBuilders.length > 0
-                  ? <CheckCircle size={15} color="#3fb950" />
+                  ? <CheckCircle size={15} color="var(--success)" />
                   : <div style={{ width: '15px', height: '15px', borderRadius: '50%', border: '2px solid var(--fg-muted)', animation: 'spin 2s linear infinite' }} />
                 }
                 <div>
-                  <div style={{ fontFamily: MONO, fontSize: '0.72rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{t('onboard.agents.builder')}</div>
-                  <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                  <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{t('onboard.agents.builder')}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
                     {onlineBuilders.length > 0 ? `${onlineBuilders.length} online` : t('onboard.agents.waiting')}
                   </div>
                 </div>
               </div>
-              <div style={{
-                flex: 1, padding: '10px 14px', borderRadius: '6px',
-                background: onlineDeployers.length > 0 ? 'rgba(63,185,80,0.08)' : 'var(--bg-card)',
-                border: `1px solid ${onlineDeployers.length > 0 ? 'rgba(63,185,80,0.3)' : 'var(--border)'}`,
+              <div className="card" style={{
+                flex: 1, padding: '10px 14px',
+                background: onlineDeployers.length > 0 ? 'rgba(22,163,74,0.08)' : 'var(--bg-card)',
+                borderColor: onlineDeployers.length > 0 ? 'rgba(22,163,74,0.3)' : 'var(--border)',
                 display: 'flex', alignItems: 'center', gap: '8px',
               }}>
                 {onlineDeployers.length > 0
-                  ? <CheckCircle size={15} color="#3fb950" />
+                  ? <CheckCircle size={15} color="var(--success)" />
                   : <div style={{ width: '15px', height: '15px', borderRadius: '50%', border: '2px solid var(--fg-muted)', animation: 'spin 2s linear infinite' }} />
                 }
                 <div>
-                  <div style={{ fontFamily: MONO, fontSize: '0.72rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{t('onboard.agents.deployer')}</div>
-                  <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                  <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{t('onboard.agents.deployer')}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
                     {onlineDeployers.length > 0 ? `${onlineDeployers.length} online` : t('onboard.agents.waiting')}
                   </div>
                 </div>
@@ -516,7 +501,7 @@ export default function OnboardPage() {
             {/* Node list */}
             {nodes.length > 0 && (
               <div style={{ marginBottom: '20px' }}>
-                <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.06em', marginBottom: '8px' }}>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', letterSpacing: '0.06em', marginBottom: '8px' }}>
                   {t('onboard.agents.registered')}
                 </div>
                 {nodes.map(n => <AgentRow key={n.id} node={n} />)}
@@ -530,11 +515,11 @@ export default function OnboardPage() {
                 false,
                 nodesLoading,
               )}
-              <button onClick={() => setStep(s => s - 1)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: '6px', padding: '9px 16px', fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)', cursor: 'pointer' }}>
+              <button onClick={() => setStep(s => s - 1)} className="btn-secondary" style={{ padding: '9px 16px' }}>
                 {t('onboard.back')}
               </button>
               {!agentsReady && (
-                <span style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                   {t('onboard.agents.orSkip')}
                 </span>
               )}
@@ -545,16 +530,16 @@ export default function OnboardPage() {
         {/* ── Step 3: Done ─────────────────────────────────────────────────── */}
         {step === 3 && (
           <div className="page-enter">
-            <div style={{
-              padding: '24px', borderRadius: '8px',
-              background: 'rgba(63,185,80,0.06)', border: '1px solid rgba(63,185,80,0.3)',
+            <div className="card" style={{
+              padding: '24px',
+              background: 'rgba(22,163,74,0.06)', borderColor: 'rgba(22,163,74,0.3)',
               marginBottom: '28px', textAlign: 'center',
             }}>
-              <CheckCircle size={40} color="#3fb950" style={{ marginBottom: '12px' }} />
+              <CheckCircle size={40} color="var(--success)" style={{ marginBottom: '12px' }} />
               <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '6px' }}>
                 {t('onboard.done.heading')}
               </div>
-              <div style={{ color: 'var(--fg-muted)', fontSize: '0.85rem' }}>
+              <div style={{ color: 'var(--fg-muted)', fontSize: '0.875rem' }}>
                 {t('onboard.done.desc')}
               </div>
             </div>
@@ -566,8 +551,8 @@ export default function OnboardPage() {
                 t('onboard.done.feat3'),
               ].map((f, i) => (
                 <div key={i} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-                  <CheckCircle size={14} color="#3fb950" style={{ marginTop: '2px', flexShrink: 0 }} />
-                  <span style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>{f}</span>
+                  <CheckCircle size={14} color="var(--success)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                  <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>{f}</span>
                 </div>
               ))}
             </div>

@@ -4,7 +4,18 @@
     "copy": "Copy",
     "copied": "Copied"
   },
+  "portal": {
+    "heading": "Welcome to {{name}}",
+    "subtitle": "Browse available services below.",
+    "searchPlaceholder": "Search services...",
+    "allTags": "All",
+    "noResults": "No services match your search.",
+    "empty": "No services available",
+    "emptyHint": "There are no public services running at the moment.",
+    "loginRequired": "Login required"
+  },
   "nav": {
+    "portal": "Home",
     "projects": "Projects",
     "datasets": "Datasets",
     "secrets": "Secrets",
@@ -58,7 +69,8 @@
       "deploying": "deploying",
       "failed": "failed",
       "stopped": "stopped",
-      "pending": "idle"
+      "pending": "idle",
+      "tunnel": "tunnel"
     }
   },
   "projectDetail": {
@@ -73,8 +85,10 @@
       "secrets": "Secrets",
       "workspace": "Workspace",
       "repository": "Repository",
-      "tokens": "Tokens"
+      "tokens": "Tokens",
+      "traffic": "Traffic"
     },
+    "tunnelHint": "This is a tunnel project. Start the tunnel with: muveectl tunnel --project {{name}} <PORT>",
     "pushUrl": "GIT PUSH URL",
     "pushUrlHint": "Use any username and your API token as the password.",
     "repo": {
@@ -90,6 +104,12 @@
       "gitUrl": "Git URL",
       "gitBranch": "Git Branch",
       "domainPrefix": "DOMAIN PREFIX",
+      "description": "Description",
+      "tags": "Tags",
+      "tagsHint": "Comma-separated tags, e.g. internal,docs,tools",
+      "icon": "Icon",
+      "iconPlaceholder": "Paste SVG code or enter an image URL",
+      "iconHint": "Paste inline SVG code or an image URL (https://...). Used as the app icon in the service portal.",
       "dockerfilePath": "Dockerfile Path",
       "memoryLimit": "Memory Limit",
       "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g",
@@ -206,15 +226,29 @@
     "heading": "Create Project",
     "fields": {
       "name": "Name",
+      "projectType": "Project Type",
       "gitSource": "Repository Source",
       "gitUrl": "Git URL",
       "gitBranch": "Git Branch",
       "domainPrefix": "DOMAIN PREFIX",
+      "description": "Description",
+      "descriptionPlaceholder": "A short description of this service",
+      "tags": "Tags",
+      "tagsPlaceholder": "e.g. internal,docs,tools",
+      "tagsHint": "Comma-separated tags for categorizing the service.",
+      "icon": "Icon",
+      "iconPlaceholder": "Paste SVG code or enter an image URL",
+      "iconHint": "Paste inline SVG code or an image URL. Used as the app icon in the service portal.",
       "dockerfilePath": "Dockerfile Path",
       "memoryLimit": "Memory Limit",
       "memoryLimitHint": "Container memory cap, leave empty for no limit. E.g. 512m, 2g, 8g",
       "volumeMountPath": "Persistent Storage Path",
       "volumeMountPathHint": "Container-internal mount path (e.g. /workspace). Leave empty to disable."
+    },
+    "projectType": {
+      "deployment": "Container Deployment",
+      "tunnel": "Tunnel (Domain Only)",
+      "tunnelHint": "Reserve a domain prefix for tunnel access. No git repo or container — traffic is forwarded from your local machine via muveectl tunnel."
     },
     "gitSource": {
       "external": "External Repo",
@@ -230,6 +264,7 @@
     },
     "domainOptional": "Optional — defaults to \"{{name}}\" if left blank",
     "domainRequired": "Required — project name cannot be used as a subdomain",
+    "domainTunnelHint": "Required — this prefix will be your tunnel's subdomain",
     "privateRepo": {
       "configured": "Private repository — credential configured",
       "configure": "Private repository? Configure credentials",
@@ -346,11 +381,19 @@
     "ago": "ago",
     "noActive": "No active tunnels. Use muveectl tunnel <PORT> to create one.",
     "noHistory": "No tunnel history yet.",
+    "project": "project",
+    "ephemeral": "ephemeral",
     "colDomain": "DOMAIN",
     "colUser": "USER",
     "colAuth": "AUTH",
     "colDuration": "DURATION",
     "colWhen": "WHEN"
+  },
+  "authorization": {
+    "pendingBanner": "Your request to publish services is pending approval.",
+    "requiredBanner": "You need authorization to publish services.",
+    "requestAccess": "Request Publishing Access",
+    "requesting": "Requesting..."
   },
   "users": {
     "sectionLabel": "ACCESS CONTROL",
@@ -359,10 +402,16 @@
       "user": "USER",
       "email": "EMAIL",
       "role": "ROLE",
+      "authorized": "AUTHORIZED",
       "joined": "JOINED"
     },
     "makeAdmin": "Make Admin",
-    "makeMember": "Make Member"
+    "makeMember": "Make Member",
+    "authorized": "Authorized",
+    "unauthorized": "Unauthorized",
+    "pendingRequests": "Pending Authorization Requests ({{count}})",
+    "approve": "Approve",
+    "reject": "Reject"
   },
   "onboard": {
     "stepLabel": "Step {{current}} of {{total}}",
@@ -449,6 +498,12 @@
       "save": "Save Changes",
       "saving": "Saving...",
       "saved": "Saved!"
+    },
+    "authorization": {
+      "title": "Authorization",
+      "description": "Control whether users need admin approval before they can publish services. When disabled, all authenticated users can publish freely.",
+      "requireLabel": "Require authorization for publishing services",
+      "enabledHint": "New users will only be able to browse services until an admin approves their publishing request."
     },
     "health": {
       "title": "System Health",

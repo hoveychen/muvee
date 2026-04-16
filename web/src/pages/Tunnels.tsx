@@ -54,19 +54,18 @@ export default function TunnelsPage() {
 
   return (
     <div className="page-enter">
-      <div className="mb-8 flex items-center justify-between">
+      <div className="page-header flex items-center justify-between">
         <div>
-          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.05em' }}>
+          <p className="page-subtitle">
             {t('tunnels.sectionLabel')}
           </p>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>
+          <h1 className="page-title">
             {t('tunnels.heading')}
           </h1>
         </div>
         <button
           onClick={refresh}
-          className="btn-secondary"
-          style={{ fontFamily: MONO, fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+          className="btn-secondary flex items-center gap-1.5"
         >
           <RefreshCw size={12} />
           {t('tunnels.refresh')}
@@ -74,10 +73,10 @@ export default function TunnelsPage() {
       </div>
 
       {/* Active Tunnels */}
-      <h2 style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '8px' }}>
+      <h2 style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '8px' }}>
         {t('tunnels.activeTitle')} ({active.length})
       </h2>
-      <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', marginBottom: '32px' }}>
+      <div className="table-container" style={{ marginBottom: '32px' }}>
         {active.map((tun, i) => (
           <div
             key={tun.domain}
@@ -89,29 +88,24 @@ export default function TunnelsPage() {
           >
             <div className="flex items-center gap-3">
               <div
-                style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3fb950', flexShrink: 0 }}
+                style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }}
                 className="status-running"
               />
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
+                  <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
                     {tun.domain}.{baseDomain}
                   </span>
-                  <span
-                    style={{
-                      fontSize: '0.65rem',
-                      fontFamily: MONO,
-                      padding: '1px 7px',
-                      borderRadius: '2em',
-                      background: tun.auth_required ? 'rgba(88,166,255,0.1)' : 'rgba(63,185,80,0.1)',
-                      color: tun.auth_required ? 'var(--accent)' : '#3fb950',
-                      border: `1px solid ${tun.auth_required ? 'rgba(88,166,255,0.4)' : 'rgba(63,185,80,0.4)'}`,
-                    }}
-                  >
+                  <span className={`badge ${tun.auth_required ? 'badge-info' : 'badge-success'}`}>
                     {tun.auth_required ? t('tunnels.auth') : t('tunnels.public')}
                   </span>
+                  {tun.project_name ? (
+                    <span className="badge badge-info">{t('tunnels.project')}: {tun.project_name}</span>
+                  ) : (
+                    <span className="badge badge-neutral">{t('tunnels.ephemeral')}</span>
+                  )}
                 </div>
-                <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
                   {tun.user_email} · {t('tunnels.upFor')} {duration(tun.connected_at, null)}
                 </div>
               </div>
@@ -121,7 +115,7 @@ export default function TunnelsPage() {
         {active.length === 0 && !loading && (
           <div
             className="py-10 text-center"
-            style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem', background: 'var(--bg-card)' }}
+            style={{ color: 'var(--fg-muted)', fontSize: '0.875rem', background: 'var(--bg-card)' }}
           >
             {t('tunnels.noActive')}
           </div>
@@ -129,24 +123,23 @@ export default function TunnelsPage() {
       </div>
 
       {/* History */}
-      <h2 style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '8px' }}>
+      <h2 style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '8px' }}>
         {t('tunnels.historyTitle')}
       </h2>
-      <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+      <div className="table-container">
         {/* Header */}
         <div
           style={{
             display: 'grid',
             gridTemplateColumns: '2fr 2fr 80px 100px 80px',
             gap: '8px',
-            padding: '8px 1.25rem',
-            background: 'var(--bg-card)',
+            padding: '10px 1.25rem',
             borderBottom: '1px solid var(--border)',
-            fontFamily: MONO,
-            fontSize: '0.65rem',
+            fontSize: '0.75rem',
             color: 'var(--fg-muted)',
             letterSpacing: '0.04em',
             fontWeight: 600,
+            textTransform: 'uppercase',
           }}
         >
           <span>{t('tunnels.colDomain')}</span>
@@ -164,39 +157,29 @@ export default function TunnelsPage() {
                 display: 'grid',
                 gridTemplateColumns: '2fr 2fr 80px 100px 80px',
                 gap: '8px',
-                padding: '8px 1.25rem',
+                padding: '10px 1.25rem',
                 background: 'var(--bg-card)',
                 borderBottom: i < history.length - 1 ? '1px solid var(--border)' : 'none',
-                fontFamily: MONO,
-                fontSize: '0.75rem',
+                fontSize: '0.875rem',
                 color: 'var(--fg-primary)',
               }}
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 {isActive && (
                   <span
-                    style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#3fb950', flexShrink: 0 }}
+                    style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }}
                     className="status-running"
                   />
                 )}
-                {h.domain}
+                <span style={{ fontFamily: MONO }}>{h.domain}</span>
               </span>
               <span style={{ color: 'var(--fg-muted)' }}>{h.user_email}</span>
               <span>
-                <span
-                  style={{
-                    fontSize: '0.6rem',
-                    padding: '1px 6px',
-                    borderRadius: '2em',
-                    background: h.auth_required ? 'rgba(88,166,255,0.1)' : 'rgba(63,185,80,0.1)',
-                    color: h.auth_required ? 'var(--accent)' : '#3fb950',
-                    border: `1px solid ${h.auth_required ? 'rgba(88,166,255,0.4)' : 'rgba(63,185,80,0.4)'}`,
-                  }}
-                >
+                <span className={`badge ${h.auth_required ? 'badge-info' : 'badge-success'}`}>
                   {h.auth_required ? t('tunnels.auth') : t('tunnels.public')}
                 </span>
               </span>
-              <span style={{ color: 'var(--fg-muted)' }}>
+              <span style={{ color: 'var(--fg-muted)', fontFamily: MONO }}>
                 {duration(h.connected_at, h.disconnected_at)}
               </span>
               <span style={{ color: 'var(--fg-muted)' }}>
@@ -208,7 +191,7 @@ export default function TunnelsPage() {
         {history.length === 0 && !loading && (
           <div
             className="py-10 text-center"
-            style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem', background: 'var(--bg-card)' }}
+            style={{ color: 'var(--fg-muted)', fontSize: '0.875rem', background: 'var(--bg-card)' }}
           >
             {t('tunnels.noHistory')}
           </div>

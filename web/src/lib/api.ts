@@ -117,6 +117,11 @@ export const api = {
     setRole: (id: string, role: string) => request(`/api/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) }),
   },
 
+  authorization: {
+    status: () => request<import('./types').AuthorizationStatus>('/api/authorization/status'),
+    request: () => request<import('./types').AuthorizationRequest>('/api/authorization/request', { method: 'POST' }),
+  },
+
   public: {
     settings: () => fetch('/api/public/settings')
       .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText))) as Promise<import('./types').SystemSettings>,
@@ -126,6 +131,9 @@ export const api = {
     getSettings: () => request<import('./types').SystemSettings>('/api/admin/settings'),
     updateSettings: (data: Partial<import('./types').SystemSettings>) =>
       request<import('./types').SystemSettings>('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) }),
+    listAuthorizationRequests: () => request<import('./types').AuthorizationRequest[]>('/api/admin/authorization/requests'),
+    approveAuthorization: (id: string) => request(`/api/admin/authorization/requests/${id}/approve`, { method: 'PUT' }),
+    rejectAuthorization: (id: string) => request(`/api/admin/authorization/requests/${id}/reject`, { method: 'PUT' }),
     health: () => request<import('./types').HealthReport>('/api/admin/health'),
     certs: () => request<import('./types').CertReport>('/api/admin/certs'),
     tunnels: () => request<import('./types').ActiveTunnel[]>('/api/admin/tunnels'),

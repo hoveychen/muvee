@@ -14,12 +14,13 @@ const (
 )
 
 type User struct {
-	ID        uuid.UUID `db:"id"         json:"id"`
-	Email     string    `db:"email"      json:"email"`
-	Name      string    `db:"name"       json:"name"`
-	AvatarURL string    `db:"avatar_url" json:"avatar_url"`
-	Role      UserRole  `db:"role"       json:"role"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	ID         uuid.UUID `db:"id"         json:"id"`
+	Email      string    `db:"email"      json:"email"`
+	Name       string    `db:"name"       json:"name"`
+	AvatarURL  string    `db:"avatar_url" json:"avatar_url"`
+	Role       UserRole  `db:"role"       json:"role"`
+	Authorized bool      `db:"authorized" json:"authorized"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 }
 
 const (
@@ -49,6 +50,9 @@ type Project struct {
 	ContainerPort      int         `db:"container_port"       json:"container_port"`
 	MemoryLimit        string      `db:"memory_limit"         json:"memory_limit"`
 	VolumeMountPath    string      `db:"volume_mount_path"    json:"volume_mount_path"`
+	Description        string      `db:"description"          json:"description"`
+	Icon               string      `db:"icon"                 json:"icon"`
+	Tags               string      `db:"tags"                 json:"tags"`
 	CreatedAt          time.Time   `db:"created_at"           json:"created_at"`
 	UpdatedAt          time.Time   `db:"updated_at"           json:"updated_at"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
@@ -121,6 +125,9 @@ type PublicProjectInfo struct {
 	ID             uuid.UUID `db:"id"              json:"id"`
 	Name           string    `db:"name"            json:"name"`
 	DomainPrefix   string    `db:"domain_prefix"   json:"domain_prefix"`
+	Description    string    `db:"description"     json:"description"`
+	Icon           string    `db:"icon"            json:"icon"`
+	Tags           string    `db:"tags"            json:"tags"`
 	AuthRequired   bool      `db:"auth_required"   json:"auth_required"`
 	OwnerName      string    `db:"owner_name"      json:"owner_name"`
 	OwnerAvatarURL string    `db:"owner_avatar_url" json:"owner_avatar_url"`
@@ -181,6 +188,28 @@ type SystemSetting struct {
 	Key       string    `db:"key"        json:"key"`
 	Value     string    `db:"value"      json:"value"`
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+}
+
+type AuthorizationRequestStatus string
+
+const (
+	AuthRequestPending  AuthorizationRequestStatus = "pending"
+	AuthRequestApproved AuthorizationRequestStatus = "approved"
+	AuthRequestRejected AuthorizationRequestStatus = "rejected"
+)
+
+// AuthorizationRequest tracks a user's request to be authorized on the platform.
+type AuthorizationRequest struct {
+	ID         uuid.UUID                  `db:"id"          json:"id"`
+	UserID     uuid.UUID                  `db:"user_id"     json:"user_id"`
+	Status     AuthorizationRequestStatus `db:"status"      json:"status"`
+	ReviewedBy *uuid.UUID                 `db:"reviewed_by" json:"reviewed_by"`
+	CreatedAt  time.Time                  `db:"created_at"  json:"created_at"`
+	UpdatedAt  time.Time                  `db:"updated_at"  json:"updated_at"`
+	// Joined fields (not always populated)
+	UserName      string `db:"-" json:"user_name,omitempty"`
+	UserEmail     string `db:"-" json:"user_email,omitempty"`
+	UserAvatarURL string `db:"-" json:"user_avatar_url,omitempty"`
 }
 
 type FileEventType string

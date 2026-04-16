@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from './lib/auth'
 import { ThemeProvider } from './lib/theme'
 import { SettingsProvider } from './lib/settings'
 import LoginPage from './pages/Login'
+import PortalPage from './pages/Portal'
 import Projects from './pages/Projects'
 import NewProject from './pages/NewProject'
 import ProjectDetail from './pages/ProjectDetail'
@@ -36,7 +37,7 @@ function RootRedirect() {
       Loading...
     </div>
   )
-  return <Navigate to={user ? '/projects' : '/login'} replace />
+  return <Navigate to={user ? '/portal' : '/login'} replace />
 }
 
 function App() {
@@ -51,6 +52,7 @@ function App() {
           {/* Onboarding – requires auth but bypasses the normal layout */}
           <Route path="/onboard" element={<RequireAuth><OnboardPage /></RequireAuth>} />
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
+            <Route path="/portal" element={<PortalPage />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/new" element={<NewProject />} />
             <Route path="/projects/:id" element={<ProjectDetail />} />

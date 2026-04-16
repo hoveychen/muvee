@@ -87,6 +87,7 @@ interface MockUser {
   name: string
   avatar_url: string
   role: 'admin' | 'member'
+  authorized: boolean
   created_at: string
 }
 
@@ -100,6 +101,9 @@ interface MockProject {
   owner_id: string
   auth_required: boolean
   auth_allowed_domains: string
+  description: string
+  icon: string
+  tags: string
   created_at: string
   updated_at: string
 }
@@ -211,6 +215,7 @@ function buildInitialState() {
     name: 'Admin User',
     avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=admin',
     role: 'admin',
+    authorized: true,
     created_at: SEED_TIME,
   }
 
@@ -222,6 +227,16 @@ function buildInitialState() {
       name: 'Alice Chen',
       avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=alice',
       role: 'member',
+      authorized: false,
+      created_at: SEED_TIME2,
+    },
+    {
+      id: 'user-003',
+      email: 'bob@example.com',
+      name: 'Bob Wang',
+      avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=bob',
+      role: 'member',
+      authorized: true,
       created_at: SEED_TIME2,
     },
   ]
@@ -237,6 +252,9 @@ function buildInitialState() {
       owner_id: 'user-001',
       auth_required: true,
       auth_allowed_domains: 'example.com',
+      description: 'Distributed model training platform with GPU scheduling',
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#7C3AED"/><path d="M20 44V20l12 8-12 8zm14-16l12 8-12 8V28z" fill="#fff" opacity=".9"/></svg>',
+      tags: 'ml,internal,gpu',
       created_at: SEED_TIME,
       updated_at: SEED_TIME2,
     },
@@ -250,6 +268,9 @@ function buildInitialState() {
       owner_id: 'user-001',
       auth_required: false,
       auth_allowed_domains: '',
+      description: 'ETL pipeline for data warehouse ingestion',
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#0891B2"/><circle cx="22" cy="32" r="6" fill="#fff" opacity=".9"/><circle cx="42" cy="32" r="6" fill="#fff" opacity=".9"/><rect x="28" y="30" width="8" height="4" rx="1" fill="#fff" opacity=".7"/></svg>',
+      tags: 'data,etl,api',
       created_at: SEED_TIME2,
       updated_at: SEED_TIME2,
     },
@@ -263,6 +284,41 @@ function buildInitialState() {
       owner_id: 'user-002',
       auth_required: true,
       auth_allowed_domains: 'example.com,corp.example.com',
+      description: 'Real-time model inference API',
+      icon: '',
+      tags: 'ml,api,production',
+      created_at: SEED_TIME2,
+      updated_at: SEED_TIME2,
+    },
+    {
+      id: 'proj-004',
+      name: 'internal-wiki',
+      git_url: 'https://github.com/example/wiki.git',
+      git_branch: 'main',
+      domain_prefix: 'wiki',
+      dockerfile_path: 'Dockerfile',
+      owner_id: 'user-003',
+      auth_required: false,
+      auth_allowed_domains: '',
+      description: 'Team knowledge base and documentation',
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#059669"/><path d="M18 18h20v28H18zm4 4h12m-12 6h12m-12 6h8" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/><path d="M42 22h4v28H26v-4" stroke="#fff" stroke-width="2" opacity=".5"/></svg>',
+      tags: 'docs,internal',
+      created_at: SEED_TIME,
+      updated_at: SEED_TIME2,
+    },
+    {
+      id: 'proj-005',
+      name: 'grafana-dashboards',
+      git_url: 'https://github.com/example/grafana.git',
+      git_branch: 'main',
+      domain_prefix: 'grafana',
+      dockerfile_path: 'Dockerfile',
+      owner_id: 'user-001',
+      auth_required: true,
+      auth_allowed_domains: 'example.com',
+      description: 'Monitoring dashboards and alerting',
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#EA580C"/><rect x="14" y="34" width="8" height="16" rx="2" fill="#fff" opacity=".9"/><rect x="28" y="22" width="8" height="28" rx="2" fill="#fff" opacity=".9"/><rect x="42" y="28" width="8" height="22" rx="2" fill="#fff" opacity=".9"/></svg>',
+      tags: 'ops,monitoring',
       created_at: SEED_TIME2,
       updated_at: SEED_TIME2,
     },
@@ -387,6 +443,39 @@ function buildInitialState() {
       created_at: SEED_TIME,
       updated_at: SEED_TIME,
     },
+    {
+      id: 'dep-003',
+      project_id: 'proj-002',
+      image_tag: 'pipeline:sha-ff1234',
+      commit_sha: 'ff1234abcdef',
+      status: 'running',
+      node_id: 'node-002',
+      logs: '[deploy] Container running',
+      created_at: SEED_TIME2,
+      updated_at: SEED_TIME2,
+    },
+    {
+      id: 'dep-004',
+      project_id: 'proj-004',
+      image_tag: 'wiki:sha-aabb11',
+      commit_sha: 'aabb11cc22dd',
+      status: 'running',
+      node_id: 'node-002',
+      logs: '[deploy] Container running',
+      created_at: SEED_TIME2,
+      updated_at: SEED_TIME2,
+    },
+    {
+      id: 'dep-005',
+      project_id: 'proj-005',
+      image_tag: 'grafana:sha-ccdd33',
+      commit_sha: 'ccdd33ee44ff',
+      status: 'running',
+      node_id: 'node-002',
+      logs: '[deploy] Container running',
+      created_at: SEED_TIME2,
+      updated_at: SEED_TIME2,
+    },
   ]
 
   const snapshots: MockDatasetSnapshot[] = [
@@ -489,6 +578,114 @@ function buildInitialState() {
     return samples.reverse()
   })()
 
+  const systemSettings = {
+    onboarded: 'false',
+    site_name: 'Muvee',
+    logo_url: '',
+    favicon_url: '',
+    require_authorization: 'true',
+  }
+
+  const runtimeConfig = {
+    dataset_nfs_base_path: '/mnt/nfs/datasets',
+    base_domain: 'mock.example.com',
+    secrets_enabled: true,
+  }
+
+  const activeTunnels: {
+    domain: string
+    user_email: string
+    auth_required: boolean
+    connected_at: string
+  }[] = [
+    {
+      domain: 'dev-tunnel.mock.example.com',
+      user_email: 'admin@example.com',
+      auth_required: false,
+      connected_at: SEED_TIME2,
+    },
+  ]
+
+  const tunnelHistory: {
+    id: string
+    domain: string
+    user_email: string
+    auth_required: boolean
+    connected_at: string
+    disconnected_at: string | null
+  }[] = [
+    {
+      id: 'th-001',
+      domain: 'dev-tunnel.mock.example.com',
+      user_email: 'admin@example.com',
+      auth_required: false,
+      connected_at: SEED_TIME2,
+      disconnected_at: null,
+    },
+    {
+      id: 'th-002',
+      domain: 'test-tunnel.mock.example.com',
+      user_email: 'alice@example.com',
+      auth_required: true,
+      connected_at: SEED_TIME,
+      disconnected_at: SEED_TIME2,
+    },
+  ]
+
+  const projectTokens: (MockApiToken & { project_id: string })[] = [
+    {
+      id: 'ptok-001',
+      project_id: 'proj-001',
+      name: 'CI/CD Pipeline Token',
+      last_used_at: SEED_TIME2,
+      created_at: SEED_TIME,
+    },
+    {
+      id: 'ptok-002',
+      project_id: 'proj-001',
+      name: 'Dev Token',
+      last_used_at: null,
+      created_at: SEED_TIME2,
+    },
+  ]
+
+  const projectTraffic: (Record<string, unknown> & { project_id: string })[] = (() => {
+    const now = Math.floor(Date.now() / 1000)
+    const entries: (Record<string, unknown> & { project_id: string })[] = []
+    const paths = ['/api/predict', '/api/health', '/api/train', '/api/status', '/']
+    const methods = ['GET', 'POST', 'GET', 'GET', 'GET']
+    const statuses = [200, 200, 201, 200, 304]
+    for (let i = 0; i < 25; i++) {
+      const idx = i % paths.length
+      entries.push({
+        project_id: 'proj-001',
+        observed_at: now - i * 120,
+        client_ip: `192.168.1.${10 + (i % 5)}`,
+        host: 'ml-train.mock.example.com',
+        method: methods[idx],
+        path: paths[idx],
+        status: statuses[idx],
+        duration_ms: Math.floor(Math.random() * 500) + 10,
+        bytes_sent: Math.floor(Math.random() * 50000) + 100,
+        user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        referer: '',
+      })
+    }
+    return entries
+  })()
+
+  const authorizationRequests: {
+    id: string
+    user_id: string
+    status: 'pending' | 'approved' | 'rejected'
+    reviewed_by: string | null
+    created_at: string
+    updated_at: string
+    user_name?: string
+    user_email?: string
+    user_avatar_url?: string
+  }[] = []
+
   return {
     me: meUser,
     users,
@@ -503,6 +700,13 @@ function buildInitialState() {
     snapshots,
     fileHistory,
     containerMetrics,
+    systemSettings,
+    runtimeConfig,
+    activeTunnels,
+    tunnelHistory,
+    projectTokens,
+    projectTraffic,
+    authorizationRequests,
   }
 }
 
@@ -578,6 +782,9 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
             id: p.id,
             name: p.name,
             domain_prefix: p.domain_prefix,
+            description: p.description,
+            icon: p.icon,
+            tags: p.tags,
             url: `https://${p.domain_prefix}.${BASE_DOMAIN}`,
             auth_required: p.auth_required,
             owner_name: owner?.name ?? 'Unknown',
@@ -600,6 +807,9 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
         owner_id: state.me.id,
         auth_required: (body.auth_required as boolean) ?? false,
         auth_allowed_domains: (body.auth_allowed_domains as string) || '',
+        description: (body.description as string) || '',
+        icon: (body.icon as string) || '',
+        tags: (body.tags as string) || '',
         created_at: isoNow(),
         updated_at: isoNow(),
       }
@@ -827,6 +1037,147 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
         load15: 0.3 + Math.random() * 1,
       }
     }),
+
+    // ---------- /api/runtime/config ----------
+    defineRoute('GET', '/api/runtime/config', () => state.runtimeConfig),
+
+    // ---------- /api/public/settings ----------
+    defineRoute('GET', '/api/public/settings', () => state.systemSettings),
+
+    // ---------- /api/admin/settings ----------
+    defineRoute('GET', '/api/admin/settings', () => state.systemSettings),
+    defineRoute('PUT', '/api/admin/settings', ({ body }) => {
+      Object.assign(state.systemSettings, body)
+      return state.systemSettings
+    }),
+
+    // ---------- /api/admin/health ----------
+    defineRoute('GET', '/api/admin/health', () => ({
+      checks: [
+        { name: 'database', status: 'ok', message: 'PostgreSQL connection healthy' },
+        { name: 'nfs', status: 'ok', message: 'NFS mount accessible at /mnt/nfs/datasets' },
+        { name: 'registry', status: 'ok', message: 'Container registry reachable' },
+        { name: 'builder', status: 'ok', message: '1 builder node online' },
+        { name: 'dns', status: 'ok', message: 'Wildcard DNS configured for *.mock.example.com' },
+      ],
+      updated_at: isoNow(),
+    })),
+
+    // ---------- /api/admin/certs ----------
+    defineRoute('GET', '/api/admin/certs', () => ({
+      store_path: '/etc/muvee/certs',
+      items: [
+        {
+          domain: 'mock.example.com',
+          kind: 'base',
+          status: 'issued',
+          not_after: '2027-01-01T00:00:00Z',
+          days_left: 365,
+          issuer: "Let's Encrypt",
+        },
+        {
+          domain: 'registry.mock.example.com',
+          kind: 'registry',
+          status: 'issued',
+          not_after: '2027-01-01T00:00:00Z',
+          days_left: 365,
+          issuer: "Let's Encrypt",
+        },
+        {
+          domain: '*.mock.example.com',
+          kind: 'traefik',
+          status: 'issued',
+          not_after: '2027-01-01T00:00:00Z',
+          days_left: 365,
+          issuer: "Let's Encrypt",
+        },
+      ],
+      updated_at: isoNow(),
+    })),
+
+    // ---------- /api/admin/tunnels ----------
+    defineRoute('GET', '/api/admin/tunnels', () => state.activeTunnels),
+    defineRoute('GET', '/api/admin/tunnels/history', () => state.tunnelHistory),
+
+    // ---------- /api/projects/:id/tokens ----------
+    defineRoute('GET', '/api/projects/:id/tokens', ({ params }) => {
+      return state.projectTokens.filter(t => t.project_id === params.id)
+    }),
+    defineRoute('POST', '/api/projects/:id/tokens', ({ params, body }) => {
+      const token = {
+        id: makeId(),
+        project_id: params.id,
+        name: (body.name as string) || 'New Token',
+        last_used_at: null,
+        created_at: isoNow(),
+      }
+      state.projectTokens.push(token)
+      return { id: token.id, name: token.name, token: `mock-project-token-${makeId()}` }
+    }),
+    defineRoute('DELETE', '/api/projects/:id/tokens/:tokenId', ({ params }) => {
+      const idx = state.projectTokens.findIndex(t => t.id === params.tokenId && t.project_id === params.id)
+      if (idx !== -1) state.projectTokens.splice(idx, 1)
+      return {}
+    }),
+
+    // ---------- /api/projects/:id/traffic ----------
+    defineRoute('GET', '/api/projects/:id/traffic', ({ params, searchParams }) => {
+      const limit = parseInt(searchParams.get('limit') ?? '100', 10) || 100
+      return state.projectTraffic
+        .filter(t => t.project_id === params.id)
+        .slice(0, limit)
+        .map(({ project_id: _, ...rest }) => rest)
+    }),
+
+    // ---------- /api/authorization ----------
+    defineRoute('GET', '/api/authorization/status', () => {
+      const requireAuth = state.systemSettings.require_authorization === 'true'
+      const existingReq = state.authorizationRequests.find(r => r.user_id === state.me.id)
+      return {
+        require_authorization: requireAuth,
+        authorized: state.me.role === 'admin' || state.me.authorized,
+        request: existingReq ?? null,
+      }
+    }),
+    defineRoute('POST', '/api/authorization/request', () => {
+      const req = {
+        id: makeId(),
+        user_id: state.me.id,
+        status: 'pending' as const,
+        reviewed_by: null,
+        created_at: isoNow(),
+        updated_at: isoNow(),
+        user_name: state.me.name,
+        user_email: state.me.email,
+        user_avatar_url: state.me.avatar_url,
+      }
+      state.authorizationRequests.push(req)
+      return req
+    }),
+
+    // ---------- /api/admin/authorization ----------
+    defineRoute('GET', '/api/admin/authorization/requests', () => state.authorizationRequests),
+    defineRoute('PUT', '/api/admin/authorization/requests/:id/approve', ({ params }) => {
+      const req = state.authorizationRequests.find(r => r.id === params.id)
+      if (!req) return null
+      req.status = 'approved'
+      req.reviewed_by = state.me.id
+      req.updated_at = isoNow()
+      return req
+    }),
+    defineRoute('PUT', '/api/admin/authorization/requests/:id/reject', ({ params }) => {
+      const req = state.authorizationRequests.find(r => r.id === params.id)
+      if (!req) return null
+      req.status = 'rejected'
+      req.reviewed_by = state.me.id
+      req.updated_at = isoNow()
+      return req
+    }),
+
+    // ---------- /auth/providers ----------
+    defineRoute('GET', '/auth/providers', () => [
+      { name: 'github', display_name: 'GitHub', auth_url: '/auth/github' },
+    ]),
   ]
 }
 

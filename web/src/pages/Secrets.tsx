@@ -29,27 +29,19 @@ export default function SecretsPage() {
 
   return (
     <div className="page-enter">
-      <div className="flex items-end justify-between mb-8">
+      <div className="page-header flex items-end justify-between">
         <div>
-          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
+          <p className="page-subtitle">
             {t('secrets.sectionLabel')}
           </p>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2, marginTop: '4px' }}>
+          <h1 className="page-title">
             {t('secrets.heading')}
           </h1>
         </div>
         <button
           onClick={() => setShowCreate(true)}
           disabled={secretsEnabled === false}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-150"
-          style={{
-            background: 'var(--accent)',
-            color: '#ffffff',
-            fontWeight: 500,
-            border: 'none',
-            cursor: secretsEnabled === false ? 'not-allowed' : 'pointer',
-            opacity: secretsEnabled === false ? 0.4 : 1,
-          }}
+          className="btn-primary flex items-center gap-2"
         >
           <Plus size={14} />
           {t('secrets.newSecret')}
@@ -59,23 +51,20 @@ export default function SecretsPage() {
       {secretsEnabled === false && (
         <div
           className="mb-6 px-4 py-3 rounded-md flex items-start gap-3"
-          style={{ background: 'rgba(210, 153, 34, 0.1)', border: '1px solid rgba(210, 153, 34, 0.4)' }}
+          style={{ background: 'rgba(217, 119, 6, 0.1)', border: '1px solid rgba(217, 119, 6, 0.4)' }}
         >
-          <AlertTriangle size={16} color="#d29922" style={{ flexShrink: 0, marginTop: '1px' }} />
+          <AlertTriangle size={16} color="var(--warning)" style={{ flexShrink: 0, marginTop: '1px' }} />
           <p
-            style={{ fontFamily: MONO, fontSize: '0.75rem', color: '#d29922', lineHeight: 1.7 }}
+            style={{ fontSize: '0.8125rem', color: 'var(--warning)', lineHeight: 1.7 }}
             dangerouslySetInnerHTML={{ __html: t('secrets.disabledBanner') }}
           />
         </div>
       )}
 
       {/* Info banner */}
-      <div
-        className="mb-6 px-4 py-3 rounded-md"
-        style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
-      >
+      <div className="card mb-6 px-4 py-3">
         <p
-          style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', lineHeight: 1.7 }}
+          style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', lineHeight: 1.7 }}
           dangerouslySetInnerHTML={{ __html: t('secrets.infoText') }}
         />
       </div>
@@ -91,21 +80,22 @@ export default function SecretsPage() {
       )}
 
       {loading ? (
-        <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>{t('secrets.loading')}</div>
+        <div style={{ color: 'var(--fg-muted)', fontSize: '0.875rem' }}>{t('secrets.loading')}</div>
       ) : secrets.length === 0 && !showCreate ? (
         <EmptyState onNew={() => setShowCreate(true)} />
       ) : (
-        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--bg-card)', overflow: 'hidden' }}>
+        <div className="table-container">
           {/* Table header */}
           <div
             className="grid gap-4 px-5 py-3"
             style={{
               gridTemplateColumns: '1fr 120px 180px 48px',
               borderBottom: '1px solid var(--border)',
-              fontFamily: MONO,
-              fontSize: '0.65rem',
+              fontSize: '0.75rem',
+              fontWeight: 600,
               color: 'var(--fg-muted)',
-              letterSpacing: '0.08em',
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
             }}
           >
             <span>{t('secrets.columns.name')}</span>
@@ -141,27 +131,16 @@ function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: 
     >
       <div className="flex items-center gap-3">
         <Lock size={14} style={{ color: 'var(--fg-muted)', flexShrink: 0 }} />
-        <span style={{ fontFamily: MONO, fontSize: '0.88rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
+        <span style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
           {secret.name}
         </span>
       </div>
 
-      <span
-        style={{
-          fontFamily: MONO,
-          fontSize: '0.68rem',
-          padding: '2px 8px',
-          borderRadius: '2em',
-          background: secret.type === 'ssh_key' ? 'rgba(88,166,255,0.15)' : 'rgba(188,140,255,0.15)',
-          color: secret.type === 'ssh_key' ? 'var(--accent)' : '#bc8cff',
-          letterSpacing: '0.03em',
-          display: 'inline-block',
-        }}
-      >
+      <span className={`badge ${secret.type === 'ssh_key' ? 'badge-info' : 'badge-neutral'}`}>
         {typeLabel}
       </span>
 
-      <span style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>
+      <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
         {timeAgo(secret.created_at)}
       </span>
 
@@ -203,21 +182,8 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
     }
   }
 
-  const inputBase = {
-    width: '100%',
-    background: 'var(--bg-hover)',
-    border: '1px solid var(--border)',
-    color: 'var(--fg-primary)',
-    fontFamily: MONO,
-    borderRadius: '6px',
-    outline: 'none',
-  }
-
   return (
-    <div
-      className="mb-6 p-5 rounded-md"
-      style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
-    >
+    <div className="card mb-6 p-5">
       <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '1.25rem' }}>
         {t('secrets.form.title')}
       </p>
@@ -225,20 +191,21 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {/* Name */}
         <div>
-          <label style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', display: 'block', marginBottom: '0.4rem' }}>
+          <label className="form-label">
             {t('secrets.form.name')}
           </label>
           <input
+            className="form-input"
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="e.g. GITHUB_TOKEN"
-            style={{ ...inputBase, fontSize: '0.875rem', padding: '0.5rem 0.75rem' }}
+            style={{ fontFamily: MONO }}
           />
         </div>
 
         {/* Type */}
         <div>
-          <label style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', display: 'block', marginBottom: '0.4rem' }}>
+          <label className="form-label">
             {t('secrets.form.type')}
           </label>
           <div className="flex gap-2">
@@ -247,16 +214,8 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
                 key={typOpt}
                 type="button"
                 onClick={() => setType(typOpt)}
-                style={{
-                  fontFamily: MONO,
-                  fontSize: '0.78rem',
-                  padding: '0.4rem 1rem',
-                  borderRadius: '6px',
-                  border: `1px solid ${type === typOpt ? 'var(--accent)' : 'var(--border)'}`,
-                  background: type === typOpt ? 'rgba(88,166,255,0.1)' : 'var(--bg-hover)',
-                  color: type === typOpt ? 'var(--accent)' : 'var(--fg-muted)',
-                  cursor: 'pointer',
-                }}
+                className={type === typOpt ? 'btn-primary' : 'btn-secondary'}
+                style={{ fontSize: '0.8125rem' }}
               >
                 {typOpt === 'ssh_key' ? t('secrets.form.sshKey') : t('secrets.form.passwordToken')}
               </button>
@@ -264,7 +223,7 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
           </div>
           {type === 'ssh_key' && (
             <p
-              style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}
+              style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}
               dangerouslySetInnerHTML={{ __html: t('secrets.form.sshKeyHint') }}
             />
           )}
@@ -272,26 +231,28 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
 
         {/* Value */}
         <div>
-          <label style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', display: 'block', marginBottom: '0.4rem' }}>
+          <label className="form-label">
             {t('secrets.form.value')} <span style={{ color: 'var(--danger)', fontWeight: 400 }}>{t('secrets.form.valueWriteOnly')}</span>
           </label>
           <div className="relative">
             {type === 'ssh_key' ? (
               <textarea
+                className="form-input"
                 value={value}
                 onChange={e => setValue(e.target.value)}
                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..."
                 rows={6}
-                style={{ ...inputBase, fontSize: '0.82rem', padding: '0.5rem 0.75rem', resize: 'vertical' }}
+                style={{ fontFamily: MONO, resize: 'vertical' }}
               />
             ) : (
               <div className="relative flex items-center">
                 <input
                   type={showValue ? 'text' : 'password'}
+                  className="form-input"
                   value={value}
                   onChange={e => setValue(e.target.value)}
                   placeholder={t('secrets.form.secretPlaceholder')}
-                  style={{ ...inputBase, fontSize: '0.875rem', padding: '0.5rem 2.5rem 0.5rem 0.75rem' }}
+                  style={{ paddingRight: '2.5rem' }}
                 />
                 <button
                   type="button"
@@ -306,41 +267,21 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
         </div>
 
         {error && (
-          <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--danger)' }}>{error}</p>
+          <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{error}</p>
         )}
 
         <div className="flex gap-2">
           <button
             type="submit"
             disabled={saving}
-            style={{
-              fontFamily: MONO,
-              fontSize: '0.82rem',
-              padding: '0.5rem 1.25rem',
-              borderRadius: '6px',
-              background: 'var(--accent)',
-              color: '#ffffff',
-              border: 'none',
-              cursor: saving ? 'not-allowed' : 'pointer',
-              opacity: saving ? 0.7 : 1,
-              fontWeight: 500,
-            }}
+            className="btn-primary"
           >
             {saving ? t('secrets.form.saving') : t('secrets.form.save')}
           </button>
           <button
             type="button"
             onClick={onCancel}
-            style={{
-              fontFamily: MONO,
-              fontSize: '0.82rem',
-              padding: '0.5rem 1.25rem',
-              borderRadius: '6px',
-              background: 'var(--bg-hover)',
-              color: 'var(--fg-muted)',
-              border: '1px solid var(--border)',
-              cursor: 'pointer',
-            }}
+            className="btn-secondary"
           >
             {t('secrets.form.cancel')}
           </button>
@@ -353,21 +294,17 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
 function EmptyState({ onNew }: { onNew: () => void }) {
   const { t } = useTranslation()
   return (
-    <div
-      className="flex flex-col items-center justify-center py-20 rounded-md"
-      style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
-    >
+    <div className="card flex flex-col items-center justify-center py-20">
       <KeyRound size={32} style={{ color: 'var(--fg-muted)', marginBottom: '1rem' }} />
       <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--fg-primary)', marginBottom: '0.5rem' }}>
         {t('secrets.empty.title')}
       </p>
-      <p style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)', marginBottom: '1.5rem' }}>
+      <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', marginBottom: '1.5rem' }}>
         {t('secrets.empty.hint')}
       </p>
       <button
         onClick={onNew}
-        className="flex items-center gap-2 px-4 py-2 rounded-md"
-        style={{ background: 'var(--accent)', color: '#ffffff', fontFamily: MONO, fontSize: '0.82rem', border: 'none', cursor: 'pointer', fontWeight: 500 }}
+        className="btn-primary flex items-center gap-2"
       >
         <Plus size={14} />
         {t('secrets.newSecret')}

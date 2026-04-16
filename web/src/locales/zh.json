@@ -4,7 +4,18 @@
     "copy": "复制",
     "copied": "已复制"
   },
+  "portal": {
+    "heading": "欢迎使用 {{name}}",
+    "subtitle": "浏览下方可用的服务。",
+    "searchPlaceholder": "搜索服务...",
+    "allTags": "全部",
+    "noResults": "没有匹配的服务。",
+    "empty": "暂无可用服务",
+    "emptyHint": "当前没有公开运行中的服务。",
+    "loginRequired": "需要登录"
+  },
   "nav": {
+    "portal": "首页",
     "projects": "项目",
     "datasets": "数据集",
     "secrets": "密钥",
@@ -58,7 +69,8 @@
       "deploying": "部署中",
       "failed": "失败",
       "stopped": "已停止",
-      "pending": "空闲"
+      "pending": "空闲",
+      "tunnel": "隧道"
     }
   },
   "projectDetail": {
@@ -73,8 +85,10 @@
       "secrets": "密钥",
       "workspace": "工作区",
       "repository": "代码仓库",
-      "tokens": "令牌"
+      "tokens": "令牌",
+      "traffic": "流量"
     },
+    "tunnelHint": "这是一个隧道项目。使用以下命令启动隧道：muveectl tunnel --project {{name}} <PORT>",
     "pushUrl": "GIT 推送地址",
     "pushUrlHint": "使用任意用户名和您的 API 令牌作为密码。",
     "repo": {
@@ -90,6 +104,12 @@
       "gitUrl": "Git 地址",
       "gitBranch": "Git 分支",
       "domainPrefix": "域名前缀",
+      "description": "简介",
+      "tags": "标签",
+      "tagsHint": "逗号分隔的标签，例如：internal,docs,tools",
+      "icon": "图标",
+      "iconPlaceholder": "粘贴 SVG 代码或输入图片 URL",
+      "iconHint": "粘贴 SVG 代码或图片链接（https://...），用作服务门户中的应用图标。",
       "dockerfilePath": "Dockerfile 路径",
       "memoryLimit": "内存限制",
       "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g",
@@ -206,15 +226,29 @@
     "heading": "创建项目",
     "fields": {
       "name": "名称",
+      "projectType": "项目类型",
       "gitSource": "仓库来源",
       "gitUrl": "Git 地址",
       "gitBranch": "Git 分支",
       "domainPrefix": "域名前缀",
+      "description": "简介",
+      "descriptionPlaceholder": "简要描述此服务",
+      "tags": "标签",
+      "tagsPlaceholder": "例如：internal,docs,tools",
+      "tagsHint": "逗号分隔的标签，用于分类服务。",
+      "icon": "图标",
+      "iconPlaceholder": "粘贴 SVG 代码或输入图片 URL",
+      "iconHint": "粘贴 SVG 代码或图片链接，用作服务门户中的应用图标。",
       "dockerfilePath": "Dockerfile 路径",
       "memoryLimit": "内存限制",
       "memoryLimitHint": "容器可用内存上限，留空不限制。例：512m、2g、8g",
       "volumeMountPath": "持久化存储路径",
       "volumeMountPathHint": "挂载到容器内的路径（例如 /workspace），留空则不挂载。"
+    },
+    "projectType": {
+      "deployment": "容器部署",
+      "tunnel": "隧道（仅域名）",
+      "tunnelHint": "预留一个域名前缀用于隧道访问。无需 Git 仓库或容器，流量通过 muveectl tunnel 从本地转发。"
     },
     "gitSource": {
       "external": "外部仓库",
@@ -230,6 +264,7 @@
     },
     "domainOptional": "可选 — 留空时默认使用 \"{{name}}\"",
     "domainRequired": "必填 — 项目名称不能用作子域名",
+    "domainTunnelHint": "必填 — 此前缀将作为隧道的子域名",
     "privateRepo": {
       "configured": "私有仓库 — 凭证已配置",
       "configure": "私有仓库？配置访问凭证",
@@ -346,11 +381,19 @@
     "ago": "前",
     "noActive": "暂无活跃隧道。使用 muveectl tunnel <PORT> 创建一个。",
     "noHistory": "暂无隧道历史记录。",
+    "project": "项目",
+    "ephemeral": "临时",
     "colDomain": "域名",
     "colUser": "用户",
     "colAuth": "认证",
     "colDuration": "时长",
     "colWhen": "时间"
+  },
+  "authorization": {
+    "pendingBanner": "您的发布服务申请正在等待管理员审批。",
+    "requiredBanner": "发布服务需要管理员授权。",
+    "requestAccess": "申请发布权限",
+    "requesting": "申请中..."
   },
   "users": {
     "sectionLabel": "访问控制",
@@ -359,10 +402,16 @@
       "user": "用户",
       "email": "邮箱",
       "role": "角色",
+      "authorized": "授权状态",
       "joined": "加入时间"
     },
     "makeAdmin": "设为管理员",
-    "makeMember": "设为成员"
+    "makeMember": "设为成员",
+    "authorized": "已授权",
+    "unauthorized": "未授权",
+    "pendingRequests": "待审批的授权请求 ({{count}})",
+    "approve": "批准",
+    "reject": "拒绝"
   },
   "onboard": {
     "stepLabel": "第 {{current}} 步，共 {{total}} 步",
@@ -449,6 +498,12 @@
       "save": "保存修改",
       "saving": "保存中...",
       "saved": "已保存！"
+    },
+    "authorization": {
+      "title": "用户授权",
+      "description": "控制用户是否需要管理员审批后才能发布服务。关闭后，所有已认证用户均可自由发布。",
+      "requireLabel": "发布服务需要授权",
+      "enabledHint": "新用户登录后只能浏览服务，直到管理员批准其发布权限申请。"
     },
     "health": {
       "title": "系统健康",

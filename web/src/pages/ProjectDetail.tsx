@@ -8,7 +8,20 @@ import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
-type Tab = 'deploy' | 'config' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository'
+type Tab = 'deploy' | 'config' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository' | 'traffic'
+
+/* Map deployment status → badge CSS class */
+const statusBadgeClass = (status: string) => {
+  switch (status) {
+    case 'running': return 'badge badge-success'
+    case 'building': return 'badge badge-warning'
+    case 'deploying': return 'badge badge-info'
+    case 'failed': return 'badge badge-danger'
+    case 'stopped':
+    case 'pending':
+    default: return 'badge badge-neutral'
+  }
+}
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
@@ -24,6 +37,8 @@ export default function ProjectDetail() {
   const [datasetBasePath, setDatasetBasePath] = useState('')
   const [baseDomain, setBaseDomain] = useState('')
   const [tab, setTab] = useState<Tab>('deploy')
+  // Switch to traffic tab when a tunnel project loads
+  const [tabInitialized, setTabInitialized] = useState(false)
   const [deploying, setDeploying] = useState(false)
   const [editForm, setEditForm] = useState<Partial<Project>>({})
   const [saving, setSaving] = useState(false)
@@ -32,7 +47,10 @@ export default function ProjectDetail() {
 
   useEffect(() => {
     if (!id) return
-    api.projects.get(id).then(p => { setProject(p); setEditForm(p) })
+    api.projects.get(id).then(p => {
+      setProject(p); setEditForm(p)
+      if (!tabInitialized && p.project_type === 'domain_only') { setTab('traffic'); setTabInitialized(true) }
+    })
     api.projects.deployments(id).then(setDeployments)
     api.projects.datasets(id).then(setProjectDatasets)
     api.datasets.list().then(setAvailableDatasets)
@@ -104,21 +122,22 @@ export default function ProjectDetail() {
     setProjectDatasets(result)
   }
 
-  if (!project) return <div style={{ fontFamily: MONO, color: 'var(--fg-muted)', padding: '2rem' }}>{t('projects.loading')}</div>
+  if (!project) return <div style={{ color: 'var(--fg-muted)', padding: '2rem' }}>{t('projects.loading')}</div>
 
+  const isTunnel = project.project_type === 'domain_only'
   const latestDeploy = deployments[0]
-  const color = statusColor(latestDeploy?.status ?? 'pending')
+  const color = isTunnel ? 'var(--accent)' : statusColor(latestDeploy?.status ?? 'pending')
 
   return (
     <div className="page-enter">
       {/* Header */}
-      <div className="mb-8">
+      <div className="page-header">
         <button
           onClick={() => navigate('/projects')}
-          className="flex items-center gap-1 mb-4 text-xs transition-colors"
-          style={{ fontFamily: MONO, color: 'var(--fg-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+          className="flex items-center gap-1 mb-4 text-sm transition-colors"
+          style={{ color: 'var(--fg-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
         >
-          <ArrowLeft size={12} /> {t('projectDetail.backToProjects')}
+          <ArrowLeft size={14} /> {t('projectDetail.backToProjects')}
         </button>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -126,7 +145,7 @@ export default function ProjectDetail() {
               className="w-2.5 h-2.5 rounded-full"
               style={{ background: color, flexShrink: 0 }}
             />
-            <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.2 }}>
+            <h1 className="page-title" style={{ fontSize: '1.5rem' }}>
               {project.name}
             </h1>
           </div>
@@ -135,55 +154,45 @@ export default function ProjectDetail() {
               href={`https://${project.domain_prefix}.${baseDomain}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all duration-150"
-              style={{
-                background: 'var(--bg-hover)',
-                color: 'var(--fg-muted)',
-                fontWeight: 500,
-                border: '1px solid var(--border)',
-                cursor: 'pointer',
-                textDecoration: 'none',
-              }}
-              onMouseEnter={e => {
-                (e.currentTarget as HTMLAnchorElement).style.color = 'var(--fg-primary)'
-                ;(e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--fg-muted)'
-              }}
-              onMouseLeave={e => {
-                (e.currentTarget as HTMLAnchorElement).style.color = 'var(--fg-muted)'
-                ;(e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border)'
-              }}
+              className="btn-secondary flex items-center gap-2"
+              style={{ textDecoration: 'none' }}
             >
               <ExternalLink size={14} />
               {t('projectDetail.visit')}
             </a>
+            {!isTunnel && (
             <button
               onClick={handleDeploy}
               disabled={deploying}
-              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all duration-150"
-              style={{
-                background: deploying ? 'var(--bg-hover)' : 'var(--accent)',
-                color: deploying ? 'var(--fg-muted)' : '#ffffff',
-                fontWeight: 500,
-                border: 'none',
-                cursor: deploying ? 'not-allowed' : 'pointer',
-              }}
+              className={deploying ? 'btn-secondary flex items-center gap-2' : 'btn-primary flex items-center gap-2'}
+              style={deploying ? { cursor: 'not-allowed' } : {}}
             >
               <Rocket size={14} />
               {deploying ? t('projectDetail.triggering') : t('projectDetail.deploy')}
             </button>
+            )}
           </div>
         </div>
-        <div style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)', marginTop: '0.4rem', marginLeft: '1.75rem' }}>
-          {project.domain_prefix}.{baseDomain}
+        <div className="page-subtitle" style={{ marginTop: '0.4rem', marginLeft: '1.75rem' }}>
+          <span style={{ fontFamily: MONO }}>{project.domain_prefix}.{baseDomain}</span>
         </div>
-        {project.git_source === 'hosted' && project.git_push_url && (
+        {!isTunnel && project.git_source === 'hosted' && project.git_push_url && (
           <PushUrlBadge url={project.git_push_url} />
+        )}
+        {isTunnel && (
+          <div style={{ marginTop: '0.5rem', marginLeft: '1.75rem', fontSize: '0.8125rem', color: 'var(--fg-muted)', fontFamily: MONO, background: 'var(--bg-hover)', padding: '0.5rem 0.75rem', borderRadius: '6px', display: 'inline-block' }}>
+            {t('projectDetail.tunnelHint', { name: project.name })}
+          </div>
         )}
       </div>
 
       {/* Tabs */}
       <div className="flex gap-0 mb-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        {([
+        {(isTunnel ? [
+          ['traffic', Activity, t('projectDetail.tabs.traffic')],
+          ['config', Settings, t('projectDetail.tabs.config')],
+          ['tokens', Key, t('projectDetail.tabs.tokens')],
+        ] as const : [
           ['deploy', Rocket, t('projectDetail.tabs.deployments')],
           ['config', Settings, t('projectDetail.tabs.config')],
           ...(project.git_source === 'hosted' ? [['repository', GitBranch, t('projectDetail.tabs.repository')] as const] : []),
@@ -195,19 +204,19 @@ export default function ProjectDetail() {
           <button
             key={key}
             onClick={() => setTab(key)}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm transition-all duration-150"
+            className="flex items-center gap-2 px-4 py-3 text-sm transition-all duration-150"
             style={{
-              fontFamily: MONO,
               color: tab === key ? 'var(--fg-primary)' : 'var(--fg-muted)',
               background: 'none',
               border: 'none',
               borderBottom: tab === key ? '2px solid var(--accent)' : '2px solid transparent',
               cursor: 'pointer',
               marginBottom: '-1px',
-              fontWeight: tab === key ? 500 : 400,
+              fontWeight: tab === key ? 600 : 400,
+              fontSize: '0.875rem',
             }}
           >
-            <Icon size={13} />
+            <Icon size={15} />
             {label}
           </button>
         ))}
@@ -256,6 +265,9 @@ export default function ProjectDetail() {
         {tab === 'repository' && id && project.git_source === 'hosted' && (
           <RepoTab projectId={id} />
         )}
+        {tab === 'traffic' && id && (
+          <TunnelTrafficTab projectId={id} />
+        )}
       </div>
     </div>
   )
@@ -289,7 +301,7 @@ function DeployTab({ deployments, projectId }: { deployments: Deployment[]; proj
 
   if (deployments.length === 0) {
     return (
-      <div className="py-12 text-center" style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem' }}>
+      <div className="py-12 text-center" style={{ color: 'var(--fg-muted)', fontSize: '0.875rem' }}>
         {t('projectDetail.noDeployments')}
       </div>
     )
@@ -305,9 +317,8 @@ function DeployTab({ deployments, projectId }: { deployments: Deployment[]; proj
       )}
       {/* Traffic panel — recent HTTP requests observed by Traefik */}
       <TrafficPanel traffic={traffic} />
-      <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', marginTop: '1.5rem' }}>
+      <div className="card" style={{ overflow: 'hidden', marginTop: '1.5rem' }}>
         {deployments.map((d, i) => {
-          const color = statusColor(d.status)
           const isOpen = expanded === d.id
           return (
             <div key={d.id} style={{ background: 'var(--bg-card)', borderBottom: i < deployments.length - 1 ? '1px solid var(--border)' : 'none' }}>
@@ -318,42 +329,31 @@ function DeployTab({ deployments, projectId }: { deployments: Deployment[]; proj
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
               >
-                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} className={d.status === 'running' || d.status === 'building' ? 'status-running' : ''} />
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: statusColor(d.status), flexShrink: 0 }} className={d.status === 'running' || d.status === 'building' ? 'status-running' : ''} />
                 <div className="flex-1 min-w-0">
-                  <div style={{ fontFamily: MONO, fontSize: '0.82rem', color: 'var(--fg-primary)' }}>
+                  <div style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)' }}>
                     {d.commit_sha ? d.commit_sha.slice(0, 12) : d.id.slice(0, 8)}
                     {d.image_tag && (
-                      <span style={{ color: 'var(--fg-muted)', marginLeft: '1rem' }}>
+                      <span style={{ color: 'var(--fg-muted)', marginLeft: '1rem', fontFamily: MONO }}>
                         {d.image_tag.split(':').pop()}
                       </span>
                     )}
                   </div>
                 </div>
-                <div
-                  className="px-2 py-0.5 rounded-full text-xs"
-                  style={{ fontFamily: MONO, color, border: `1px solid ${color}44`, background: `${color}18`, flexShrink: 0 }}
-                >
+                <span className={statusBadgeClass(d.status)}>
                   {d.status}
-                </div>
+                </span>
                 {d.oom_killed && (
-                  <div
-                    className="px-2 py-0.5 rounded-full text-xs"
-                    style={{ fontFamily: MONO, color: '#ff6b6b', border: '1px solid #ff6b6b44', background: '#ff6b6b18', flexShrink: 0 }}
-                    title="容器曾因 OOM 被杀死"
-                  >
+                  <span className="badge badge-danger" title="Container was OOM killed">
                     OOM
-                  </div>
+                  </span>
                 )}
                 {d.restart_count > 0 && (
-                  <div
-                    className="px-2 py-0.5 rounded-full text-xs"
-                    style={{ fontFamily: MONO, color: '#ffa94d', border: '1px solid #ffa94d44', background: '#ffa94d18', flexShrink: 0 }}
-                    title={`容器已重启 ${d.restart_count} 次`}
-                  >
+                  <span className="badge badge-warning" title={`Container restarted ${d.restart_count} times`}>
                     ↺{d.restart_count}
-                  </div>
+                  </span>
                 )}
-                <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
                   {timeAgo(d.created_at)}
                 </div>
                 {isOpen ? <ChevronUp size={14} style={{ color: 'var(--fg-muted)', flexShrink: 0 }} /> : <ChevronDown size={14} style={{ color: 'var(--fg-muted)', flexShrink: 0 }} />}
@@ -368,7 +368,7 @@ function DeployTab({ deployments, projectId }: { deployments: Deployment[]; proj
                     maxHeight: '360px',
                     overflowY: 'auto',
                     fontFamily: MONO,
-                    fontSize: '0.75rem',
+                    fontSize: '0.8125rem',
                     color: '#adbac7',
                     lineHeight: '1.6',
                   }}
@@ -394,11 +394,11 @@ function MetricsPanel({ metrics }: { metrics: ContainerMetric[] }) {
   const { t } = useTranslation()
   const latest = metrics[0]
 
-  const cpuColor = latest.cpu_percent > 80 ? '#ff6b6b' : latest.cpu_percent > 50 ? '#ffa94d' : 'var(--accent)'
+  const cpuColor = latest.cpu_percent > 80 ? 'var(--danger)' : latest.cpu_percent > 50 ? 'var(--warning)' : 'var(--accent)'
   const memPct = latest.mem_limit_bytes > 0
     ? (latest.mem_usage_bytes / latest.mem_limit_bytes) * 100
     : 0
-  const memColor = memPct > 85 ? '#ff6b6b' : memPct > 65 ? '#ffa94d' : 'var(--accent)'
+  const memColor = memPct > 85 ? 'var(--danger)' : memPct > 65 ? 'var(--warning)' : 'var(--accent)'
 
   // Derive per-sample deltas for net/block I/O (show rate: bytes since last sample).
   // metrics is sorted newest-first; so metrics[0] is latest, metrics[1] is previous.
@@ -410,37 +410,34 @@ function MetricsPanel({ metrics }: { metrics: ContainerMetric[] }) {
   const blockWRate = prev ? Math.max(0, latest.block_write_bytes - prev.block_write_bytes) / elapsedSec : 0
 
   const statBox = (label: string, value: string, sub?: string, barPct?: number, barColor?: string) => (
-    <div style={{
-      background: 'var(--bg-card)',
-      border: '1px solid var(--border)',
-      borderRadius: '6px',
+    <div className="card" style={{
       padding: '0.75rem 1rem',
       minWidth: '150px',
       flex: '1 1 150px',
     }}>
-      <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>
+      <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', letterSpacing: '0.04em', marginBottom: '0.4rem', fontWeight: 500 }}>
         {label.toUpperCase()}
       </div>
-      <div style={{ fontFamily: MONO, fontSize: '1.1rem', fontWeight: 600, color: barColor ?? 'var(--fg-primary)' }}>
+      <div style={{ fontFamily: MONO, fontSize: '1.25rem', fontWeight: 600, color: barColor ?? 'var(--fg-primary)' }}>
         {value}
       </div>
       {sub && (
-        <div style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', marginTop: '0.2rem' }}>{sub}</div>
+        <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.2rem' }}>{sub}</div>
       )}
       {barPct !== undefined && (
-        <div style={{ marginTop: '0.5rem', height: '3px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${Math.min(100, barPct)}%`, background: barColor ?? 'var(--accent)', borderRadius: '2px', transition: 'width 0.4s ease' }} />
+        <div style={{ marginTop: '0.5rem', height: '3px', background: 'var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${Math.min(100, barPct)}%`, background: barColor ?? 'var(--accent)', borderRadius: '6px', transition: 'width 0.4s ease' }} />
         </div>
       )}
     </div>
   )
 
   return (
-    <div style={{ marginBottom: '0.5rem' }}>
-      <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
-        <Activity size={12} />
+    <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '0.5rem' }}>
+      <div className="flex items-center gap-2 mb-3" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+        <Activity size={14} />
         {t('projectDetail.metrics.title')}
-        <span style={{ marginLeft: 'auto', fontSize: '0.65rem' }}>
+        <span style={{ marginLeft: 'auto', fontSize: '0.8125rem' }}>
           {t('projectDetail.metrics.updated', { time: new Date(latest.collected_at * 1000).toLocaleTimeString() })}
         </span>
       </div>
@@ -500,16 +497,16 @@ function TrafficPanel({ traffic }: { traffic: ProjectTraffic[] }) {
     : 0
 
   const statusColorFor = (s: number) => {
-    if (s >= 500) return '#ff6b6b'
-    if (s >= 400) return '#ffa94d'
+    if (s >= 500) return 'var(--danger)'
+    if (s >= 400) return 'var(--warning)'
     if (s >= 300) return 'var(--fg-muted)'
     return 'var(--accent)'
   }
 
   return (
     <div style={{ marginTop: '1.5rem' }}>
-      <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
-        <Activity size={12} />
+      <div className="flex items-center gap-2 mb-3" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+        <Activity size={14} />
         {t('projectDetail.traffic.title', 'Traffic')}
         <span style={{ marginLeft: '1rem' }}>
           {t('projectDetail.traffic.last5m', '5m')}: {last5m}
@@ -521,36 +518,29 @@ function TrafficPanel({ traffic }: { traffic: ProjectTraffic[] }) {
         {errRate > 0 && (
           <>
             <span>·</span>
-            <span style={{ color: '#ff6b6b' }}>
+            <span style={{ color: 'var(--danger)' }}>
               5xx: {errRate.toFixed(1)}%
             </span>
           </>
         )}
       </div>
       {!hasRows ? (
-        <div style={{
-          border: '1px solid var(--border)',
-          borderRadius: '6px',
+        <div className="card" style={{
           padding: '1.5rem',
           textAlign: 'center',
-          fontFamily: MONO,
-          fontSize: '0.75rem',
+          fontSize: '0.875rem',
           color: 'var(--fg-muted)',
         }}>
           {t('projectDetail.traffic.empty', 'No traffic recorded yet.')}
         </div>
       ) : (
-        <div style={{
-          border: '1px solid var(--border)',
-          borderRadius: '6px',
-          overflow: 'hidden',
+        <div className="table-container" style={{
           maxHeight: '360px',
           overflowY: 'auto',
-          background: 'var(--bg-card)',
         }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: MONO, fontSize: '0.72rem' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
             <thead>
-              <tr style={{ background: 'var(--bg-hover)', position: 'sticky', top: 0 }}>
+              <tr>
                 <th style={thStyle}>{t('projectDetail.traffic.time', 'TIME')}</th>
                 <th style={thStyle}>{t('projectDetail.traffic.ip', 'CLIENT IP')}</th>
                 <th style={thStyle}>{t('projectDetail.traffic.method', 'METHOD')}</th>
@@ -562,13 +552,13 @@ function TrafficPanel({ traffic }: { traffic: ProjectTraffic[] }) {
             </thead>
             <tbody>
               {traffic.map((r, i) => (
-                <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                <tr key={i}>
                   <td style={tdStyle} title={new Date(r.observed_at * 1000).toLocaleString()}>
                     {timeAgo(new Date(r.observed_at * 1000).toISOString())}
                   </td>
-                  <td style={tdStyle}>{r.client_ip}</td>
+                  <td style={{ ...tdStyle, fontFamily: MONO }}>{r.client_ip}</td>
                   <td style={tdStyle}>{r.method}</td>
-                  <td style={{ ...tdStyle, maxWidth: '400px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.path}>
+                  <td style={{ ...tdStyle, fontFamily: MONO, maxWidth: '400px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.path}>
                     {r.path}
                   </td>
                   <td style={{ ...tdStyle, color: statusColorFor(r.status), fontWeight: 600 }}>{r.status}</td>
@@ -588,8 +578,8 @@ const thStyle: CSSProperties = {
   textAlign: 'left',
   padding: '0.5rem 0.75rem',
   color: 'var(--fg-muted)',
-  fontSize: '0.65rem',
-  letterSpacing: '0.08em',
+  fontSize: '0.8125rem',
+  letterSpacing: '0.04em',
   fontWeight: 500,
   whiteSpace: 'nowrap',
 }
@@ -598,6 +588,21 @@ const tdStyle: CSSProperties = {
   padding: '0.45rem 0.75rem',
   color: 'var(--fg-primary)',
   whiteSpace: 'nowrap',
+  fontSize: '0.875rem',
+}
+
+function TunnelTrafficTab({ projectId }: { projectId: string }) {
+  const [traffic, setTraffic] = useState<ProjectTraffic[]>([])
+
+  useEffect(() => {
+    api.projects.traffic(projectId, 100).then(setTraffic).catch(() => setTraffic([]))
+    const iv = setInterval(() => {
+      api.projects.traffic(projectId, 100).then(setTraffic).catch(() => {})
+    }, 15_000)
+    return () => clearInterval(iv)
+  }, [projectId])
+
+  return <TrafficPanel traffic={traffic} />
 }
 
 function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
@@ -609,31 +614,20 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
   saveError?: string | null
 }) {
   const { t } = useTranslation()
-  const inputStyle = {
-    background: 'var(--bg-hover)',
-    border: '1px solid var(--border)',
-    color: 'var(--fg-primary)',
-    fontFamily: MONO,
-    outline: 'none',
-    borderRadius: '6px',
-    fontSize: '0.875rem',
-  }
   const field = (label: string, key: keyof Project, hint?: string) => (
     <div key={key}>
-      <label style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', display: 'block', marginBottom: '0.4rem' }}>
+      <label className="form-label">
         {label.toUpperCase()}
       </label>
       <input
         type="text"
         value={(form[key] ?? '') as string}
         onChange={e => onChange({ ...form, [key]: e.target.value })}
-        className="w-full px-3 py-2"
-        style={inputStyle}
-        onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
-        onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
+        className="form-input w-full"
+        style={{ fontFamily: MONO }}
       />
       {hint && (
-        <p style={{ fontFamily: MONO, fontSize: '0.68rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
           {hint}
         </p>
       )}
@@ -650,7 +644,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
       {field(t('projectDetail.config.gitBranch'), 'git_branch')}
 
       <div>
-        <label style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', display: 'block', marginBottom: '0.4rem' }}>
+        <label className="form-label">
           {t('projectDetail.config.domainPrefix').toUpperCase()}
           {domainPrefixRequired && (
             <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>
@@ -661,15 +655,34 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
           value={(form.domain_prefix ?? '') as string}
           onChange={e => onChange({ ...form, domain_prefix: e.target.value })}
           placeholder={nameIsValidPrefix ? form.name : undefined}
-          className="w-full px-3 py-2"
-          style={inputStyle}
-          onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
-          onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
+          className="form-input w-full"
+          style={{ fontFamily: MONO }}
         />
-        <p style={{ fontFamily: MONO, fontSize: '0.68rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
+        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
           {nameIsValidPrefix
             ? t('projectDetail.config.domainOptional', { name: form.name })
             : t('projectDetail.config.domainRequired')}
+        </p>
+      </div>
+
+      {field(t('projectDetail.config.description'), 'description')}
+      {field(t('projectDetail.config.tags'), 'tags', t('projectDetail.config.tagsHint'))}
+
+      {/* Icon */}
+      <div>
+        <label className="form-label">
+          {t('projectDetail.config.icon').toUpperCase()}
+        </label>
+        <textarea
+          value={(form.icon ?? '') as string}
+          onChange={e => onChange({ ...form, icon: e.target.value })}
+          rows={3}
+          className="form-input w-full"
+          style={{ fontFamily: MONO, resize: 'vertical' }}
+          placeholder={t('projectDetail.config.iconPlaceholder')}
+        />
+        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+          {t('projectDetail.config.iconHint')}
         </p>
       </div>
 
@@ -678,7 +691,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
       {field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
 
       <div>
-        <label style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.4rem' }}>
+        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
           {t('projectDetail.config.requireGoogleAuth')}
           <a
             href="https://hoveychen.github.io/muvee/docs/service-auth-integration"
@@ -709,7 +722,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
               }}
             />
           </div>
-          <span style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
             {form.auth_required ? t('projectDetail.config.enabled') : t('projectDetail.config.disabled')}
           </span>
         </label>
@@ -718,29 +731,21 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
       {form.auth_required && field(t('projectDetail.config.allowedDomains'), 'auth_allowed_domains')}
 
       {saveError && (
-        <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--danger)' }}>{saveError}</p>
+        <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
       )}
 
       <div className="flex gap-3 pt-2">
         <button
           onClick={onSave}
           disabled={saving}
-          className="px-4 py-2 rounded-md text-sm transition-all"
-          style={{
-            background: 'var(--accent)',
-            color: '#ffffff',
-            fontWeight: 500,
-            border: 'none',
-            cursor: saving ? 'not-allowed' : 'pointer',
-            opacity: saving ? 0.7 : 1,
-          }}
+          className="btn-primary"
+          style={saving ? { cursor: 'not-allowed', opacity: 0.7 } : {}}
         >
           {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
         </button>
         <button
           onClick={onDelete}
-          className="flex items-center gap-2 px-4 py-2 rounded-md text-sm transition-all"
-          style={{ background: 'var(--bg-hover)', color: 'var(--danger)', border: '1px solid var(--border)', cursor: 'pointer' }}
+          className="btn-danger flex items-center gap-2"
         >
           <Trash2 size={13} /> {t('projectDetail.config.delete')}
         </button>
@@ -761,7 +766,7 @@ function DatasetsTab({ available, selected, datasetBasePath, onToggle, onUpdateM
 
   return (
     <div>
-      <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
+      <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
         {t('projectDetail.datasets.hint', {
           defaultValue: 'Select datasets to mount into the container. <accent>dependency</accent> = rsync copy (LRU cached). <blue>readwrite</blue> = direct NFS mount.',
         }).split('<accent>dependency</accent>').map((part, i, arr) =>
@@ -774,13 +779,13 @@ function DatasetsTab({ available, selected, datasetBasePath, onToggle, onUpdateM
             j < a.length - 1 ? (
               <span key={j}>
                 {p}
-                <span style={{ color: '#79c0ff' }}>readwrite</span>
+                <span style={{ color: 'var(--accent)' }}>readwrite</span>
               </span>
             ) : p
           )
         )}
       </p>
-      <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+      <div className="card" style={{ overflow: 'hidden' }}>
         {available.map((ds, i) => {
           const sel = selectedMap[ds.id]
           return (
@@ -796,12 +801,12 @@ function DatasetsTab({ available, selected, datasetBasePath, onToggle, onUpdateM
                 style={{ accentColor: 'var(--accent)', width: '14px', height: '14px' }}
               />
               <div className="flex-1 min-w-0">
-                <div style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--fg-primary)' }}>{ds.name}</div>
-                <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
+                <div style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--fg-primary)' }}>{ds.name}</div>
+                <div style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
                   {resolveDatasetPath(datasetBasePath, ds.nfs_path)}
                 </div>
               </div>
-              <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', flexShrink: 0 }}>
                 {formatBytes(ds.size_bytes)} · v{ds.version}
               </div>
               {sel && (
@@ -811,11 +816,11 @@ function DatasetsTab({ available, selected, datasetBasePath, onToggle, onUpdateM
                   style={{
                     background: 'var(--bg-base)',
                     border: '1px solid var(--border)',
-                    color: sel.mount_mode === 'dependency' ? 'var(--accent)' : '#79c0ff',
+                    color: 'var(--accent)',
                     fontFamily: MONO,
-                    fontSize: '0.72rem',
-                    padding: '2px 6px',
-                    borderRadius: '4px',
+                    fontSize: '0.8125rem',
+                    padding: '4px 8px',
+                    borderRadius: '6px',
                     cursor: 'pointer',
                     flexShrink: 0,
                   }}
@@ -828,7 +833,7 @@ function DatasetsTab({ available, selected, datasetBasePath, onToggle, onUpdateM
           )
         })}
         {available.length === 0 && (
-          <div className="py-10 text-center" style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.8rem', background: 'var(--bg-card)' }}>
+          <div className="py-10 text-center" style={{ color: 'var(--fg-muted)', fontSize: '0.875rem', background: 'var(--bg-card)' }}>
             {t('projectDetail.datasets.empty')}
           </div>
         )}
@@ -848,7 +853,6 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
   const [notConfigured, setNotConfigured] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const mono = 'DM Mono'
 
   const load = async (p: string) => {
     setLoading(true)
@@ -873,14 +877,14 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
 
   if (!volumeMountPath) {
     return (
-      <div style={{ fontFamily: mono, fontSize: '0.8rem', color: 'var(--fg-muted)', padding: '2rem 0' }}>
+      <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', padding: '2rem 0' }}>
         {t('projectDetail.workspace.noVolume')}
       </div>
     )
   }
   if (notConfigured) {
     return (
-      <div style={{ fontFamily: mono, fontSize: '0.8rem', color: 'var(--fg-muted)', padding: '2rem 0' }}>
+      <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', padding: '2rem 0' }}>
         {t('projectDetail.workspace.notConfigured')}
       </div>
     )
@@ -922,10 +926,10 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
   return (
     <div>
       {/* Breadcrumb */}
-      <div className="flex items-center gap-1 mb-4" style={{ fontFamily: mono, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+      <div className="flex items-center gap-1 mb-4" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
         <button
           onClick={() => load('')}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: path ? 'var(--accent)' : 'var(--fg-primary)', fontFamily: mono, fontSize: '0.75rem', padding: 0 }}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: path ? 'var(--accent)' : 'var(--fg-primary)', fontSize: '0.875rem', padding: 0, fontWeight: 500 }}
         >
           {t('projectDetail.workspace.root')}
         </button>
@@ -937,7 +941,7 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 color: i === breadcrumbs.length - 1 ? 'var(--fg-primary)' : 'var(--accent)',
-                fontFamily: mono, fontSize: '0.75rem', padding: 0,
+                fontSize: '0.875rem', padding: 0,
               }}
             >
               {seg}
@@ -952,12 +956,8 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="flex items-center gap-2 px-3 py-1.5 text-xs"
-          style={{
-            background: 'var(--bg-hover)', border: '1px solid var(--border)',
-            color: uploading ? 'var(--fg-muted)' : 'var(--fg-primary)',
-            fontFamily: mono, borderRadius: '4px', cursor: uploading ? 'not-allowed' : 'pointer',
-          }}
+          className="btn-secondary flex items-center gap-2"
+          style={uploading ? { cursor: 'not-allowed' } : {}}
         >
           {uploading ? t('projectDetail.workspace.uploading') : t('projectDetail.workspace.upload')}
         </button>
@@ -965,14 +965,14 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
 
       {/* File list */}
       {error && (
-        <div style={{ fontFamily: mono, fontSize: '0.75rem', color: 'var(--danger)', marginBottom: '1rem' }}>{error}</div>
+        <div style={{ fontSize: '0.875rem', color: 'var(--danger)', marginBottom: '1rem' }}>{error}</div>
       )}
       {loading ? (
-        <div style={{ fontFamily: mono, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>{t('projectDetail.workspace.loading')}</div>
+        <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>{t('projectDetail.workspace.loading')}</div>
       ) : entries.length === 0 ? (
-        <div style={{ fontFamily: mono, fontSize: '0.8rem', color: 'var(--fg-muted)', padding: '2rem 0' }}>{t('projectDetail.workspace.empty')}</div>
+        <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', padding: '2rem 0' }}>{t('projectDetail.workspace.empty')}</div>
       ) : (
-        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+        <div className="card" style={{ overflow: 'hidden' }}>
           {entries.map((entry, i) => {
             const entryPath = path ? path + '/' + entry.name : entry.name
             return (
@@ -998,23 +998,23 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
                       onClick={() => load(entryPath)}
                       style={{
                         background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                        fontFamily: mono, fontSize: '0.85rem', color: 'var(--accent)', textAlign: 'left',
+                        fontFamily: MONO, fontSize: '0.875rem', color: 'var(--accent)', textAlign: 'left',
                       }}
                     >
                       {entry.name}/
                     </button>
                   ) : (
-                    <span style={{ fontFamily: mono, fontSize: '0.85rem', color: 'var(--fg-primary)' }}>{entry.name}</span>
+                    <span style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)' }}>{entry.name}</span>
                   )}
                 </div>
 
                 {/* Size */}
-                <span style={{ fontFamily: mono, fontSize: '0.72rem', color: 'var(--fg-muted)', flexShrink: 0, minWidth: '64px', textAlign: 'right' }}>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', flexShrink: 0, minWidth: '64px', textAlign: 'right' }}>
                   {entry.is_dir ? '—' : formatBytes(entry.size)}
                 </span>
 
                 {/* Modified time */}
-                <span style={{ fontFamily: mono, fontSize: '0.72rem', color: 'var(--fg-muted)', flexShrink: 0, minWidth: '120px', textAlign: 'right' }}>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', flexShrink: 0, minWidth: '120px', textAlign: 'right' }}>
                   {timeAgo(new Date(entry.mod_time * 1000).toISOString())}
                 </span>
 
@@ -1116,18 +1116,16 @@ function SecretsTab({
     save(bindings.map(b => b.secret_id === secretId ? { ...b, ...patch } : b))
   }
 
-  const mono = 'DM Mono'
-
   return (
     <div>
-      <div className="mb-4" style={{ fontFamily: mono, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
+      <div className="mb-4" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
         {t('projectDetail.secrets.hint')}
         {saving && <span style={{ marginLeft: '1em', color: 'var(--accent)' }}>{t('projectDetail.secrets.saving')}</span>}
       </div>
 
-      <div style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+      <div className="card" style={{ overflow: 'hidden' }}>
         {allSecrets.length === 0 ? (
-          <div className="py-12 text-center" style={{ fontFamily: mono, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>
+          <div className="py-12 text-center" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
             {t('projectDetail.secrets.empty')}{' '}
             <a href="/secrets" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{t('projectDetail.secrets.emptyLink')}</a>
             {' '}{t('projectDetail.secrets.emptySuffix')}
@@ -1160,14 +1158,10 @@ function SecretsTab({
                   <div className="flex-1">
                     {/* Name & type badge */}
                     <div className="flex items-center gap-2 mb-1">
-                      <span style={{ fontFamily: mono, fontSize: '0.85rem', color: 'var(--fg-primary)' }}>
+                      <span style={{ fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
                         {sec.name}
                       </span>
-                      <span style={{
-                        fontFamily: mono, fontSize: '0.6rem', padding: '1px 6px', borderRadius: '2px',
-                        background: sec.type === 'ssh_key' ? 'rgba(200,240,60,0.15)' : 'rgba(123,97,255,0.2)',
-                        color: sec.type === 'ssh_key' ? 'var(--accent)' : '#a78bfa',
-                      }}>
+                      <span className={sec.type === 'ssh_key' ? 'badge badge-info' : 'badge badge-neutral'}>
                         {sec.type === 'ssh_key' ? t('secrets.sshKey') : t('secrets.password')}
                       </span>
                     </div>
@@ -1178,25 +1172,23 @@ function SecretsTab({
 
                         {/* Env var name (all types) */}
                         <div className="flex items-center gap-2">
-                          <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
+                          <span className="form-label" style={{ marginBottom: 0, fontSize: '0.8125rem' }}>
                             {t('projectDetail.secrets.envVar')}
                           </span>
                           <input
                             value={binding.env_var_name}
                             onChange={e => updateField(sec.id, { env_var_name: e.target.value })}
                             placeholder="MY_SECRET"
+                            className="form-input"
                             style={{
-                              background: 'var(--bg-base)', border: '1px solid var(--border)',
-                              color: 'var(--fg-primary)', fontFamily: mono, fontSize: '0.8rem',
-                              padding: '2px 8px', borderRadius: '2px', outline: 'none', width: '180px',
+                              fontFamily: MONO, fontSize: '0.875rem',
+                              padding: '4px 8px', width: '180px',
                             }}
-                            onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
-                            onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
                           />
                         </div>
 
                         {/* Build secret (all types) */}
-                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontFamily: mono, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>
+                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                           <input
                             type="checkbox"
                             checked={binding.use_for_build}
@@ -1207,22 +1199,20 @@ function SecretsTab({
                         </label>
                         {binding.use_for_build && (
                           <div className="flex items-center gap-2">
-                            <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
+                            <span className="form-label" style={{ marginBottom: 0, fontSize: '0.8125rem' }}>
                               {t('projectDetail.secrets.buildSecretId')}
                             </span>
                             <input
                               value={binding.build_secret_id}
                               onChange={e => updateField(sec.id, { build_secret_id: e.target.value })}
                               placeholder="github_token"
+                              className="form-input"
                               style={{
-                                background: 'var(--bg-base)', border: '1px solid var(--border)',
-                                color: 'var(--fg-primary)', fontFamily: mono, fontSize: '0.8rem',
-                                padding: '2px 8px', borderRadius: '2px', outline: 'none', width: '180px',
+                                fontFamily: MONO, fontSize: '0.875rem',
+                                padding: '4px 8px', width: '180px',
                               }}
-                              onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
-                              onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
                             />
-                            <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
+                            <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                               {t('projectDetail.secrets.buildSecretHint')}
                             </span>
                           </div>
@@ -1230,7 +1220,7 @@ function SecretsTab({
 
                         {/* SSH key: use for git clone */}
                         {sec.type === 'ssh_key' && (
-                          <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontFamily: mono, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>
+                          <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                             <input
                               type="checkbox"
                               checked={binding.use_for_git}
@@ -1244,7 +1234,7 @@ function SecretsTab({
                         {/* Password: use for HTTPS git auth */}
                         {sec.type === 'password' && (
                           <>
-                            <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontFamily: mono, fontSize: '0.7rem', color: 'var(--fg-muted)' }}>
+                            <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                               <input
                                 type="checkbox"
                                 checked={binding.use_for_git}
@@ -1255,23 +1245,21 @@ function SecretsTab({
                             </label>
                             {binding.use_for_git && (
                               <div className="flex items-center gap-2">
-                                <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em' }}>
+                                <span className="form-label" style={{ marginBottom: 0, fontSize: '0.8125rem' }}>
                                   {t('projectDetail.secrets.username')}
                                 </span>
                                 <input
                                   value={binding.git_username}
                                   onChange={e => updateField(sec.id, { git_username: e.target.value })}
                                   placeholder="x-access-token"
+                                  className="form-input"
                                   style={{
-                                    background: 'var(--bg-base)', border: '1px solid var(--border)',
-                                    color: 'var(--fg-primary)', fontFamily: mono, fontSize: '0.8rem',
-                                    padding: '2px 8px', borderRadius: '2px', outline: 'none', width: '160px',
+                                    fontFamily: MONO, fontSize: '0.875rem',
+                                    padding: '4px 8px', width: '160px',
                                   }}
-                                  onFocus={e => { e.target.style.borderColor = 'var(--accent)' }}
-                                  onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
                                 />
-                                <span style={{ fontFamily: mono, fontSize: '0.65rem', color: 'var(--fg-muted)' }}>
-                                  {t('projectDetail.secrets.githubPat')} (<code style={{ color: 'var(--accent)' }}>x-access-token</code>)
+                                <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
+                                  {t('projectDetail.secrets.githubPat')} (<code style={{ fontFamily: MONO, color: 'var(--accent)' }}>x-access-token</code>)
                                 </span>
                               </div>
                             )}
@@ -1303,8 +1291,8 @@ function PushUrlBadge({ url }: { url: string }) {
   }
   return (
     <div className="flex items-center gap-2 mt-2 ml-7">
-      <span style={{ fontFamily: MONO, fontSize: '0.6rem', color: 'var(--fg-muted)', letterSpacing: '0.1em' }}>{t('projectDetail.pushUrl')}</span>
-      <code style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--accent)', wordBreak: 'break-all' }}>{url}</code>
+      <span className="page-subtitle" style={{ fontSize: '0.8125rem' }}>{t('projectDetail.pushUrl')}</span>
+      <code style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--accent)', wordBreak: 'break-all' }}>{url}</code>
       <button onClick={copy} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '2px' }}>
         {copied ? <Check size={12} style={{ color: 'var(--accent)' }} /> : <Copy size={12} />}
       </button>
@@ -1370,7 +1358,7 @@ function RepoTab({ projectId }: { projectId: string }) {
   const isEmpty = branches.length === 0 && !loading
 
   if (isEmpty) {
-    return <p style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-muted)' }}>{t('projectDetail.repo.empty')}</p>
+    return <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>{t('projectDetail.repo.empty')}</p>
   }
 
   return (
@@ -1380,35 +1368,31 @@ function RepoTab({ projectId }: { projectId: string }) {
         <select
           value={currentBranch}
           onChange={e => { setCurrentBranch(e.target.value); setCurrentPath(''); setFileContent(null); setViewingFile('') }}
+          className="form-input"
           style={{
-            fontFamily: MONO, fontSize: '0.78rem', padding: '0.35rem 0.5rem',
-            background: 'var(--bg-hover)', border: '1px solid var(--border)',
-            borderRadius: '2px', color: 'var(--fg-primary)', cursor: 'pointer',
+            fontSize: '0.875rem', padding: '0.35rem 0.5rem',
+            cursor: 'pointer',
           }}
         >
           {branches.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
         </select>
         <div className="flex gap-1">
           {(['files', 'commits'] as const).map(st => (
-            <button key={st} onClick={() => setSubTab(st)} style={{
-              fontFamily: MONO, fontSize: '0.72rem', padding: '0.3rem 0.6rem',
-              border: `1px solid ${subTab === st ? 'var(--accent)' : 'var(--border)'}`,
-              background: subTab === st ? 'rgba(200,240,60,0.08)' : 'none',
-              color: subTab === st ? 'var(--accent)' : 'var(--fg-muted)',
-              borderRadius: '2px', cursor: 'pointer',
+            <button key={st} onClick={() => setSubTab(st)} className={subTab === st ? 'btn-primary' : 'btn-secondary'} style={{
+              fontSize: '0.8125rem', padding: '0.3rem 0.6rem',
             }}>{t(`projectDetail.repo.${st}`)}</button>
           ))}
         </div>
       </div>
 
-      {loading && <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>Loading...</p>}
+      {loading && <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>Loading...</p>}
 
       {/* File browser */}
       {!loading && subTab === 'files' && !viewingFile && (
-        <div style={{ border: '1px solid var(--border)', borderRadius: '2px' }}>
+        <div className="card" style={{ overflow: 'hidden' }}>
           {currentPath && (
             <button onClick={goUp} className="w-full text-left px-3 py-2 flex items-center gap-2" style={{
-              fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)',
+              fontSize: '0.875rem', color: 'var(--fg-muted)',
               background: 'none', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer',
             }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)' }}
@@ -1419,21 +1403,21 @@ function RepoTab({ projectId }: { projectId: string }) {
           )}
           {tree.map(entry => (
             <button key={entry.path} onClick={() => navigateTo(entry)} className="w-full text-left px-3 py-2 flex items-center gap-2" style={{
-              fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-primary)',
+              fontSize: '0.875rem', color: 'var(--fg-primary)',
               background: 'none', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer',
             }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)' }}
               onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
             >
               {entry.type === 'tree' ? <FolderOpen size={14} style={{ color: 'var(--accent)' }} /> : <File size={14} style={{ color: 'var(--fg-muted)' }} />}
-              <span className="flex-1">{entry.name}</span>
+              <span className="flex-1" style={{ fontFamily: MONO }}>{entry.name}</span>
               {entry.type === 'blob' && entry.size > 0 && (
-                <span style={{ fontSize: '0.65rem', color: 'var(--fg-muted)' }}>{formatBytes(entry.size)}</span>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>{formatBytes(entry.size)}</span>
               )}
             </button>
           ))}
           {tree.length === 0 && (
-            <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', padding: '1rem', textAlign: 'center' }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', padding: '1rem', textAlign: 'center' }}>
               {t('projectDetail.repo.empty')}
             </p>
           )}
@@ -1445,14 +1429,14 @@ function RepoTab({ projectId }: { projectId: string }) {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <button onClick={() => { setViewingFile(''); setFileContent(null) }} style={{
-              fontFamily: MONO, fontSize: '0.72rem', color: 'var(--accent)',
+              fontSize: '0.8125rem', color: 'var(--accent)',
               background: 'none', border: 'none', cursor: 'pointer',
             }}>← {t('projectDetail.repo.files')}</button>
-            <span style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>{viewingFile}</span>
+            <span style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>{viewingFile}</span>
           </div>
           <pre style={{
-            fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-primary)',
-            background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '2px',
+            fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-primary)',
+            background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '6px',
             padding: '1rem', overflow: 'auto', maxHeight: '600px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
           }}>{fileContent}</pre>
         </div>
@@ -1460,22 +1444,22 @@ function RepoTab({ projectId }: { projectId: string }) {
 
       {/* Commits list */}
       {!loading && subTab === 'commits' && (
-        <div style={{ border: '1px solid var(--border)', borderRadius: '2px' }}>
+        <div className="card" style={{ overflow: 'hidden' }}>
           {commits.length === 0 && (
-            <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', padding: '1rem', textAlign: 'center' }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', padding: '1rem', textAlign: 'center' }}>
               {t('projectDetail.repo.noCommits')}
             </p>
           )}
           {commits.map(c => (
             <div key={c.sha} style={{
               padding: '0.6rem 0.75rem', borderBottom: '1px solid var(--border)',
-              fontFamily: MONO, fontSize: '0.78rem',
+              fontSize: '0.875rem',
             }}>
               <div className="flex items-center gap-2">
-                <code style={{ fontSize: '0.7rem', color: 'var(--accent)' }}>{c.sha.substring(0, 8)}</code>
+                <code style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--accent)' }}>{c.sha.substring(0, 8)}</code>
                 <span style={{ color: 'var(--fg-primary)', flex: 1 }}>{c.message}</span>
               </div>
-              <div style={{ fontSize: '0.65rem', color: 'var(--fg-muted)', marginTop: '0.2rem' }}>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.2rem' }}>
                 {c.author} · {timeAgo(c.date)}
               </div>
             </div>
@@ -1529,7 +1513,7 @@ function TokensTab({ projectId }: { projectId: string }) {
 
   return (
     <div>
-      <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '1rem', lineHeight: 1.6 }}>
+      <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', marginBottom: '1rem', lineHeight: 1.6 }}>
         {t('projectDetail.tokens.hint')}
       </p>
 
@@ -1540,9 +1524,9 @@ function TokensTab({ projectId }: { projectId: string }) {
           value={newName}
           onChange={e => setNewName(e.target.value)}
           placeholder={t('projectDetail.tokens.namePlaceholder')}
+          className="form-input"
           style={{
-            fontFamily: MONO, fontSize: '0.78rem', padding: '6px 10px', borderRadius: '4px',
-            border: '1px solid var(--border)', background: 'var(--bg-base)', color: 'var(--fg-primary)',
+            fontSize: '0.875rem',
             flex: 1, maxWidth: '300px',
           }}
           onKeyDown={e => e.key === 'Enter' && handleCreate()}
@@ -1550,12 +1534,8 @@ function TokensTab({ projectId }: { projectId: string }) {
         <button
           onClick={handleCreate}
           disabled={creating}
-          className="flex items-center gap-1.5"
-          style={{
-            fontFamily: MONO, fontSize: '0.75rem', padding: '6px 14px', borderRadius: '4px',
-            background: 'var(--accent)', color: '#fff', border: 'none', cursor: creating ? 'not-allowed' : 'pointer',
-            fontWeight: 500, opacity: creating ? 0.6 : 1,
-          }}
+          className="btn-primary flex items-center gap-1.5"
+          style={creating ? { cursor: 'not-allowed', opacity: 0.6 } : {}}
         >
           <Plus size={13} />
           {creating ? t('projectDetail.tokens.creating') : t('projectDetail.tokens.create')}
@@ -1564,16 +1544,16 @@ function TokensTab({ projectId }: { projectId: string }) {
 
       {/* Newly created token */}
       {createdToken && (
-        <div style={{
-          background: 'rgba(88,166,255,0.08)', border: '1px solid rgba(88,166,255,0.3)',
-          borderRadius: '6px', padding: '0.75rem 1rem', marginBottom: '1rem',
+        <div className="card" style={{
+          background: 'rgba(37,99,235,0.08)', borderColor: 'rgba(37,99,235,0.3)',
+          padding: '0.75rem 1rem', marginBottom: '1rem',
         }}>
-          <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--accent)', marginBottom: '0.4rem', fontWeight: 600 }}>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--accent)', marginBottom: '0.4rem', fontWeight: 600 }}>
             {t('projectDetail.tokens.created')}
           </p>
           <div className="flex items-center gap-2">
             <code style={{
-              fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-primary)', flex: 1,
+              fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', flex: 1,
               wordBreak: 'break-all',
             }}>
               {showToken ? createdToken : '•'.repeat(40)}
@@ -1586,18 +1566,17 @@ function TokensTab({ projectId }: { projectId: string }) {
             </button>
             <button
               onClick={() => copyToken(createdToken)}
-              className="flex items-center gap-1"
+              className="btn-secondary flex items-center gap-1"
               style={{
-                fontFamily: MONO, fontSize: '0.68rem', padding: '3px 8px', borderRadius: '4px',
-                border: '1px solid var(--border)', background: 'none', cursor: 'pointer',
-                color: copied ? '#3fb950' : 'var(--fg-muted)',
+                fontSize: '0.8125rem', padding: '3px 8px',
+                color: copied ? 'var(--success)' : 'var(--fg-muted)',
               }}
             >
               {copied ? <Check size={12} /> : <Copy size={12} />}
               {copied ? t('projects.copied') : t('projects.copy')}
             </button>
           </div>
-          <p style={{ fontFamily: MONO, fontSize: '0.62rem', color: 'var(--fg-muted)', marginTop: '0.4rem' }}>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.4rem' }}>
             {t('projectDetail.tokens.copyWarning')}
           </p>
         </div>
@@ -1605,25 +1584,25 @@ function TokensTab({ projectId }: { projectId: string }) {
 
       {/* Token list */}
       {loading ? (
-        <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>{t('common.loading')}</p>
+        <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>{t('common.loading')}</p>
       ) : tokens.length === 0 && !createdToken ? (
-        <div style={{
-          border: '1px solid var(--border)', borderRadius: '6px', padding: '2rem',
-          textAlign: 'center', background: 'var(--bg-card)',
+        <div className="card" style={{
+          padding: '2rem',
+          textAlign: 'center',
         }}>
           <Key size={28} style={{ color: 'var(--fg-muted)', margin: '0 auto 0.5rem' }} />
-          <p style={{ fontFamily: MONO, fontSize: '0.78rem', color: 'var(--fg-muted)' }}>
+          <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
             {t('projectDetail.tokens.empty')}
           </p>
         </div>
       ) : (
-        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+        <div className="table-container">
           <table className="w-full border-collapse">
             <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+              <tr>
                 {[t('projectDetail.tokens.columns.name'), t('projectDetail.tokens.columns.lastUsed'), t('projectDetail.tokens.columns.created'), ''].map(h => (
                   <th key={h} style={{
-                    fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', letterSpacing: '0.08em',
+                    fontSize: '0.8125rem', color: 'var(--fg-muted)', letterSpacing: '0.04em',
                     padding: '0.6rem 1rem', textAlign: 'left', fontWeight: 500,
                   }}>
                     {h}
@@ -1633,22 +1612,22 @@ function TokensTab({ projectId }: { projectId: string }) {
             </thead>
             <tbody>
               {tokens.map(tok => (
-                <tr key={tok.id} style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}
+                <tr key={tok.id}
                   onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-hover)' }}
                   onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card)' }}
                 >
                   <td style={{ padding: '0.7rem 1rem' }}>
-                    <span style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
+                    <span style={{ fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
                       {tok.name}
                     </span>
                   </td>
                   <td style={{ padding: '0.7rem 1rem' }}>
-                    <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+                    <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
                       {tok.last_used_at ? timeAgo(tok.last_used_at) : '—'}
                     </span>
                   </td>
                   <td style={{ padding: '0.7rem 1rem' }}>
-                    <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+                    <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
                       {new Date(tok.created_at).toLocaleDateString()}
                     </span>
                   </td>
@@ -1656,9 +1635,9 @@ function TokensTab({ projectId }: { projectId: string }) {
                     <button
                       onClick={() => handleDelete(tok.id)}
                       style={{
-                        background: 'none', border: '1px solid var(--border)', borderRadius: '4px',
+                        background: 'none', border: '1px solid var(--border)', borderRadius: '6px',
                         padding: '3px 8px', cursor: 'pointer', color: 'var(--fg-muted)',
-                        fontFamily: MONO, fontSize: '0.68rem',
+                        fontSize: '0.8125rem',
                       }}
                       onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--danger)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--danger)' }}
                       onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-muted)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}

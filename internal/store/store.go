@@ -42,9 +42,9 @@ func (s *Store) UpsertUser(ctx context.Context, email, name, avatarURL string) (
 		INSERT INTO users (id, email, name, avatar_url, role, created_at)
 		VALUES ($1, $2, $3, $4, 'member', NOW())
 		ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, avatar_url = EXCLUDED.avatar_url
-		RETURNING id, email, name, avatar_url, role, created_at
+		RETURNING id, email, name, avatar_url, role, authorized, created_at
 	`, uuid.New(), email, name, avatarURL).Scan(
-		&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.CreatedAt,
+		&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt,
 	)
 	return &u, err
 }
@@ -52,8 +52,8 @@ func (s *Store) UpsertUser(ctx context.Context, email, name, avatarURL string) (
 func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	var u User
 	err := s.db.QueryRow(ctx, `
-		SELECT id, email, name, avatar_url, role, created_at FROM users WHERE id = $1
-	`, id).Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.CreatedAt)
+		SELECT id, email, name, avatar_url, role, authorized, created_at FROM users WHERE id = $1
+	`, id).Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -61,7 +61,7 @@ func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, email, name, avatar_url, role, created_at FROM users ORDER BY created_at`)
+	rows, err := s.db.Query(ctx, `SELECT id, email, name, avatar_url, role, authorized, created_at FROM users ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	users := make([]*User, 0)
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, &u)
@@ -86,12 +86,12 @@ func (s *Store) SetUserRole(ctx context.Context, id uuid.UUID, role UserRole) er
 
 // projectColumns is the full SELECT list for a Project row. git_url is COALESCEd
 // so domain_only projects (which have NULL git_url) scan into an empty string.
-const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at`
+const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, description, icon, tags, created_at, updated_at`
 
 func scanProject(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.CreatedAt, &p.UpdatedAt)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.CreatedAt, &p.UpdatedAt)
 }
 
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
@@ -119,9 +119,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 		gitURL = p.GitURL
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.CreatedAt, p.UpdatedAt)
+		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, description, icon, tags, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -174,8 +174,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		gitURL = p.GitURL
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, container_port=$9, memory_limit=$10, volume_mount_path=$11, updated_at=$12 WHERE id=$13
-	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.UpdatedAt, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, container_port=$9, memory_limit=$10, volume_mount_path=$11, description=$12, icon=$13, tags=$14, updated_at=$15 WHERE id=$16
+	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.UpdatedAt, p.ID)
 	return err
 }
 
@@ -190,7 +190,8 @@ func (s *Store) DeleteProject(ctx context.Context, id uuid.UUID) error {
 func (s *Store) ListPublicRunningProjects(ctx context.Context) ([]*PublicProjectInfo, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT ON (p.id)
-		       p.id, p.name, p.domain_prefix, p.auth_required, p.updated_at,
+		       p.id, p.name, p.domain_prefix, p.description, p.icon, p.tags,
+		       p.auth_required, p.updated_at,
 		       u.name AS owner_name, u.avatar_url AS owner_avatar_url
 		FROM projects p
 		JOIN deployments d ON d.project_id = p.id AND d.status = 'running'
@@ -205,7 +206,8 @@ func (s *Store) ListPublicRunningProjects(ctx context.Context) ([]*PublicProject
 	for rows.Next() {
 		var info PublicProjectInfo
 		if err := rows.Scan(
-			&info.ID, &info.Name, &info.DomainPrefix, &info.AuthRequired, &info.UpdatedAt,
+			&info.ID, &info.Name, &info.DomainPrefix, &info.Description, &info.Icon, &info.Tags,
+			&info.AuthRequired, &info.UpdatedAt,
 			&info.OwnerName, &info.OwnerAvatarURL,
 		); err != nil {
 			return nil, err
@@ -1307,4 +1309,107 @@ func (s *Store) SetProjectSecrets(ctx context.Context, projectID uuid.UUID, bind
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// ─── Authorization Requests ─────────────────────────────────────────────────
+
+func (s *Store) SetUserAuthorized(ctx context.Context, id uuid.UUID, authorized bool) error {
+	_, err := s.db.Exec(ctx, `UPDATE users SET authorized = $1 WHERE id = $2`, authorized, id)
+	return err
+}
+
+// CreateAuthorizationRequest creates a pending authorization request for the user.
+// If a rejected request already exists, it is deleted first so the user can re-request.
+func (s *Store) CreateAuthorizationRequest(ctx context.Context, userID uuid.UUID) (*AuthorizationRequest, error) {
+	// Remove any prior rejected request so the user can re-request.
+	_, _ = s.db.Exec(ctx, `DELETE FROM authorization_requests WHERE user_id = $1 AND status = 'rejected'`, userID)
+
+	var req AuthorizationRequest
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO authorization_requests (id, user_id, status, created_at, updated_at)
+		VALUES ($1, $2, 'pending', NOW(), NOW())
+		RETURNING id, user_id, status, reviewed_by, created_at, updated_at
+	`, uuid.New(), userID).Scan(&req.ID, &req.UserID, &req.Status, &req.ReviewedBy, &req.CreatedAt, &req.UpdatedAt)
+	return &req, err
+}
+
+// GetAuthorizationRequestByUser returns the latest authorization request for a user.
+func (s *Store) GetAuthorizationRequestByUser(ctx context.Context, userID uuid.UUID) (*AuthorizationRequest, error) {
+	var req AuthorizationRequest
+	err := s.db.QueryRow(ctx, `
+		SELECT id, user_id, status, reviewed_by, created_at, updated_at
+		FROM authorization_requests WHERE user_id = $1
+		ORDER BY created_at DESC LIMIT 1
+	`, userID).Scan(&req.ID, &req.UserID, &req.Status, &req.ReviewedBy, &req.CreatedAt, &req.UpdatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return &req, err
+}
+
+// ListPendingAuthorizationRequests returns all pending requests with user info joined.
+func (s *Store) ListPendingAuthorizationRequests(ctx context.Context) ([]*AuthorizationRequest, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT ar.id, ar.user_id, ar.status, ar.reviewed_by, ar.created_at, ar.updated_at,
+		       u.name, u.email, u.avatar_url
+		FROM authorization_requests ar
+		JOIN users u ON u.id = ar.user_id
+		WHERE ar.status = 'pending'
+		ORDER BY ar.created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*AuthorizationRequest, 0)
+	for rows.Next() {
+		var req AuthorizationRequest
+		if err := rows.Scan(&req.ID, &req.UserID, &req.Status, &req.ReviewedBy,
+			&req.CreatedAt, &req.UpdatedAt,
+			&req.UserName, &req.UserEmail, &req.UserAvatarURL); err != nil {
+			return nil, err
+		}
+		out = append(out, &req)
+	}
+	return out, nil
+}
+
+// ApproveAuthorizationRequest sets the request to approved and marks the user as authorized.
+func (s *Store) ApproveAuthorizationRequest(ctx context.Context, requestID, adminID uuid.UUID) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var userID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		UPDATE authorization_requests SET status = 'approved', reviewed_by = $1, updated_at = NOW()
+		WHERE id = $2 AND status = 'pending'
+		RETURNING user_id
+	`, adminID, requestID).Scan(&userID)
+	if err != nil {
+		return fmt.Errorf("request not found or already processed: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE users SET authorized = TRUE WHERE id = $1`, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// RejectAuthorizationRequest sets the request to rejected.
+func (s *Store) RejectAuthorizationRequest(ctx context.Context, requestID, adminID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE authorization_requests SET status = 'rejected', reviewed_by = $1, updated_at = NOW()
+		WHERE id = $2 AND status = 'pending'
+	`, adminID, requestID)
+	return err
+}
+
+// ClearPendingAuthorizationRequests deletes all pending requests.
+// Called when the admin disables require_authorization.
+func (s *Store) ClearPendingAuthorizationRequests(ctx context.Context) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM authorization_requests WHERE status = 'pending'`)
+	return err
 }

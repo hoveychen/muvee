@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
   site_name: '',
   logo_url: '',
   favicon_url: '',
+  require_authorization: '',
 }
 
 const SettingsContext = createContext<SettingsCtx>({

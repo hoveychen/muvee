@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/hoveychen/muvee/internal/auth"
 	"github.com/hoveychen/muvee/internal/store"
@@ -193,6 +194,7 @@ type tunnelInfo struct {
 	UserEmail    string    `json:"user_email"`
 	AuthRequired bool      `json:"auth_required"`
 	ConnectedAt  time.Time `json:"connected_at"`
+	ProjectName  string    `json:"project_name"`
 }
 
 func (tr *tunnelRegistry) activeTunnels() []tunnelInfo {
@@ -205,6 +207,7 @@ func (tr *tunnelRegistry) activeTunnels() []tunnelInfo {
 			UserEmail:    tc.userEmail,
 			AuthRequired: tc.authRequired,
 			ConnectedAt:  tc.connectedAt,
+			ProjectName:  tc.projectName,
 		})
 	}
 	return out
@@ -365,6 +368,9 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	domain := strings.TrimSuffix(host, suffix)
+
+	// Record tunnel traffic for project-bound tunnels asynchronously.
+	s.recordTunnelTraffic(r, domain)
 
 	tc := s.tunnels.get(domain)
 	if tc == nil {
@@ -562,6 +568,39 @@ func (s *Server) recordTunnelConnect(domain, email string, authRequired bool) st
 		return ""
 	}
 	return id
+}
+
+// recordTunnelTraffic asynchronously inserts a project_traffic row for
+// project-bound tunnel requests. Ephemeral t-* tunnels with no project
+// association are skipped because there is no project_id to key on.
+func (s *Server) recordTunnelTraffic(r *http.Request, domain string) {
+	projectID, err := s.store.ResolveProjectIDByDomainPrefix(r.Context(), domain)
+	if err != nil || projectID == (uuid.UUID{}) {
+		return
+	}
+	clientIP := r.RemoteAddr
+	if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
+		clientIP = clientIP[:idx]
+	}
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		clientIP = strings.TrimSpace(strings.Split(fwd, ",")[0])
+	}
+	t := &store.ProjectTraffic{
+		ProjectID:  projectID,
+		ObservedAt: time.Now(),
+		ClientIP:   clientIP,
+		Host:       r.Host,
+		Method:     r.Method,
+		Path:       r.URL.RequestURI(),
+		Status:     0, // L4 tunnel — response status is not observable
+		DurationMs: 0,
+		BytesSent:  0,
+		UserAgent:  r.Header.Get("User-Agent"),
+		Referer:    r.Header.Get("Referer"),
+	}
+	go func() {
+		_ = s.store.InsertProjectTraffic(context.Background(), t)
+	}()
 }
 
 func (s *Server) recordTunnelDisconnect(historyID string) {

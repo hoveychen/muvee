@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check } from 'lucide-react'
+import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project, Secret } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
@@ -22,35 +22,7 @@ function detectProvider(url: string): { credType: 'pat' | 'ssh'; gitUsername: st
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const MONO = 'DM Mono'
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  background: 'var(--bg-hover)',
-  border: '1px solid var(--border)',
-  color: 'var(--fg-primary)',
-  fontFamily: MONO,
-  fontSize: '0.85rem',
-  padding: '0.5rem 0.75rem',
-  borderRadius: '2px',
-  outline: 'none',
-}
-
-const labelStyle: React.CSSProperties = {
-  fontFamily: MONO,
-  fontSize: '0.65rem',
-  color: 'var(--fg-muted)',
-  letterSpacing: '0.1em',
-  display: 'block',
-  marginBottom: '0.4rem',
-}
-
-function focusAccent(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) {
-  e.target.style.borderColor = 'var(--accent)'
-}
-function blurBorder(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) {
-  e.target.style.borderColor = 'var(--border)'
-}
+const MONO = 'var(--font-mono)'
 
 // ─── Private-repo credential section ─────────────────────────────────────────
 
@@ -118,7 +90,7 @@ function PrivateRepoSection({
   const defaultCredType = credType
 
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: '2px' }}>
+    <div className="card" style={{ overflow: 'hidden' }}>
       {/* Toggle header */}
       <button
         type="button"
@@ -130,11 +102,11 @@ function PrivateRepoSection({
       >
         <Lock size={13} style={{ color: cred.mode !== 'none' ? 'var(--accent)' : 'var(--fg-muted)', flexShrink: 0 }} />
         <div className="flex-1">
-          <span style={{ fontFamily: MONO, fontSize: '0.78rem', color: cred.mode !== 'none' ? 'var(--accent)' : 'var(--fg-muted)' }}>
+          <span style={{ fontSize: '0.8125rem', color: cred.mode !== 'none' ? 'var(--accent)' : 'var(--fg-muted)' }}>
             {cred.mode !== 'none' ? t('newProject.privateRepo.configured') : t('newProject.privateRepo.configure')}
           </span>
           {provider && cred.mode === 'none' && (
-            <span style={{ fontFamily: MONO, fontSize: '0.65rem', color: 'var(--fg-muted)', marginLeft: '0.5em' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginLeft: '0.5em' }}>
               {t('newProject.privateRepo.detected', { provider })}
             </span>
           )}
@@ -145,7 +117,7 @@ function PrivateRepoSection({
       {open && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '1rem 1.25rem' }}>
           {/* Mode tabs */}
-          <div className="flex gap-1 mb-4">
+          <div className="flex gap-1 mb-4" style={{ flexWrap: 'wrap' }}>
             {[
               { id: 'none' as CredMode, label: t('newProject.privateRepo.none') },
               {
@@ -162,15 +134,10 @@ function PrivateRepoSection({
                 key={tab.id}
                 type="button"
                 onClick={() => setMode(tab.id)}
+                className={cred.mode === tab.id ? 'btn-primary' : 'btn-secondary'}
                 style={{
-                  fontFamily: MONO,
-                  fontSize: '0.7rem',
-                  padding: '0.3rem 0.75rem',
-                  borderRadius: '2px',
-                  border: `1px solid ${cred.mode === tab.id ? 'var(--accent)' : 'var(--border)'}`,
-                  background: cred.mode === tab.id ? 'rgba(200,240,60,0.1)' : 'var(--bg-hover)',
-                  color: cred.mode === tab.id ? 'var(--accent)' : 'var(--fg-muted)',
-                  cursor: 'pointer',
+                  fontSize: '0.8125rem',
+                  padding: '0.35rem 0.75rem',
                 }}
               >
                 {tab.label}
@@ -180,7 +147,7 @@ function PrivateRepoSection({
 
           {/* None */}
           {cred.mode === 'none' && (
-            <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
+            <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
               {t('newProject.privateRepo.noCredentials')}
             </p>
           )}
@@ -188,29 +155,27 @@ function PrivateRepoSection({
           {/* New PAT */}
           {cred.mode === 'new_pat' && (
             <div className="flex flex-col gap-3">
-              <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', lineHeight: 1.6 }}>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', lineHeight: 1.6 }}>
                 {provider === 'GitHub'
                   ? t('newProject.privateRepo.githubPatHint')
                   : t('newProject.privateRepo.genericPatHint')}
               </p>
               <div>
-                <label style={labelStyle}>{t('newProject.privateRepo.gitUsername')}</label>
+                <label className="form-label">{t('newProject.privateRepo.gitUsername')}</label>
                 <input
                   value={cred.patGitUsername}
                   onChange={e => onChange({ ...cred, patGitUsername: e.target.value })}
                   placeholder="x-access-token"
-                  style={inputStyle}
-                  onFocus={focusAccent}
-                  onBlur={blurBorder}
+                  className="form-input"
                 />
-                <p style={{ fontFamily: MONO, fontSize: '0.63rem', color: 'var(--fg-muted)', marginTop: '0.3rem' }}>
+                <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '0.3rem' }}>
                   {provider === 'GitHub' && <>{t('newProject.privateRepo.githubUsernameHint')}</>}
                   {provider === 'GitLab' && <>{t('newProject.privateRepo.gitlabUsernameHint')}</>}
                   {!provider && t('newProject.privateRepo.genericUsernameHint')}
                 </p>
               </div>
               <div>
-                <label style={labelStyle}>
+                <label className="form-label">
                   {t('newProject.privateRepo.tokenValue')}{' '}
                   <span style={{ color: 'var(--danger)', fontWeight: 400 }}>{t('newProject.privateRepo.writeOnly')}</span>
                 </label>
@@ -220,9 +185,8 @@ function PrivateRepoSection({
                     value={cred.patValue}
                     onChange={e => onChange({ ...cred, patValue: e.target.value })}
                     placeholder={t('newProject.privateRepo.tokenPlaceholder', { provider: provider ?? 'access' })}
-                    style={{ ...inputStyle, paddingRight: '2.5rem' }}
-                    onFocus={focusAccent}
-                    onBlur={blurBorder}
+                    className="form-input"
+                    style={{ paddingRight: '2.5rem' }}
                   />
                   <button
                     type="button"
@@ -233,7 +197,7 @@ function PrivateRepoSection({
                   </button>
                 </div>
               </div>
-              <p style={{ fontFamily: MONO, fontSize: '0.63rem', color: 'var(--fg-muted)' }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
                 {t('newProject.privateRepo.newPatSecretHint', { name: projectName || 'project' })}
               </p>
             </div>
@@ -242,11 +206,11 @@ function PrivateRepoSection({
           {/* New SSH Key */}
           {cred.mode === 'new_ssh' && (
             <div className="flex flex-col gap-3">
-              <p style={{ fontFamily: MONO, fontSize: '0.7rem', color: 'var(--fg-muted)', lineHeight: 1.6 }}
+              <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', lineHeight: 1.6 }}
                 dangerouslySetInnerHTML={{ __html: t('newProject.privateRepo.privateKeyHint') }}
               />
               <div>
-                <label style={labelStyle}>
+                <label className="form-label">
                   {t('newProject.privateRepo.privateKey')}{' '}
                   <span style={{ color: 'var(--danger)', fontWeight: 400 }}>{t('newProject.privateRepo.writeOnly')}</span>
                 </label>
@@ -255,12 +219,11 @@ function PrivateRepoSection({
                   onChange={e => onChange({ ...cred, sshKeyValue: e.target.value })}
                   placeholder={'-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----'}
                   rows={6}
-                  style={{ ...inputStyle, resize: 'vertical', fontSize: '0.75rem' }}
-                  onFocus={focusAccent}
-                  onBlur={blurBorder}
+                  className="form-input"
+                  style={{ resize: 'vertical', fontFamily: MONO, fontSize: '0.8125rem' }}
                 />
               </div>
-              <p style={{ fontFamily: MONO, fontSize: '0.63rem', color: 'var(--fg-muted)' }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
                 {t('newProject.privateRepo.newSshSecretHint', { name: projectName || 'project' })}
               </p>
             </div>
@@ -270,9 +233,9 @@ function PrivateRepoSection({
           {cred.mode === 'existing' && (
             <div className="flex flex-col gap-3">
               <div>
-                <label style={labelStyle}>{t('newProject.privateRepo.selectSecret')}</label>
+                <label className="form-label">{t('newProject.privateRepo.selectSecret')}</label>
                 {secrets.length === 0 ? (
-                  <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)' }}>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                     {t('newProject.privateRepo.noSecrets')}{' '}
                     <a href="/secrets" style={{ color: 'var(--accent)' }}>{t('newProject.privateRepo.createOne')}</a>{' '}
                     {t('newProject.privateRepo.noSecretsFirst')}
@@ -281,9 +244,8 @@ function PrivateRepoSection({
                   <select
                     value={cred.existingSecretId}
                     onChange={e => onChange({ ...cred, existingSecretId: e.target.value })}
-                    style={{ ...inputStyle, cursor: 'pointer' }}
-                    onFocus={focusAccent}
-                    onBlur={blurBorder}
+                    className="form-input"
+                    style={{ cursor: 'pointer' }}
                   >
                     <option value="">{t('newProject.privateRepo.chooseSecret')}</option>
                     {secrets.map(s => (
@@ -299,14 +261,12 @@ function PrivateRepoSection({
                 if (!sec) return null
                 if (sec.type === 'password') return (
                   <div>
-                    <label style={labelStyle}>{t('newProject.privateRepo.gitUsername')}</label>
+                    <label className="form-label">{t('newProject.privateRepo.gitUsername')}</label>
                     <input
                       value={cred.patGitUsername || 'x-access-token'}
                       onChange={e => onChange({ ...cred, patGitUsername: e.target.value })}
                       placeholder="x-access-token"
-                      style={inputStyle}
-                      onFocus={focusAccent}
-                      onBlur={blurBorder}
+                      className="form-input"
                     />
                   </div>
                 )
@@ -323,6 +283,7 @@ function PrivateRepoSection({
 // ─── Main NewProject component ────────────────────────────────────────────────
 
 export default function NewProject() {
+  const [projectType, setProjectType] = useState<'deployment' | 'domain_only'>('deployment')
   const [form, setForm] = useState<Partial<Project>>({
     git_source: 'external',
     git_branch: 'main',
@@ -349,8 +310,8 @@ export default function NewProject() {
     e.preventDefault()
     setError('')
 
-    // Validate credential inputs (only for external repos)
-    if (form.git_source !== 'hosted') {
+    // Validate credential inputs (only for deployment + external repos)
+    if (projectType === 'deployment' && form.git_source !== 'hosted') {
       if (cred.mode === 'new_pat' && !cred.patValue.trim()) {
         setError(t('newProject.errors.noToken'))
         return
@@ -368,7 +329,16 @@ export default function NewProject() {
     setSaving(true)
     try {
       // Step 1: create the project
-      const project = await api.projects.create(form)
+      const payload: Partial<Project> = projectType === 'domain_only'
+        ? { name: form.name, domain_prefix: form.domain_prefix, project_type: 'domain_only' }
+        : { ...form, project_type: 'deployment' }
+      const project = await api.projects.create(payload)
+
+      // domain_only projects — no credentials, just navigate
+      if (projectType === 'domain_only') {
+        navigate(`/projects/${project.id}`)
+        return
+      }
 
       // For hosted repos, show the push URL instead of navigating
       if (project.git_source === 'hosted' && project.git_push_url) {
@@ -425,7 +395,7 @@ export default function NewProject() {
   const domainPrefixRequired = !nameIsValidPrefix
 
   const fieldLabel = (text: string, required = true) => (
-    <label style={labelStyle}>
+    <label className="form-label">
       {text.toUpperCase()}
       {required && <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>}
     </label>
@@ -441,44 +411,38 @@ export default function NewProject() {
     }
     return (
       <div className="page-enter" style={{ maxWidth: '520px' }}>
-        <div className="mb-8">
-          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.15em' }}>{t('newProject.sectionLabel')}</p>
-          <h1 style={{ fontFamily: 'Bebas Neue', fontSize: '3rem', color: 'var(--fg-primary)', lineHeight: 1 }}>{t('newProject.hostedCreated.heading')}</h1>
+        <div className="page-header">
+          <p className="page-subtitle">{t('newProject.sectionLabel')}</p>
+          <h1 className="page-title">{t('newProject.hostedCreated.heading')}</h1>
         </div>
         <div className="flex flex-col gap-5">
-          <p style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-secondary)', lineHeight: 1.6 }}>
+          <p style={{ fontSize: '0.875rem', color: 'var(--fg-secondary)', lineHeight: 1.6 }}>
             {t('newProject.hostedCreated.description', { name: createdProject.name })}
           </p>
           <div>
-            <label style={labelStyle}>{t('newProject.hostedCreated.pushUrl')}</label>
+            <label className="form-label">{t('newProject.hostedCreated.pushUrl')}</label>
             <div className="flex items-center gap-2">
               <code style={{
-                flex: 1, fontFamily: MONO, fontSize: '0.8rem', padding: '0.5rem 0.75rem',
-                background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '2px',
+                flex: 1, fontFamily: MONO, fontSize: '0.875rem', padding: '0.5rem 0.75rem',
+                background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '6px',
                 color: 'var(--accent)', wordBreak: 'break-all',
               }}>{pushUrl}</code>
-              <button type="button" onClick={copyUrl} style={{
-                background: 'none', border: '1px solid var(--border)', borderRadius: '2px',
-                padding: '0.5rem', cursor: 'pointer', color: 'var(--fg-muted)',
-              }}>
+              <button type="button" onClick={copyUrl} className="btn-secondary" style={{ padding: '0.5rem' }}>
                 {copied ? <Check size={14} style={{ color: 'var(--accent)' }} /> : <Copy size={14} />}
               </button>
             </div>
           </div>
-          <div style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', lineHeight: 1.8, background: 'var(--bg-hover)', padding: '0.75rem 1rem', borderRadius: '2px' }}>
+          <div style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)', lineHeight: 1.8, background: 'var(--bg-hover)', padding: '0.75rem 1rem', borderRadius: '6px' }}>
             <div>git remote add muvee {pushUrl}</div>
             <div>git push muvee main</div>
           </div>
-          <p style={{ fontFamily: MONO, fontSize: '0.68rem', color: 'var(--fg-muted)' }}>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
             {t('newProject.hostedCreated.authHint')}
           </p>
           <button
             onClick={() => navigate(`/projects/${createdProject.id}`)}
-            style={{
-              background: 'var(--accent)', color: '#0f0f0f', fontFamily: MONO,
-              fontSize: '0.85rem', fontWeight: 500, padding: '0.6rem 1.5rem',
-              border: 'none', borderRadius: '2px', cursor: 'pointer', alignSelf: 'flex-start',
-            }}
+            className="btn-primary"
+            style={{ alignSelf: 'flex-start' }}
           >
             {t('newProject.hostedCreated.goToProject')}
           </button>
@@ -491,15 +455,49 @@ export default function NewProject() {
 
   return (
     <div className="page-enter" style={{ maxWidth: '520px' }}>
-        <div className="mb-8">
-          <p style={{ fontFamily: MONO, color: 'var(--fg-muted)', fontSize: '0.7rem', letterSpacing: '0.15em' }}>{t('newProject.sectionLabel')}</p>
-          <h1 style={{ fontFamily: 'Bebas Neue', fontSize: '3rem', color: 'var(--fg-primary)', lineHeight: 1 }}>{t('newProject.heading')}</h1>
+        <div className="page-header">
+          <p className="page-subtitle">{t('newProject.sectionLabel')}</p>
+          <h1 className="page-title">{t('newProject.heading')}</h1>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-          {/* Git Source selector */}
+          {/* Project Type selector */}
           <div>
-            <label style={labelStyle}>{t('newProject.fields.gitSource').toUpperCase()}</label>
+            <label className="form-label">{t('newProject.fields.projectType').toUpperCase()}</label>
+            <div className="flex gap-2">
+              {([
+                { id: 'deployment' as const, icon: Globe, label: t('newProject.projectType.deployment') },
+                { id: 'domain_only' as const, icon: Radio, label: t('newProject.projectType.tunnel') },
+              ]).map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setProjectType(opt.id)}
+                  className="flex items-center gap-2 flex-1"
+                  style={{
+                    fontSize: '0.875rem', padding: '0.55rem 0.75rem',
+                    borderRadius: '6px', cursor: 'pointer',
+                    border: `1px solid ${projectType === opt.id ? 'var(--accent)' : 'var(--border)'}`,
+                    background: projectType === opt.id ? 'rgba(37,99,235,0.08)' : 'var(--bg-hover)',
+                    color: projectType === opt.id ? 'var(--accent)' : 'var(--fg-muted)',
+                  }}
+                >
+                  <opt.icon size={14} />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {projectType === 'domain_only' && (
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.projectType.tunnelHint')}
+              </p>
+            )}
+          </div>
+
+          {/* Git Source selector — deployment only */}
+          {projectType === 'deployment' && (
+          <div>
+            <label className="form-label">{t('newProject.fields.gitSource').toUpperCase()}</label>
             <div className="flex gap-2">
               {([
                 { id: 'external' as const, icon: Globe, label: t('newProject.gitSource.external') },
@@ -511,10 +509,10 @@ export default function NewProject() {
                   onClick={() => setForm({ ...form, git_source: opt.id })}
                   className="flex items-center gap-2 flex-1"
                   style={{
-                    fontFamily: MONO, fontSize: '0.78rem', padding: '0.55rem 0.75rem',
-                    borderRadius: '2px', cursor: 'pointer',
+                    fontSize: '0.875rem', padding: '0.55rem 0.75rem',
+                    borderRadius: '6px', cursor: 'pointer',
                     border: `1px solid ${form.git_source === opt.id ? 'var(--accent)' : 'var(--border)'}`,
-                    background: form.git_source === opt.id ? 'rgba(200,240,60,0.08)' : 'var(--bg-hover)',
+                    background: form.git_source === opt.id ? 'rgba(37,99,235,0.08)' : 'var(--bg-hover)',
                     color: form.git_source === opt.id ? 'var(--accent)' : 'var(--fg-muted)',
                   }}
                 >
@@ -524,11 +522,12 @@ export default function NewProject() {
               ))}
             </div>
             {isHosted && (
-              <p style={{ fontFamily: MONO, fontSize: '0.63rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
                 {t('newProject.gitSource.hostedHint')}
               </p>
             )}
           </div>
+          )}
 
           {/* Name */}
           <div>
@@ -537,14 +536,12 @@ export default function NewProject() {
               value={form.name ?? ''}
               onChange={e => setForm({ ...form, name: e.target.value })}
               required
-              style={inputStyle}
-              onFocus={focusAccent}
-              onBlur={blurBorder}
+              className="form-input"
             />
           </div>
 
-          {/* Git URL — only for external repos */}
-          {!isHosted && (
+          {/* Git URL — only for deployment + external repos */}
+          {projectType === 'deployment' && !isHosted && (
             <div>
               {fieldLabel(t('newProject.fields.gitUrl'))}
               <input
@@ -552,15 +549,13 @@ export default function NewProject() {
                 onChange={e => setForm({ ...form, git_url: e.target.value })}
                 required
                 placeholder="https://github.com/owner/repo.git"
-                style={inputStyle}
-                onFocus={focusAccent}
-                onBlur={blurBorder}
+                className="form-input"
               />
             </div>
           )}
 
-          {/* Private repo credential shortcut — only for external repos */}
-          {!isHosted && (form.git_url ?? '').trim() !== '' && (
+          {/* Private repo credential shortcut — only for deployment + external repos */}
+          {projectType === 'deployment' && !isHosted && (form.git_url ?? '').trim() !== '' && (
             <PrivateRepoSection
               gitUrl={form.git_url ?? ''}
               projectName={form.name ?? ''}
@@ -569,107 +564,139 @@ export default function NewProject() {
             />
           )}
 
-          {/* Branch — only for external repos */}
-          {!isHosted && (
+          {/* Branch — only for deployment + external repos */}
+          {projectType === 'deployment' && !isHosted && (
             <div>
               {fieldLabel(t('newProject.fields.gitBranch'), false)}
               <input
                 value={form.git_branch ?? ''}
                 onChange={e => setForm({ ...form, git_branch: e.target.value })}
                 placeholder="main"
-                style={inputStyle}
-                onFocus={focusAccent}
-                onBlur={blurBorder}
+                className="form-input"
               />
             </div>
           )}
 
-          {/* Domain prefix */}
+          {/* Domain prefix — required for domain_only, optional for deployment */}
           <div>
-            <label style={labelStyle}>
+            <label className="form-label">
               {t('newProject.fields.domainPrefix').toUpperCase()}
-              {domainPrefixRequired && <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>}
+              {(projectType === 'domain_only' || domainPrefixRequired) && <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>}
             </label>
             <input
               value={form.domain_prefix ?? ''}
               onChange={e => setForm({ ...form, domain_prefix: e.target.value })}
-              required={domainPrefixRequired}
+              required={projectType === 'domain_only' || domainPrefixRequired}
               placeholder={nameIsValidPrefix ? form.name : undefined}
-              style={inputStyle}
-              onFocus={focusAccent}
-              onBlur={blurBorder}
+              className="form-input"
             />
-            <p style={{ fontFamily: MONO, fontSize: '0.63rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
-              {nameIsValidPrefix
-                ? t('newProject.domainOptional', { name: form.name })
-                : t('newProject.domainRequired')}
+            <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: (projectType === 'domain_only' || domainPrefixRequired) ? 'var(--danger)' : 'var(--fg-muted)' }}>
+              {projectType === 'domain_only'
+                ? t('newProject.domainTunnelHint')
+                : nameIsValidPrefix
+                  ? t('newProject.domainOptional', { name: form.name })
+                  : t('newProject.domainRequired')}
             </p>
           </div>
 
-          {/* Dockerfile path */}
+          {/* Description */}
+          <div>
+            {fieldLabel(t('newProject.fields.description'), false)}
+            <input
+              value={form.description ?? ''}
+              onChange={e => setForm({ ...form, description: e.target.value })}
+              placeholder={t('newProject.fields.descriptionPlaceholder')}
+              className="form-input"
+            />
+          </div>
+
+          {/* Tags */}
+          <div>
+            {fieldLabel(t('newProject.fields.tags'), false)}
+            <input
+              value={form.tags ?? ''}
+              onChange={e => setForm({ ...form, tags: e.target.value })}
+              placeholder={t('newProject.fields.tagsPlaceholder')}
+              className="form-input"
+            />
+            <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+              {t('newProject.fields.tagsHint')}
+            </p>
+          </div>
+
+          {/* Icon */}
+          <div>
+            {fieldLabel(t('newProject.fields.icon'), false)}
+            <textarea
+              value={form.icon ?? ''}
+              onChange={e => setForm({ ...form, icon: e.target.value })}
+              placeholder={t('newProject.fields.iconPlaceholder')}
+              rows={3}
+              className="form-input"
+              style={{ resize: 'vertical', fontFamily: MONO, fontSize: '0.8125rem' }}
+            />
+            <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+              {t('newProject.fields.iconHint')}
+            </p>
+          </div>
+
+          {/* Dockerfile path — deployment only */}
+          {projectType === 'deployment' && (
           <div>
             {fieldLabel(t('newProject.fields.dockerfilePath'), false)}
             <input
               value={form.dockerfile_path ?? ''}
               onChange={e => setForm({ ...form, dockerfile_path: e.target.value })}
               placeholder="Dockerfile"
-              style={inputStyle}
-              onFocus={focusAccent}
-              onBlur={blurBorder}
+              className="form-input"
             />
           </div>
+          )}
 
-          {/* Memory limit */}
+          {/* Memory limit — deployment only */}
+          {projectType === 'deployment' && (
           <div>
             {fieldLabel(t('newProject.fields.memoryLimit'), false)}
             <input
               value={form.memory_limit ?? ''}
               onChange={e => setForm({ ...form, memory_limit: e.target.value })}
               placeholder="4g"
-              style={inputStyle}
-              onFocus={focusAccent}
-              onBlur={blurBorder}
+              className="form-input"
             />
-            <p style={{ fontFamily: MONO, fontSize: '0.63rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
               {t('newProject.fields.memoryLimitHint')}
             </p>
           </div>
+          )}
 
-          {/* Persistent storage path */}
+          {/* Persistent storage path — deployment only */}
+          {projectType === 'deployment' && (
           <div>
             {fieldLabel(t('newProject.fields.volumeMountPath'), false)}
             <input
               value={form.volume_mount_path ?? ''}
               onChange={e => setForm({ ...form, volume_mount_path: e.target.value })}
               placeholder="/workspace"
-              style={inputStyle}
-              onFocus={focusAccent}
-              onBlur={blurBorder}
+              className="form-input"
             />
-            <p style={{ fontFamily: MONO, fontSize: '0.63rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
               {t('newProject.fields.volumeMountPathHint')}
             </p>
           </div>
+          )}
 
           {error && (
-            <p style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--danger)' }}>{error}</p>
+            <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{error}</p>
           )}
 
           <button
             type="submit"
             disabled={saving}
+            className="btn-primary"
             style={{
-              background: 'var(--accent)',
-              color: '#0f0f0f',
-              fontFamily: MONO,
-              fontSize: '0.85rem',
-              fontWeight: 500,
-              padding: '0.6rem 1.5rem',
-              border: 'none',
-              borderRadius: '2px',
+              alignSelf: 'flex-start',
               cursor: saving ? 'not-allowed' : 'pointer',
               opacity: saving ? 0.7 : 1,
-              alignSelf: 'flex-start',
             }}
           >
             {saving ? t('newProject.creating') : t('newProject.createProject')}

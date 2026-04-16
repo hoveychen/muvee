@@ -190,34 +190,40 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/me", s.handleMe)
 		r.Get("/api/runtime/config", s.handleRuntimeConfig)
 
-		// Project-scoped API Tokens
+		// Authorization – any authenticated user can check status and submit requests
+		r.Get("/api/authorization/status", s.handleAuthorizationStatus)
+		r.Post("/api/authorization/request", s.handleCreateAuthorizationRequest)
+
+		// Projects (list is available to all authenticated users; unauthorized users see public projects)
+		r.Get("/api/projects", s.listProjects)
+
+		// Project-scoped API Tokens (requires authorization)
 		r.Get("/api/projects/{id}/tokens", s.listProjectTokens)
 		r.Post("/api/projects/{id}/tokens", s.createProjectToken)
 		r.Delete("/api/projects/{id}/tokens/{tokenId}", s.deleteProjectToken)
 
-		// Secrets
+		// Secrets (requires authorization for create)
 		r.Get("/api/secrets", s.listSecrets)
-		r.Post("/api/secrets", s.createSecret)
+		r.Post("/api/secrets", s.requireAuthorized(s.createSecret))
 		r.Delete("/api/secrets/{id}", s.deleteSecret)
 
-		// Projects
-		r.Get("/api/projects", s.listProjects)
-		r.Post("/api/projects", s.createProject)
+		// Projects (write operations require authorization)
+		r.Post("/api/projects", s.requireAuthorized(s.createProject))
 		r.Get("/api/projects/{id}", s.getProject)
-		r.Put("/api/projects/{id}", s.updateProject)
-		r.Delete("/api/projects/{id}", s.deleteProject)
+		r.Put("/api/projects/{id}", s.requireAuthorized(s.updateProject))
+		r.Delete("/api/projects/{id}", s.requireAuthorized(s.deleteProject))
 		r.Get("/api/projects/{id}/datasets", s.getProjectDatasets)
-		r.Put("/api/projects/{id}/datasets", s.setProjectDatasets)
+		r.Put("/api/projects/{id}/datasets", s.requireAuthorized(s.setProjectDatasets))
 		r.Get("/api/projects/{id}/secrets", s.getProjectSecrets)
-		r.Put("/api/projects/{id}/secrets", s.setProjectSecrets)
-		r.Post("/api/projects/{id}/deploy", s.triggerDeploy)
+		r.Put("/api/projects/{id}/secrets", s.requireAuthorized(s.setProjectSecrets))
+		r.Post("/api/projects/{id}/deploy", s.requireAuthorized(s.triggerDeploy))
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
 		r.Get("/api/projects/{id}/metrics", s.getProjectMetrics)
 		r.Get("/api/projects/{id}/traffic", s.getProjectTraffic)
 		r.Get("/api/projects/{id}/workspace", s.workspaceList)
 		r.Get("/api/projects/{id}/workspace/download", s.workspaceDownload)
-		r.Post("/api/projects/{id}/workspace/upload", s.workspaceUpload)
-		r.Delete("/api/projects/{id}/workspace", s.workspaceDelete)
+		r.Post("/api/projects/{id}/workspace/upload", s.requireAuthorized(s.workspaceUpload))
+		r.Delete("/api/projects/{id}/workspace", s.requireAuthorized(s.workspaceDelete))
 
 		// Project proxy – forward requests to the running container
 		r.HandleFunc("/api/projects/{id}/proxy", s.handleProjectProxy)
@@ -232,13 +238,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/projects/{id}/repo/commits", s.repoCommits)
 		r.Get("/api/projects/{id}/repo/branches", s.repoBranches)
 
-		// Datasets
+		// Datasets (write operations require authorization)
 		r.Get("/api/datasets", s.listDatasets)
-		r.Post("/api/datasets", s.createDataset)
+		r.Post("/api/datasets", s.requireAuthorized(s.createDataset))
 		r.Get("/api/datasets/{id}", s.getDataset)
-		r.Put("/api/datasets/{id}", s.updateDataset)
-		r.Delete("/api/datasets/{id}", s.deleteDataset)
-		r.Post("/api/datasets/{id}/scan", s.scanDataset)
+		r.Put("/api/datasets/{id}", s.requireAuthorized(s.updateDataset))
+		r.Delete("/api/datasets/{id}", s.requireAuthorized(s.deleteDataset))
+		r.Post("/api/datasets/{id}/scan", s.requireAuthorized(s.scanDataset))
 		r.Get("/api/datasets/{id}/snapshots", s.listSnapshots)
 		r.Get("/api/datasets/{id}/history", s.listFileHistory)
 
@@ -261,6 +267,10 @@ func (s *Server) Router() http.Handler {
 			// Active tunnels and history
 			r.Get("/api/admin/tunnels", s.listActiveTunnels)
 			r.Get("/api/admin/tunnels/history", s.listTunnelHistory)
+			// Authorization management (admin-only)
+			r.Get("/api/admin/authorization/requests", s.handleListAuthorizationRequests)
+			r.Put("/api/admin/authorization/requests/{id}/approve", s.handleApproveAuthorizationRequest)
+			r.Put("/api/admin/authorization/requests/{id}/reject", s.handleRejectAuthorizationRequest)
 		})
 	})
 
@@ -657,6 +667,9 @@ func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
 		ID             string `json:"id"`
 		Name           string `json:"name"`
 		DomainPrefix   string `json:"domain_prefix"`
+		Description    string `json:"description"`
+		Icon           string `json:"icon"`
+		Tags           string `json:"tags"`
 		URL            string `json:"url"`
 		AuthRequired   bool   `json:"auth_required"`
 		OwnerName      string `json:"owner_name"`
@@ -669,6 +682,9 @@ func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
 			ID:             p.ID.String(),
 			Name:           p.Name,
 			DomainPrefix:   p.DomainPrefix,
+			Description:    p.Description,
+			Icon:           p.Icon,
+			Tags:           p.Tags,
 			URL:            fmt.Sprintf("https://%s.%s", p.DomainPrefix, s.baseDomain),
 			AuthRequired:   p.AuthRequired,
 			OwnerName:      p.OwnerName,
@@ -1757,6 +1773,112 @@ func (s *Server) TunnelAwareHandler(inner http.Handler) http.Handler {
 		}
 		inner.ServeHTTP(w, r)
 	})
+}
+
+// ─── Authorization ──────────────────────────────────────────────────────────
+
+// isUserAuthorized checks whether a user is authorized to perform write operations.
+// Returns true when require_authorization is disabled, or user is admin, or user.authorized is true.
+func (s *Server) isUserAuthorized(ctx context.Context, user *store.User) bool {
+	if user.Role == store.UserRoleAdmin {
+		return true
+	}
+	settings, err := s.store.GetAllSettings(ctx)
+	if err != nil {
+		return true // fail open if we can't read settings
+	}
+	if settings["require_authorization"] != "true" {
+		return true
+	}
+	return user.Authorized
+}
+
+// requireAuthorized wraps a handler and returns 403 if the user is not authorized.
+func (s *Server) requireAuthorized(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := auth.UserFromCtx(r.Context())
+		if !s.isUserAuthorized(r.Context(), user) {
+			jsonErr(w, fmt.Errorf("publishing authorization required"), http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) handleAuthorizationStatus(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	settings, _ := s.store.GetAllSettings(r.Context())
+	requireAuth := settings["require_authorization"] == "true"
+
+	type statusResponse struct {
+		RequireAuthorization bool                                `json:"require_authorization"`
+		Authorized           bool                                `json:"authorized"`
+		Request              *store.AuthorizationRequest         `json:"request,omitempty"`
+	}
+
+	resp := statusResponse{
+		RequireAuthorization: requireAuth,
+		Authorized:           user.Role == store.UserRoleAdmin || !requireAuth || user.Authorized,
+	}
+
+	if requireAuth && user.Role != store.UserRoleAdmin {
+		req, _ := s.store.GetAuthorizationRequestByUser(r.Context(), user.ID)
+		resp.Request = req
+	}
+	jsonOK(w, resp)
+}
+
+func (s *Server) handleCreateAuthorizationRequest(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	if user.Role == store.UserRoleAdmin {
+		jsonErr(w, fmt.Errorf("admins are always authorized"), http.StatusBadRequest)
+		return
+	}
+	if user.Authorized {
+		jsonErr(w, fmt.Errorf("already authorized"), http.StatusBadRequest)
+		return
+	}
+	// Check for existing pending request
+	existing, _ := s.store.GetAuthorizationRequestByUser(r.Context(), user.ID)
+	if existing != nil && existing.Status == store.AuthRequestPending {
+		jsonErr(w, fmt.Errorf("request already pending"), http.StatusConflict)
+		return
+	}
+	req, err := s.store.CreateAuthorizationRequest(r.Context(), user.ID)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, req)
+}
+
+func (s *Server) handleListAuthorizationRequests(w http.ResponseWriter, r *http.Request) {
+	requests, err := s.store.ListPendingAuthorizationRequests(r.Context())
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, requests)
+}
+
+func (s *Server) handleApproveAuthorizationRequest(w http.ResponseWriter, r *http.Request) {
+	reqID := mustParseUUID(chi.URLParam(r, "id"))
+	admin := auth.UserFromCtx(r.Context())
+	if err := s.store.ApproveAuthorizationRequest(r.Context(), reqID, admin.ID); err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "approved"})
+}
+
+func (s *Server) handleRejectAuthorizationRequest(w http.ResponseWriter, r *http.Request) {
+	reqID := mustParseUUID(chi.URLParam(r, "id"))
+	admin := auth.UserFromCtx(r.Context())
+	if err := s.store.RejectAuthorizationRequest(r.Context(), reqID, admin.ID); err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "rejected"})
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
