@@ -238,6 +238,37 @@ func (s *Store) GetProjectByOwnerAndName(ctx context.Context, ownerID uuid.UUID,
 	return &p, err
 }
 
+// ListPublicDomainOnlyProjects returns a minimal public view of all domain_only
+// projects. The caller is responsible for filtering by tunnel liveness.
+func (s *Store) ListPublicDomainOnlyProjects(ctx context.Context) ([]*PublicProjectInfo, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT p.id, p.name, p.domain_prefix, p.description, p.icon, p.tags,
+		       p.auth_required, p.updated_at,
+		       u.name AS owner_name, u.avatar_url AS owner_avatar_url
+		FROM projects p
+		JOIN users u ON u.id = p.owner_id
+		WHERE p.project_type = 'domain_only'
+		ORDER BY p.updated_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*PublicProjectInfo, 0)
+	for rows.Next() {
+		var info PublicProjectInfo
+		if err := rows.Scan(
+			&info.ID, &info.Name, &info.DomainPrefix, &info.Description, &info.Icon, &info.Tags,
+			&info.AuthRequired, &info.UpdatedAt,
+			&info.OwnerName, &info.OwnerAvatarURL,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &info)
+	}
+	return items, nil
+}
+
 // ListDomainOnlyProjects returns every project with project_type = 'domain_only'.
 // Used by the Traefik config generator to emit a stable route for each reserved
 // domain so that the offline placeholder can be served when no tunnel is live.

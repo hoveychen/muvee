@@ -663,6 +663,25 @@ func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 500)
 		return
 	}
+
+	// Also include domain_only projects that have an active tunnel connection.
+	activeDomains := make(map[string]struct{})
+	for _, t := range s.tunnels.activeTunnels() {
+		activeDomains[t.Domain] = struct{}{}
+	}
+	if len(activeDomains) > 0 {
+		domainOnly, err := s.store.ListPublicDomainOnlyProjects(r.Context())
+		if err != nil {
+			jsonErr(w, err, 500)
+			return
+		}
+		for _, p := range domainOnly {
+			if _, ok := activeDomains[p.DomainPrefix]; ok {
+				projects = append(projects, p)
+			}
+		}
+	}
+
 	type publicProjectOut struct {
 		ID             string `json:"id"`
 		Name           string `json:"name"`
