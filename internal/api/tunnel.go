@@ -574,6 +574,9 @@ func (s *Server) recordTunnelConnect(domain, email string, authRequired bool) st
 // project-bound tunnel requests. Ephemeral t-* tunnels with no project
 // association are skipped because there is no project_id to key on.
 func (s *Server) recordTunnelTraffic(r *http.Request, domain string) {
+	if s.store == nil {
+		return
+	}
 	projectID, err := s.store.ResolveProjectIDByDomainPrefix(r.Context(), domain)
 	if err != nil || projectID == (uuid.UUID{}) {
 		return
