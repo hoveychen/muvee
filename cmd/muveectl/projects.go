@@ -58,6 +58,9 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("no-auth", false, "Disable OAuth protection")
 	cmd.Flags().String("auth-domains", "", "Comma-separated allowed email domains")
 	cmd.Flags().Bool("domain-only", false, "Reserve a tunnel domain prefix without a git repo (no deployment)")
+	cmd.Flags().String("description", "", "Project description")
+	cmd.Flags().String("icon", "", "Project icon (inline SVG or URL)")
+	cmd.Flags().String("tags", "", "Comma-separated project tags")
 }
 
 func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
@@ -100,6 +103,18 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		if v, _ := cmd.Flags().GetBool("domain-only"); v {
 			p["project_type"] = "domain_only"
 		}
+	}
+	if cmd.Flags().Changed("description") {
+		v, _ := cmd.Flags().GetString("description")
+		p["description"] = v
+	}
+	if cmd.Flags().Changed("icon") {
+		v, _ := cmd.Flags().GetString("icon")
+		p["icon"] = v
+	}
+	if cmd.Flags().Changed("tags") {
+		v, _ := cmd.Flags().GetString("tags")
+		p["tags"] = v
 	}
 	return p
 }
@@ -188,9 +203,10 @@ var projectsGetCmd = &cobra.Command{
 			printJSON(result)
 			return nil
 		}
-		fmt.Printf("ID:            %s\nName:          %s\nType:          %s\nGit Source:    %s\nGit URL:       %s\nBranch:        %s\nDomain Prefix: %s\nDockerfile:    %s\n",
+		fmt.Printf("ID:            %s\nName:          %s\nType:          %s\nGit Source:    %s\nGit URL:       %s\nBranch:        %s\nDomain Prefix: %s\nDockerfile:    %s\nDescription:   %s\nIcon:          %s\nTags:          %s\n",
 			str(result, "id"), str(result, "name"), str(result, "project_type"), str(result, "git_source"), str(result, "git_url"), str(result, "git_branch"),
-			str(result, "domain_prefix"), str(result, "dockerfile_path"))
+			str(result, "domain_prefix"), str(result, "dockerfile_path"),
+			str(result, "description"), str(result, "icon"), str(result, "tags"))
 		if pushURL := str(result, "git_push_url"); pushURL != "" {
 			fmt.Printf("Git Push URL:  %s\n", pushURL)
 		}

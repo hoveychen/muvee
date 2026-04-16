@@ -1,5 +1,3 @@
--- +migrate Up
-
 -- Track whether a user is authorized to use the platform (create projects, etc.).
 -- Defaults to TRUE so existing users remain authorized.
 ALTER TABLE users ADD COLUMN authorized BOOLEAN NOT NULL DEFAULT TRUE;
@@ -16,8 +14,3 @@ CREATE TABLE authorization_requests (
 
 CREATE INDEX idx_authorization_requests_user_id ON authorization_requests(user_id);
 CREATE INDEX idx_authorization_requests_status  ON authorization_requests(status);
-
--- +migrate Down
-
-DROP TABLE IF EXISTS authorization_requests;
-ALTER TABLE users DROP COLUMN IF EXISTS authorized;

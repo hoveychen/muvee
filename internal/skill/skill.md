@@ -1,6 +1,6 @@
 ---
 name: muveectl
-version: 1
+version: 2
 description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete), datasets (create, scan, delete), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, or manage infrastructure resources.
 ---
 
@@ -53,16 +53,19 @@ Config is saved at `~/.config/muveectl/config.json`. All subsequent commands use
 muveectl projects list
 muveectl projects create --name NAME --git-url URL \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
-  [--auth-required] [--auth-domains example.com,corp.com]
+  [--auth-required] [--auth-domains example.com,corp.com] \
+  [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 muveectl projects create --name NAME --git-source hosted \
-  [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH]
+  [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
+  [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 # --git-source hosted: creates a server-hosted bare git repo; returns a push URL
 # --dockerfile PATH: path to the Dockerfile *file* relative to the repo root
 #   default: "Dockerfile"  (repo root Dockerfile)
 #   example: "web/Dockerfile" for a subdirectory
 #   WRONG: "." or "web/" — must be a file path, not a directory
 muveectl projects get PROJECT_ID
-muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS]
+muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
+  [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
@@ -109,6 +112,34 @@ const avatar = req.headers["x-forwarded-user-avatar"]
 ```
 
 For the full integration guide (frontend userinfo API, logout, CLI/headless Device Flow), see the [Service Auth Integration](https://hoveychen.github.io/muvee/docs/service-auth-integration) documentation.
+
+### Project Metadata (`--description`, `--icon`, `--tags`)
+
+Projects support display metadata shown in the community feed and project detail pages:
+
+- `--description "Short project description"` — a brief summary of what the project does
+- `--icon '<svg>...</svg>'` — project icon; **recommended to use inline SVG** for crisp rendering at any size. Keep the SVG simple and small (single-color, 24x24 or 32x32 viewBox). You can also pass a URL to an external image.
+- `--tags "tool,ai,demo"` — comma-separated tags for categorization and discovery
+
+All three flags work on both `projects create` and `projects update`.
+
+```bash
+# Set metadata on creation
+muveectl projects create --name my-app --git-url https://github.com/me/app \
+  --description "A real-time dashboard for sensor data" \
+  --icon '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>' \
+  --tags "dashboard,iot,realtime"
+
+# Update metadata later
+muveectl projects update PROJECT_ID \
+  --description "Updated description" \
+  --tags "dashboard,iot,realtime,v2"
+```
+
+**Icon tips:**
+- Draw a simple SVG icon that represents the project's purpose (e.g. a chart for analytics, a robot for AI, a globe for web apps)
+- Use `viewBox="0 0 24 24"` and `stroke="currentColor"` so it adapts to light/dark themes
+- Keep the SVG under ~500 characters for readability in CLI output
 
 ### Container Metrics
 
