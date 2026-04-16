@@ -68,9 +68,6 @@ tmp/
 # Go build/test cache
 .gocache/
 
-# Generated embed file (copied from .cursor/skills/muveectl/SKILL.md at build time)
-cmd/muveectl/skill.md
-
 # Release artifacts
 release/
 

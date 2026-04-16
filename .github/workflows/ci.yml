@@ -38,9 +38,6 @@ jobs:
           rm -rf web/embed/dist
           cp -r web/dist web/embed/dist
 
-      - name: Copy skill.md for embed
-        run: cp .cursor/skills/muveectl/SKILL.md cmd/muveectl/skill.md
-
       - name: go vet
         run: go vet ./...
 
