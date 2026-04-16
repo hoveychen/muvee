@@ -4,7 +4,6 @@
 package main
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,11 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hoveychen/muvee/internal/skill"
 	"github.com/spf13/cobra"
 )
 
-//go:embed skill.md
-var embeddedSkill string
+var embeddedSkill = skill.Muveectl
 
 var version = "dev"
 

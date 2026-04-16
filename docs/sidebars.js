@@ -28,6 +28,7 @@ const sidebars = {
         'scheduler',
         'dataset-monitor',
         'forward-auth',
+        'service-auth-integration',
       ],
     },
     {

@@ -54,6 +54,9 @@ muveectl projects list
 muveectl projects create --name NAME --git-url URL \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
   [--auth-required] [--auth-domains example.com,corp.com]
+muveectl projects create --name NAME --git-source hosted \
+  [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH]
+# --git-source hosted: creates a server-hosted bare git repo; returns a push URL
 # --dockerfile PATH: path to the Dockerfile *file* relative to the repo root
 #   default: "Dockerfile"  (repo root Dockerfile)
 #   example: "web/Dockerfile" for a subdirectory
@@ -67,30 +70,45 @@ muveectl projects port-forward PROJECT_ID [--port PORT]
 muveectl projects delete PROJECT_ID
 ```
 
-### Google OAuth protection (`--auth-required`)
+### Authentication (`--auth-required`)
 
-When enabled, Traefik intercepts every request and redirects unauthenticated users to Google OAuth login before forwarding to the container.
+When enabled, Traefik intercepts every request and redirects unauthenticated users to the configured OAuth provider (Google, Feishu, WeCom, DingTalk, etc.) before forwarding to the container.
 
 - `--auth-required` — enable protection
 - `--no-auth` — disable protection
-- `--auth-domains example.com,corp.com` — restrict to specific email domains (optional; omit to allow all Google accounts)
+- `--auth-domains example.com,corp.com` — restrict to specific email domains (optional; omit to allow all authenticated users)
 
-The authenticated user's email is forwarded to the container via the **`X-Forwarded-User`** HTTP header. Read it server-side to identify the current user:
+The authenticated user's identity is forwarded to the container via HTTP headers:
+
+| Header | Value |
+|--------|-------|
+| `X-Forwarded-User` | Email address (e.g. `alice@example.com`) |
+| `X-Forwarded-User-Name` | Display name (when available from OAuth provider) |
+| `X-Forwarded-User-Avatar` | Avatar URL (when available from OAuth provider) |
+| `X-Forwarded-User-Provider` | OAuth provider name (e.g. `google`, `feishu`) |
 
 ```python
 # Python / Flask example
-user_email = request.headers.get("X-Forwarded-User")  # e.g. "alice@example.com"
+email  = request.headers.get("X-Forwarded-User")
+name   = request.headers.get("X-Forwarded-User-Name")
+avatar = request.headers.get("X-Forwarded-User-Avatar")
 ```
 
 ```go
 // Go example
-userEmail := r.Header.Get("X-Forwarded-User")
+email  := r.Header.Get("X-Forwarded-User")
+name   := r.Header.Get("X-Forwarded-User-Name")
+avatar := r.Header.Get("X-Forwarded-User-Avatar")
 ```
 
 ```typescript
 // Node.js / Express example
-const userEmail = req.headers["x-forwarded-user"]
+const email  = req.headers["x-forwarded-user"]
+const name   = req.headers["x-forwarded-user-name"]
+const avatar = req.headers["x-forwarded-user-avatar"]
 ```
+
+For the full integration guide (frontend userinfo API, logout, CLI/headless Device Flow), see the [Service Auth Integration](https://hoveychen.github.io/muvee/docs/service-auth-integration) documentation.
 
 ### Container Metrics
 
@@ -110,19 +128,19 @@ The workspace is persistent storage attached to the running container, accessibl
 
 ```bash
 # List files in the workspace root (or a subdirectory)
-muveectl projects workspace PROJECT_ID ls
-muveectl projects workspace PROJECT_ID ls some/subdir
+muveectl projects workspace ls PROJECT_ID
+muveectl projects workspace ls PROJECT_ID some/subdir
 
 # Download a file from the workspace
-muveectl projects workspace PROJECT_ID pull remote/path/file.txt
-muveectl projects workspace PROJECT_ID pull remote/path/file.txt local_copy.txt
+muveectl projects workspace pull PROJECT_ID remote/path/file.txt
+muveectl projects workspace pull PROJECT_ID remote/path/file.txt local_copy.txt
 
 # Upload a local file to the workspace
-muveectl projects workspace PROJECT_ID push local_file.bin
-muveectl projects workspace PROJECT_ID push local_file.bin --remote-path uploads/file.bin
+muveectl projects workspace push PROJECT_ID local_file.bin
+muveectl projects workspace push PROJECT_ID local_file.bin --remote-path uploads/file.bin
 
 # Delete a file from the workspace
-muveectl projects workspace PROJECT_ID rm remote/path/file.txt
+muveectl projects workspace rm PROJECT_ID remote/path/file.txt
 ```
 
 ## Local Port Forwarding
@@ -158,9 +176,9 @@ muveectl datasets delete DATASET_ID
 ## API Tokens
 
 ```bash
-muveectl tokens list
-muveectl tokens create [--name NAME]   # token value shown once on creation
-muveectl tokens delete TOKEN_ID
+muveectl tokens list PROJECT_ID
+muveectl tokens create PROJECT_ID [--name NAME]   # token value shown once on creation
+muveectl tokens delete PROJECT_ID TOKEN_ID
 ```
 
 ## Secrets

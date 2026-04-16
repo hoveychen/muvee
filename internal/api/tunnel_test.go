@@ -479,7 +479,7 @@ func TestTraefikConfig_TunnelWithAuth(t *testing.T) {
 			cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
 				ForwardAuth: &traefikForwardAuth{
 					Address:             verifyURL,
-					AuthResponseHeaders: []string{"X-Forwarded-User"},
+					AuthResponseHeaders: []string{"X-Forwarded-User", "X-Forwarded-User-Name", "X-Forwarded-User-Avatar", "X-Forwarded-User-Provider"},
 					TrustForwardHeader:  true,
 				},
 			}

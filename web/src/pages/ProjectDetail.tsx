@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
@@ -678,8 +678,17 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
       {field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
 
       <div>
-        <label style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', display: 'block', marginBottom: '0.4rem' }}>
+        <label style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.4rem' }}>
           {t('projectDetail.config.requireGoogleAuth')}
+          <a
+            href="https://hoveychen.github.io/muvee/docs/service-auth-integration"
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t('projectDetail.config.authDocsHint')}
+            style={{ color: 'var(--fg-muted)', display: 'inline-flex', opacity: 0.6 }}
+          >
+            <HelpCircle size={12} />
+          </a>
         </label>
         <label className="flex items-center gap-3 cursor-pointer">
           <div

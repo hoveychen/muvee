@@ -11,6 +11,9 @@ http:
         address: "http://muvee-authservice:4181/verify"
         authResponseHeaders:
           - "X-Forwarded-User"
+          - "X-Forwarded-User-Name"
+          - "X-Forwarded-User-Avatar"
+          - "X-Forwarded-User-Provider"
         trustForwardHeader: true
 
     # Admin-only: only emails listed in ADMIN_EMAILS pass through
@@ -19,4 +22,7 @@ http:
         address: "http://muvee-authservice:4181/verify-admin"
         authResponseHeaders:
           - "X-Forwarded-User"
+          - "X-Forwarded-User-Name"
+          - "X-Forwarded-User-Avatar"
+          - "X-Forwarded-User-Provider"
         trustForwardHeader: true
