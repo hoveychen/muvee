@@ -531,17 +531,32 @@ func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, provider
 // handleDeviceToken is polled by the CLI to check whether the user has completed
 // the OAuth flow. Returns a JWT on success.
 func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		DeviceCode string `json:"device_code"`
+	var deviceCode string
+
+	// RFC 8628 §3.4 requires application/x-www-form-urlencoded; also accept
+	// JSON for backward compatibility with existing clients.
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		if err := r.ParseForm(); err == nil {
+			deviceCode = r.FormValue("device_code")
+		}
+	} else {
+		var body struct {
+			DeviceCode string `json:"device_code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			deviceCode = body.DeviceCode
+		}
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.DeviceCode == "" {
+
+	if deviceCode == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_request"})
 		return
 	}
 
-	val, ok := deviceFlows.Load(body.DeviceCode)
+	val, ok := deviceFlows.Load(deviceCode)
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -551,7 +566,7 @@ func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	entry := val.(*deviceFlowEntry)
 
 	if time.Now().After(entry.ExpiresAt) {
-		deviceFlows.Delete(body.DeviceCode)
+		deviceFlows.Delete(deviceCode)
 		deviceByUser.Delete(entry.UserCode)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -574,7 +589,7 @@ func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clean up.
-	deviceFlows.Delete(body.DeviceCode)
+	deviceFlows.Delete(deviceCode)
 	deviceByUser.Delete(entry.UserCode)
 
 	w.Header().Set("Content-Type", "application/json")
