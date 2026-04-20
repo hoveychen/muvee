@@ -86,7 +86,8 @@
       "workspace": "工作区",
       "repository": "代码仓库",
       "tokens": "令牌",
-      "traffic": "流量"
+      "traffic": "流量",
+      "auth": "认证"
     },
     "tunnelHint": "这是一个隧道项目。使用以下命令启动隧道：muveectl tunnel --project {{name}} <PORT>",
     "pushUrl": "GIT 推送地址",
@@ -120,6 +121,8 @@
       "enabled": "已启用",
       "disabled": "已禁用",
       "allowedDomains": "允许的邮箱域名（逗号分隔）",
+      "bypassPaths": "认证白名单路径",
+      "bypassPathsHint": "每行一个路径。使用 * 后缀进行前缀匹配（例如 /api/public/*）。匹配的请求将跳过身份验证。",
       "domainOptional": "可选 — 留空时默认使用 \"{{name}}\"",
       "domainRequired": "必填 — 项目名称不能用作子域名",
       "saving": "保存中...",

@@ -47,6 +47,7 @@ type Project struct {
 	OwnerID            uuid.UUID   `db:"owner_id"             json:"owner_id"`
 	AuthRequired       bool        `db:"auth_required"        json:"auth_required"`
 	AuthAllowedDomains string      `db:"auth_allowed_domains" json:"auth_allowed_domains"`
+	AuthBypassPaths    string      `db:"auth_bypass_paths"    json:"auth_bypass_paths"`
 	ContainerPort      int         `db:"container_port"       json:"container_port"`
 	MemoryLimit        string      `db:"memory_limit"         json:"memory_limit"`
 	VolumeMountPath    string      `db:"volume_mount_path"    json:"volume_mount_path"`
@@ -142,6 +143,7 @@ type RunningDeploymentInfo struct {
 	DomainPrefix       string    `db:"domain_prefix"`
 	AuthRequired       bool      `db:"auth_required"`
 	AuthAllowedDomains string    `db:"auth_allowed_domains"`
+	AuthBypassPaths    string    `db:"auth_bypass_paths"`
 	HostIP             string    `db:"host_ip"`
 	HostPort           int       `db:"host_port"`
 }

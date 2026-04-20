@@ -1543,6 +1543,7 @@ type traefikRouter struct {
 	Service     string      `json:"service"`
 	Middlewares []string    `json:"middlewares,omitempty"`
 	TLS         *traefikTLS `json:"tls,omitempty"`
+	Priority    int         `json:"priority,omitempty"`
 }
 
 type traefikTLS struct {
@@ -1638,6 +1639,30 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				},
 			}
 			httpsRouter.Middlewares = []string{mwName}
+
+			// Auth bypass paths: create higher-priority routers that skip ForwardAuth.
+			if dep.AuthBypassPaths != "" {
+				for i, raw := range strings.Split(dep.AuthBypassPaths, "\n") {
+					p := strings.TrimSpace(raw)
+					if p == "" {
+						continue
+					}
+					var pathRule string
+					if strings.HasSuffix(p, "*") {
+						pathRule = fmt.Sprintf("PathPrefix(`%s`)", strings.TrimSuffix(p, "*"))
+					} else {
+						pathRule = fmt.Sprintf("Path(`%s`)", p)
+					}
+					bypassName := fmt.Sprintf("%s-bypass-%d", name, i)
+					cfg.HTTP.Routers[bypassName] = traefikRouter{
+						Rule:        fmt.Sprintf("Host(`%s`) && %s", host, pathRule),
+						EntryPoints: []string{"websecure"},
+						Service:     name,
+						TLS:         httpsRouter.TLS,
+						Priority:    100, // higher than default to take precedence
+					}
+				}
+			}
 		}
 
 		cfg.HTTP.Routers[name] = httpsRouter

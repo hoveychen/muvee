@@ -86,12 +86,12 @@ func (s *Store) SetUserRole(ctx context.Context, id uuid.UUID, role UserRole) er
 
 // projectColumns is the full SELECT list for a Project row. git_url is COALESCEd
 // so domain_only projects (which have NULL git_url) scan into an empty string.
-const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, description, icon, tags, created_at, updated_at`
+const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, created_at, updated_at`
 
 func scanProject(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.CreatedAt, &p.UpdatedAt)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.CreatedAt, &p.UpdatedAt)
 }
 
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
@@ -119,9 +119,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 		gitURL = p.GitURL
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, container_port, memory_limit, volume_mount_path, description, icon, tags, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.CreatedAt, p.UpdatedAt)
+		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -174,8 +174,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		gitURL = p.GitURL
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, container_port=$9, memory_limit=$10, volume_mount_path=$11, description=$12, icon=$13, tags=$14, updated_at=$15 WHERE id=$16
-	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.UpdatedAt, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, auth_bypass_paths=$9, container_port=$10, memory_limit=$11, volume_mount_path=$12, description=$13, icon=$14, tags=$15, updated_at=$16 WHERE id=$17
+	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.UpdatedAt, p.ID)
 	return err
 }
 
@@ -558,7 +558,7 @@ func (s *Store) GetTask(ctx context.Context, id uuid.UUID) (*Task, error) {
 // GetRunningDeployments returns all running deployments with the info needed to build Traefik routes.
 func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeploymentInfo, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, n.host_ip, d.host_port
+		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, n.host_ip, d.host_port
 		FROM deployments d
 		JOIN projects p ON d.project_id = p.id
 		JOIN nodes n ON d.node_id = n.id
@@ -571,7 +571,7 @@ func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeployment
 	items := make([]*RunningDeploymentInfo, 0)
 	for rows.Next() {
 		var r RunningDeploymentInfo
-		if err := rows.Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.HostIP, &r.HostPort); err != nil {
+		if err := rows.Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.AuthBypassPaths, &r.HostIP, &r.HostPort); err != nil {
 			return nil, err
 		}
 		items = append(items, &r)
@@ -584,14 +584,14 @@ func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeployment
 func (s *Store) GetRunningDeploymentByProject(ctx context.Context, projectID uuid.UUID) (*RunningDeploymentInfo, error) {
 	var r RunningDeploymentInfo
 	err := s.db.QueryRow(ctx, `
-		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, n.host_ip, d.host_port
+		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, n.host_ip, d.host_port
 		FROM deployments d
 		JOIN projects p ON d.project_id = p.id
 		JOIN nodes n ON d.node_id = n.id
 		WHERE d.project_id = $1 AND d.status = 'running' AND d.host_port > 0 AND n.host_ip != ''
 		ORDER BY d.created_at DESC
 		LIMIT 1
-	`, projectID).Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.HostIP, &r.HostPort)
+	`, projectID).Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.AuthBypassPaths, &r.HostIP, &r.HostPort)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

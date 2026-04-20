@@ -86,7 +86,8 @@
       "workspace": "Workspace",
       "repository": "Repository",
       "tokens": "Tokens",
-      "traffic": "Traffic"
+      "traffic": "Traffic",
+      "auth": "Auth"
     },
     "tunnelHint": "This is a tunnel project. Start the tunnel with: muveectl tunnel --project {{name}} <PORT>",
     "pushUrl": "GIT PUSH URL",
@@ -120,6 +121,8 @@
       "enabled": "Enabled",
       "disabled": "Disabled",
       "allowedDomains": "Allowed Email Domains (comma separated)",
+      "bypassPaths": "Auth Bypass Paths",
+      "bypassPathsHint": "One path per line. Use * suffix for prefix matching (e.g. /api/public/*). Requests to these paths will skip authentication.",
       "domainOptional": "Optional — defaults to \"{{name}}\" if left blank",
       "domainRequired": "Required — project name cannot be used as a subdomain",
       "saving": "Saving...",

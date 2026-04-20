@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
-type Tab = 'deploy' | 'config' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository' | 'traffic'
+type Tab = 'deploy' | 'config' | 'auth' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository' | 'traffic'
 
 /* Map deployment status → badge CSS class */
 const statusBadgeClass = (status: string) => {
@@ -191,10 +191,12 @@ export default function ProjectDetail() {
         {(isTunnel ? [
           ['traffic', Activity, t('projectDetail.tabs.traffic')],
           ['config', Settings, t('projectDetail.tabs.config')],
+          ['auth', Shield, t('projectDetail.tabs.auth')],
           ['tokens', Key, t('projectDetail.tabs.tokens')],
         ] as const : [
           ['deploy', Rocket, t('projectDetail.tabs.deployments')],
           ['config', Settings, t('projectDetail.tabs.config')],
+          ['auth', Shield, t('projectDetail.tabs.auth')],
           ...(project.git_source === 'hosted' ? [['repository', GitBranch, t('projectDetail.tabs.repository')] as const] : []),
           ['datasets', Database, t('projectDetail.tabs.datasets')],
           ['secrets', KeyRound, t('projectDetail.tabs.secrets')],
@@ -232,6 +234,15 @@ export default function ProjectDetail() {
             onChange={setEditForm}
             onSave={handleSave}
             onDelete={handleDelete}
+            saving={saving}
+            saveError={saveError}
+          />
+        )}
+        {tab === 'auth' && (
+          <AuthTab
+            form={editForm}
+            onChange={setEditForm}
+            onSave={handleSave}
             saving={saving}
             saveError={saveError}
           />
@@ -690,6 +701,41 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
       {field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
       {field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
 
+      {saveError && (
+        <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
+      )}
+
+      <div className="flex gap-3 pt-2">
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="btn-primary"
+          style={saving ? { cursor: 'not-allowed', opacity: 0.7 } : {}}
+        >
+          {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
+        </button>
+        <button
+          onClick={onDelete}
+          className="btn-danger flex items-center gap-2"
+        >
+          <Trash2 size={13} /> {t('projectDetail.config.delete')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function AuthTab({ form, onChange, onSave, saving, saveError }: {
+  form: Partial<Project>
+  onChange: (f: Partial<Project>) => void
+  onSave: () => void
+  saving: boolean
+  saveError?: string | null
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <div className="max-w-lg space-y-5">
       <div>
         <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
           {t('projectDetail.config.requireGoogleAuth')}
@@ -728,7 +774,39 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
         </label>
       </div>
 
-      {form.auth_required && field(t('projectDetail.config.allowedDomains'), 'auth_allowed_domains')}
+      {form.auth_required && (
+        <>
+          <div>
+            <label className="form-label">
+              {t('projectDetail.config.allowedDomains').toUpperCase()}
+            </label>
+            <input
+              type="text"
+              value={(form.auth_allowed_domains ?? '') as string}
+              onChange={e => onChange({ ...form, auth_allowed_domains: e.target.value })}
+              className="form-input w-full"
+              style={{ fontFamily: MONO }}
+            />
+          </div>
+
+          <div>
+            <label className="form-label">
+              {t('projectDetail.config.bypassPaths').toUpperCase()}
+            </label>
+            <textarea
+              value={(form.auth_bypass_paths ?? '') as string}
+              onChange={e => onChange({ ...form, auth_bypass_paths: e.target.value })}
+              rows={5}
+              className="form-input w-full"
+              style={{ fontFamily: MONO, resize: 'vertical' }}
+              placeholder={'/health\n/api/public/*'}
+            />
+            <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+              {t('projectDetail.config.bypassPathsHint')}
+            </p>
+          </div>
+        </>
+      )}
 
       {saveError && (
         <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
@@ -742,12 +820,6 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
           style={saving ? { cursor: 'not-allowed', opacity: 0.7 } : {}}
         >
           {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
-        </button>
-        <button
-          onClick={onDelete}
-          className="btn-danger flex items-center gap-2"
-        >
-          <Trash2 size={13} /> {t('projectDetail.config.delete')}
         </button>
       </div>
     </div>

@@ -21,6 +21,7 @@ export interface Project {
   owner_id: string
   auth_required: boolean
   auth_allowed_domains: string
+  auth_bypass_paths: string
   memory_limit: string
   volume_mount_path: string
   description: string
