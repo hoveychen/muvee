@@ -1595,6 +1595,24 @@ type traefikForwardAuth struct {
 
 // handleTraefikConfig generates a Traefik dynamic configuration for all running deployments.
 // Traefik polls this endpoint via its HTTP provider.
+
+// deviceFlowServiceName is the Traefik service name used by all subdomain
+// device-flow routers.  It points to the authservice backend.
+const deviceFlowServiceName = "muvee-authservice-device"
+
+// addDeviceFlowRouter creates a high-priority router that forwards
+// /_oauth/device/* on a project subdomain to the authservice, bypassing
+// ForwardAuth so that unauthenticated CLI clients can perform the device flow.
+func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName, host string, tls *traefikTLS) {
+	cfg.HTTP.Routers[routerName+"-device-flow"] = traefikRouter{
+		Rule:        fmt.Sprintf("Host(`%s`) && PathPrefix(`/_oauth/device`)", host),
+		EntryPoints: []string{"websecure"},
+		Service:     deviceFlowServiceName,
+		TLS:         tls,
+		Priority:    200, // higher than bypass (100) and default routers
+	}
+}
+
 // addBypassRouters creates higher-priority Traefik routers that skip ForwardAuth
 // for the given newline-separated bypass paths.
 func addBypassRouters(cfg *traefikDynamicConfig, routerName, host string, tls *traefikTLS, bypassPaths string) {
@@ -1635,6 +1653,13 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		HTTP: traefikHTTP{
 			Routers:  make(map[string]traefikRouter),
 			Services: make(map[string]traefikService),
+		},
+	}
+
+	// Shared backend for device-flow routers on project subdomains.
+	cfg.HTTP.Services[deviceFlowServiceName] = traefikService{
+		LoadBalancer: traefikLB{
+			Servers: []traefikServer{{URL: s.authServiceURL}},
 		},
 	}
 
@@ -1681,6 +1706,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			if dep.AuthBypassPaths != "" {
 				addBypassRouters(&cfg, name, host, httpsRouter.TLS, dep.AuthBypassPaths)
 			}
+
+			// Expose /_oauth/device/* on this subdomain for CLI device-flow auth.
+			addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
 		}
 
 		cfg.HTTP.Routers[name] = httpsRouter
@@ -1739,6 +1767,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				if proj, ok := domainOnlyByPrefix[t.Domain]; ok && proj.AuthBypassPaths != "" {
 					addBypassRouters(&cfg, name, host, router.TLS, proj.AuthBypassPaths)
 				}
+
+				// Expose /_oauth/device/* on this subdomain for CLI device-flow auth.
+				addDeviceFlowRouter(&cfg, name, host, router.TLS)
 			}
 
 			cfg.HTTP.Routers[name] = router
@@ -1799,6 +1830,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				if p.AuthBypassPaths != "" {
 					addBypassRouters(&cfg, name, host, domainRouter.TLS, p.AuthBypassPaths)
 				}
+
+				// Expose /_oauth/device/* on this subdomain for CLI device-flow auth.
+				addDeviceFlowRouter(&cfg, name, host, domainRouter.TLS)
 			}
 
 			cfg.HTTP.Routers[name] = domainRouter

@@ -256,6 +256,8 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 		if dep.AuthBypassPaths != "" {
 			addBypassRouters(&cfg, name, host, httpsRouter.TLS, dep.AuthBypassPaths)
 		}
+
+		addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
 	}
 
 	cfg.HTTP.Routers[name] = httpsRouter
@@ -314,5 +316,24 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	jsonStr := string(data)
 	if !strings.Contains(jsonStr, `"priority":100`) {
 		t.Error("JSON output should contain priority:100 for bypass routers")
+	}
+
+	// Device-flow router should also exist for auth-protected deployments.
+	dfRouter, ok := cfg.HTTP.Routers["myapp-device-flow"]
+	if !ok {
+		t.Fatal("device-flow router myapp-device-flow not found — addDeviceFlowRouter was not called for auth-protected deployment")
+	}
+	wantDFRule := "Host(`myapp.example.com`) && PathPrefix(`/_oauth/device`)"
+	if dfRouter.Rule != wantDFRule {
+		t.Errorf("device-flow rule = %q, want %q", dfRouter.Rule, wantDFRule)
+	}
+	if dfRouter.Service != deviceFlowServiceName {
+		t.Errorf("device-flow service = %q, want %q", dfRouter.Service, deviceFlowServiceName)
+	}
+	if dfRouter.Priority < 200 {
+		t.Errorf("device-flow priority should be >= 200, got %d", dfRouter.Priority)
+	}
+	if len(dfRouter.Middlewares) != 0 {
+		t.Errorf("device-flow router should have NO middlewares (bypasses ForwardAuth), got %v", dfRouter.Middlewares)
 	}
 }
