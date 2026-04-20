@@ -54,6 +54,7 @@ muveectl projects list
 muveectl projects create --name NAME --git-url URL \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
   [--auth-required] [--auth-domains example.com,corp.com] \
+  [--auth-bypass-paths "/health\n/api/public/*"] \
   [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 muveectl projects create --name NAME --git-source hosted \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
@@ -71,7 +72,7 @@ muveectl projects create --name NAME --domain-only --domain PREFIX \
 #   WRONG: "." or "web/" — must be a file path, not a directory
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
-  [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
+  [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
@@ -86,6 +87,7 @@ When enabled, Traefik intercepts every request and redirects unauthenticated use
 - `--auth-required` — enable protection
 - `--no-auth` — disable protection
 - `--auth-domains example.com,corp.com` — restrict to specific email domains (optional; omit to allow all authenticated users)
+- `--auth-bypass-paths "/health\n/api/public/*"` — newline-separated paths that skip authentication. Use `*` suffix for prefix matching (e.g. `/api/public/*` matches all paths under `/api/public/`). Exact paths (e.g. `/health`) match only that path.
 
 The authenticated user's identity is forwarded to the container via HTTP headers:
 

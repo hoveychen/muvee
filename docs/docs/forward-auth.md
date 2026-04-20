@@ -24,11 +24,12 @@ Browser → Traefik → ForwardAuth sidecar → OAuth provider
 
 ## Enabling Auth on a Project
 
-In the **Project Detail → Config** tab:
+In the **Project Detail → Auth** tab:
 
 1. Toggle **Require Auth** to `Enabled`
 2. Optionally set **Allowed Email Domains** (comma-separated, e.g. `company.com,partner.org`)
-3. Save and redeploy
+3. Optionally set **Auth Bypass Paths** — one path per line. Requests matching these paths will skip authentication. Use `*` suffix for prefix matching (e.g. `/api/public/*`).
+4. Save and redeploy
 
 When the container starts, the deploy agent attaches these Traefik labels:
 
@@ -50,6 +51,24 @@ traefik.http.routers.{proj}.middlewares={proj}-auth
 :::info How the OAuth callback is routed
 The `/_oauth` path on `BASE_DOMAIN` is routed by Traefik directly to `muvee-authservice` (not to the main web UI). This is configured via Traefik labels on the `muvee-authservice` container in `docker-compose.yml`. Because Traefik gives higher priority to the more specific `Host + Path` rule, `BASE_DOMAIN/_oauth` is correctly handled by the auth sidecar while all other `BASE_DOMAIN` paths continue to reach `muvee-server`.
 :::
+
+## Auth Bypass Paths
+
+When auth is enabled on a project you can exempt specific paths from authentication. This is useful for health checks, public APIs, or webhook endpoints that need to be reachable without a session.
+
+Configure bypass paths in the **Auth** tab (one path per line) or via the CLI:
+
+```bash
+muveectl projects update PROJECT_ID --auth-bypass-paths "/health
+/api/public/*"
+```
+
+| Pattern | Matches |
+|---------|---------|
+| `/health` | Exact path `/health` only |
+| `/api/public/*` | Any path starting with `/api/public/` |
+
+Each bypass path creates a higher-priority Traefik router that routes directly to the service without the ForwardAuth middleware.
 
 ## Public Projects
 

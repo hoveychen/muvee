@@ -57,6 +57,7 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("auth-required", false, "Enable OAuth protection via Traefik ForwardAuth")
 	cmd.Flags().Bool("no-auth", false, "Disable OAuth protection")
 	cmd.Flags().String("auth-domains", "", "Comma-separated allowed email domains")
+	cmd.Flags().String("auth-bypass-paths", "", "Newline-separated paths that bypass auth (use * suffix for prefix match, e.g. /api/public/*)")
 	cmd.Flags().Bool("domain-only", false, "Reserve a tunnel domain prefix without a git repo (no deployment)")
 	cmd.Flags().String("description", "", "Project description")
 	cmd.Flags().String("icon", "", "Project icon (inline SVG or URL)")
@@ -98,6 +99,10 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 	if cmd.Flags().Changed("auth-domains") {
 		v, _ := cmd.Flags().GetString("auth-domains")
 		p["auth_allowed_domains"] = v
+	}
+	if cmd.Flags().Changed("auth-bypass-paths") {
+		v, _ := cmd.Flags().GetString("auth-bypass-paths")
+		p["auth_bypass_paths"] = v
 	}
 	if cmd.Flags().Changed("domain-only") {
 		if v, _ := cmd.Flags().GetBool("domain-only"); v {

@@ -95,11 +95,13 @@ Config is saved at `~/.config/muveectl/config.json`. All subsequent commands use
 muveectl projects list
 muveectl projects create --name NAME --git-url URL \
   [--branch BRANCH] [--domain PREFIX] [--dockerfile PATH] \
-  [--auth-required] [--auth-domains example.com,corp.com]
+  [--auth-required] [--auth-domains example.com,corp.com] \
+  [--auth-bypass-paths "/health\n/api/public/*"]
 muveectl projects create --name NAME --git-source hosted \
   [--domain PREFIX] [--dockerfile PATH]
 muveectl projects get PROJECT_ID
-muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS]
+muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
+  [--auth-bypass-paths PATHS]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
@@ -135,15 +137,16 @@ muveectl projects repo PROJECT_ID branches
 muveectl projects repo PROJECT_ID show <ref>:<path>
 ```
 
-### Google OAuth protection (`--auth-required`)
+### OAuth protection (`--auth-required`)
 
-When enabled, Traefik intercepts every request and redirects unauthenticated users to Google OAuth before forwarding to the container.
+When enabled, Traefik intercepts every request and redirects unauthenticated users to the configured OAuth provider before forwarding to the container.
 
 | Flag | Description |
 |------|-------------|
-| `--auth-required` | Enable per-project Google auth |
-| `--no-auth` | Disable per-project Google auth |
-| `--auth-domains example.com,corp.com` | Restrict to specific email domains (omit to allow all Google accounts) |
+| `--auth-required` | Enable per-project auth |
+| `--no-auth` | Disable per-project auth |
+| `--auth-domains example.com,corp.com` | Restrict to specific email domains (omit to allow all authenticated users) |
+| `--auth-bypass-paths PATHS` | Newline-separated paths that skip auth. Use `*` suffix for prefix match (e.g. `/api/public/*`) |
 
 The authenticated user's email is forwarded to the container via the `X-Forwarded-User` HTTP header:
 
