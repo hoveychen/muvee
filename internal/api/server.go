@@ -809,6 +809,18 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, p)
 }
 
+// mergeProjectUpdate decodes a JSON request body into a copy of the existing
+// project. Fields present in the JSON overwrite the existing values; fields
+// absent from the JSON retain their database values. This prevents partial
+// payloads (e.g. saving from a single tab) from zeroing out unrelated fields.
+func mergeProjectUpdate(existing *store.Project, body io.Reader) (*store.Project, error) {
+	p := *existing
+	if err := json.NewDecoder(body).Decode(&p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	id := mustParseUUID(chi.URLParam(r, "id"))
 	user := auth.UserFromCtx(r.Context())
@@ -822,8 +834,8 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 404)
 		return
 	}
-	var p store.Project
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	p, err := mergeProjectUpdate(existing, r.Body)
+	if err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
@@ -834,7 +846,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ProjectType = existing.ProjectType
-	if err := validateProject(&p); err != nil {
+	if err := validateProject(p); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
@@ -856,7 +868,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	p.ID = id
 	p.OwnerID = existing.OwnerID
-	if err := s.store.UpdateProject(r.Context(), &p); err != nil {
+	if err := s.store.UpdateProject(r.Context(), p); err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
@@ -1583,6 +1595,31 @@ type traefikForwardAuth struct {
 
 // handleTraefikConfig generates a Traefik dynamic configuration for all running deployments.
 // Traefik polls this endpoint via its HTTP provider.
+// addBypassRouters creates higher-priority Traefik routers that skip ForwardAuth
+// for the given newline-separated bypass paths.
+func addBypassRouters(cfg *traefikDynamicConfig, routerName, host string, tls *traefikTLS, bypassPaths string) {
+	for i, raw := range strings.Split(bypassPaths, "\n") {
+		p := strings.TrimSpace(raw)
+		if p == "" {
+			continue
+		}
+		var pathRule string
+		if strings.HasSuffix(p, "*") {
+			pathRule = fmt.Sprintf("PathPrefix(`%s`)", strings.TrimSuffix(p, "*"))
+		} else {
+			pathRule = fmt.Sprintf("Path(`%s`)", p)
+		}
+		bypassName := fmt.Sprintf("%s-bypass-%d", routerName, i)
+		cfg.HTTP.Routers[bypassName] = traefikRouter{
+			Rule:        fmt.Sprintf("Host(`%s`) && %s", host, pathRule),
+			EntryPoints: []string{"websecure"},
+			Service:     routerName,
+			TLS:         tls,
+			Priority:    100,
+		}
+	}
+}
+
 func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 	// Refresh the domain_only cache on every Traefik poll so TunnelAwareHandler
 	// picks up newly created or deleted reservations without a restart.
@@ -1642,26 +1679,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 			// Auth bypass paths: create higher-priority routers that skip ForwardAuth.
 			if dep.AuthBypassPaths != "" {
-				for i, raw := range strings.Split(dep.AuthBypassPaths, "\n") {
-					p := strings.TrimSpace(raw)
-					if p == "" {
-						continue
-					}
-					var pathRule string
-					if strings.HasSuffix(p, "*") {
-						pathRule = fmt.Sprintf("PathPrefix(`%s`)", strings.TrimSuffix(p, "*"))
-					} else {
-						pathRule = fmt.Sprintf("Path(`%s`)", p)
-					}
-					bypassName := fmt.Sprintf("%s-bypass-%d", name, i)
-					cfg.HTTP.Routers[bypassName] = traefikRouter{
-						Rule:        fmt.Sprintf("Host(`%s`) && %s", host, pathRule),
-						EntryPoints: []string{"websecure"},
-						Service:     name,
-						TLS:         httpsRouter.TLS,
-						Priority:    100, // higher than default to take precedence
-					}
-				}
+				addBypassRouters(&cfg, name, host, httpsRouter.TLS, dep.AuthBypassPaths)
 			}
 		}
 
@@ -1676,6 +1694,14 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 	// Append active tunnel routes. Each tunnel domain routes back to this server
 	// so that handleTunnelTraffic can forward traffic through the WebSocket.
 	if s.tunnelBackendURL != "" {
+		// Pre-fetch domain-only projects so we can look up auth settings for
+		// project-scoped tunnels and for offline placeholder routes.
+		domainOnly, _ := s.store.ListDomainOnlyProjects(r.Context())
+		domainOnlyByPrefix := make(map[string]*store.Project, len(domainOnly))
+		for _, p := range domainOnly {
+			domainOnlyByPrefix[p.DomainPrefix] = p
+		}
+
 		for _, t := range s.tunnels.activeTunnels() {
 			name := "tunnel-" + t.Domain
 			host := fmt.Sprintf("%s.%s", t.Domain, s.baseDomain)
@@ -1697,6 +1723,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				}
 				mwName := name + "-auth"
 				verifyURL := fmt.Sprintf("%s/verify", s.authServiceURL)
+				if proj, ok := domainOnlyByPrefix[t.Domain]; ok && proj.AuthAllowedDomains != "" {
+					verifyURL += "?project=" + proj.ID.String() + "&domains=" + proj.AuthAllowedDomains
+				}
 				cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
 					ForwardAuth: &traefikForwardAuth{
 						Address:             verifyURL,
@@ -1705,6 +1734,11 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 					},
 				}
 				router.Middlewares = []string{mwName}
+
+				// Auth bypass paths from the bound domain_only project.
+				if proj, ok := domainOnlyByPrefix[t.Domain]; ok && proj.AuthBypassPaths != "" {
+					addBypassRouters(&cfg, name, host, router.TLS, proj.AuthBypassPaths)
+				}
 			}
 
 			cfg.HTTP.Routers[name] = router
@@ -1719,7 +1753,6 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		// regardless of whether a tunnel is currently connected. Traefik forwards
 		// the request to this server, where handleTunnelTraffic either proxies
 		// through the live tunnel or renders the offline placeholder.
-		domainOnly, _ := s.store.ListDomainOnlyProjects(r.Context())
 		for _, p := range domainOnly {
 			name := "domain-" + p.DomainPrefix
 			// Skip if a deployment or live-tunnel router already owns this prefix
@@ -1733,7 +1766,8 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			host := fmt.Sprintf("%s.%s", p.DomainPrefix, s.baseDomain)
-			cfg.HTTP.Routers[name] = traefikRouter{
+
+			domainRouter := traefikRouter{
 				Rule:        fmt.Sprintf("Host(`%s`)", host),
 				EntryPoints: []string{"websecure"},
 				Service:     name,
@@ -1742,6 +1776,32 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 					Domains:      []traefikTLSDomain{{Main: host}},
 				},
 			}
+
+			// Apply auth + bypass paths for domain-only projects (offline placeholder).
+			if p.AuthRequired {
+				if cfg.HTTP.Middlewares == nil {
+					cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
+				}
+				mwName := name + "-auth"
+				verifyURL := fmt.Sprintf("%s/verify?project=%s", s.authServiceURL, p.ID)
+				if p.AuthAllowedDomains != "" {
+					verifyURL += "&domains=" + p.AuthAllowedDomains
+				}
+				cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
+					ForwardAuth: &traefikForwardAuth{
+						Address:             verifyURL,
+						AuthResponseHeaders: []string{"X-Forwarded-User", "X-Forwarded-User-Name", "X-Forwarded-User-Avatar", "X-Forwarded-User-Provider"},
+						TrustForwardHeader:  true,
+					},
+				}
+				domainRouter.Middlewares = []string{mwName}
+
+				if p.AuthBypassPaths != "" {
+					addBypassRouters(&cfg, name, host, domainRouter.TLS, p.AuthBypassPaths)
+				}
+			}
+
+			cfg.HTTP.Routers[name] = domainRouter
 			cfg.HTTP.Services[name] = traefikService{
 				LoadBalancer: traefikLB{
 					Servers: []traefikServer{{URL: s.tunnelBackendURL}},
