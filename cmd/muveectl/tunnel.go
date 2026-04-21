@@ -108,9 +108,13 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 	// Resolve domain for the public URL banner. For --project we fetch the
 	// project's current domain_prefix up front so the displayed URL is accurate;
 	// the server still enforces ownership and type at handshake time.
-	var domain string
+	var (
+		domain string
+		mode   string
+	)
 	switch {
 	case projectName != "":
+		mode = "project"
 		items, lerr := c.doArray("GET", "/api/projects", nil)
 		if lerr != nil {
 			return fmt.Errorf("fetch projects: %w", lerr)
@@ -130,9 +134,14 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 			return fmt.Errorf("project %q is not a domain_only project", projectName)
 		}
 		domain = str(matched, "domain_prefix")
+		log.Printf("tunnel: resolved mode=project project=%q project_id=%q domain_prefix=%q",
+			projectName, str(matched, "id"), domain)
 	case customDomain != "":
+		mode = "custom"
 		domain = customDomain
+		log.Printf("tunnel: resolved mode=custom domain=%q", domain)
 	default:
+		mode = "hash"
 		cwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("getwd: %w", err)
@@ -140,7 +149,9 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 		portNum := 0
 		fmt.Sscanf(port, "%d", &portNum)
 		domain = tunnelDomain(cwd, portNum)
+		log.Printf("tunnel: resolved mode=hash cwd=%q port=%d domain=%q", cwd, portNum, domain)
 	}
+	_ = mode
 
 	publicURL := fmt.Sprintf("https://%s.%s", domain, baseDomain)
 
@@ -162,6 +173,7 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 
 	wsHeader := http.Header{}
 	wsHeader.Set("Authorization", "Bearer "+c.cfg.Token)
+	log.Printf("tunnel: ws url=%s local=%s public=%s", wsURL, localAddr, publicURL)
 
 	authLabel := "on (ForwardAuth)"
 	if noAuth {
@@ -290,12 +302,14 @@ func tunnelSession(ctx context.Context, wsURL string, header http.Header, localA
 
 		switch fType {
 		case frameOpen:
+			log.Printf("tunnel: frame OPEN sid=%d → dial %s", sid, localAddr)
 			c, err := net.Dial("tcp", localAddr)
 			if err != nil {
-				log.Printf("tunnel: dial %s: %v", localAddr, err)
+				log.Printf("tunnel: dial FAIL sid=%d addr=%s err=%v", sid, localAddr, err)
 				_ = writer.writeFrame(frameClose, sid, nil)
 				continue
 			}
+			log.Printf("tunnel: dial OK sid=%d local=%s remote=%s", sid, c.LocalAddr(), c.RemoteAddr())
 			streamsMu.Lock()
 			streams[sid] = c
 			streamsMu.Unlock()
@@ -334,6 +348,7 @@ func tunnelSession(ctx context.Context, wsURL string, header http.Header, localA
 			}
 
 		case frameClose:
+			log.Printf("tunnel: frame CLOSE sid=%d", sid)
 			closeStream(sid)
 		}
 	}

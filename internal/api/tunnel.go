@@ -188,6 +188,26 @@ func (tr *tunnelRegistry) get(domain string) *tunnelConn {
 	return tr.tunnels[domain]
 }
 
+// size returns the number of registered tunnels. For diagnostic logging.
+func (tr *tunnelRegistry) size() int {
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	return len(tr.tunnels)
+}
+
+// dumpKeys returns a snapshot of all currently registered domain keys. For
+// diagnostic logging only — lets us detect subtle key mismatches (trailing
+// whitespace, case differences) when a lookup misses.
+func (tr *tunnelRegistry) dumpKeys() []string {
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	keys := make([]string, 0, len(tr.tunnels))
+	for k := range tr.tunnels {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // tunnelInfo is a snapshot of an active tunnel.
 type tunnelInfo struct {
 	Domain       string    `json:"domain"`
@@ -238,39 +258,53 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 
 	rawDomain := r.URL.Query().Get("domain")
 	projectName := r.URL.Query().Get("project")
+	noauthParam := r.URL.Query().Get("noauth")
+	log.Printf("tunnel: connect start user=%q user_id=%s remote=%s raw_domain=%q project=%q noauth=%q",
+		user.Email, user.ID, r.RemoteAddr, rawDomain, projectName, noauthParam)
 	if rawDomain != "" && projectName != "" {
+		log.Printf("tunnel: connect reject user=%q reason=mutually_exclusive", user.Email)
 		http.Error(w, "domain and project parameters are mutually exclusive", http.StatusBadRequest)
 		return
 	}
 
 	var (
-		domain      string
+		domain       string
 		boundProject string
 	)
 	switch {
 	case projectName != "":
 		proj, err := s.store.GetProjectByOwnerAndName(r.Context(), user.ID, projectName)
 		if err != nil {
+			log.Printf("tunnel: connect project_lookup_err user=%q project=%q err=%v",
+				user.Email, projectName, err)
 			http.Error(w, "project lookup failed", http.StatusInternalServerError)
 			return
 		}
 		if proj == nil {
+			log.Printf("tunnel: connect project_not_found user=%q project=%q", user.Email, projectName)
 			http.Error(w, "project not found", http.StatusNotFound)
 			return
 		}
 		if proj.ProjectType != store.ProjectTypeDomainOnly {
+			log.Printf("tunnel: connect wrong_type user=%q project=%q type=%s",
+				user.Email, projectName, proj.ProjectType)
 			http.Error(w, "project is not a domain_only project", http.StatusConflict)
 			return
 		}
 		domain = proj.DomainPrefix
 		boundProject = proj.Name
+		log.Printf("tunnel: connect resolved mode=project user=%q project=%q project_id=%s owner_id=%s domain_prefix=%q",
+			user.Email, proj.Name, proj.ID, proj.OwnerID, proj.DomainPrefix)
 	case rawDomain != "":
 		if !isValidTunnelDomain(rawDomain) {
+			log.Printf("tunnel: connect invalid_domain user=%q raw_domain=%q", user.Email, rawDomain)
 			http.Error(w, "invalid domain parameter", http.StatusBadRequest)
 			return
 		}
 		domain = rawDomain
+		log.Printf("tunnel: connect resolved mode=ephemeral user=%q domain=%q", user.Email, rawDomain)
 	default:
+		log.Printf("tunnel: connect missing_param user=%q", user.Email)
 		http.Error(w, "domain or project parameter is required", http.StatusBadRequest)
 		return
 	}
@@ -280,7 +314,10 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 
 	// First-come-first-served: reject early before the WS upgrade so the
 	// second client gets a proper HTTP 409 instead of a surprise WS close.
-	if s.tunnels.get(domain) != nil {
+	if existing := s.tunnels.get(domain); existing != nil {
+		log.Printf("tunnel: connect CONFLICT key=%q wanted_by user=%q project=%q, owned_by user=%q project=%q connected_at=%s",
+			domain, user.Email, boundProject,
+			existing.userEmail, existing.projectName, existing.connectedAt.Format(time.RFC3339))
 		http.Error(w, "a tunnel is already connected to this domain", http.StatusConflict)
 		return
 	}
@@ -313,6 +350,7 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 
 	if !s.tunnels.register(domain, tc) {
 		// Lost the race between the pre-upgrade check and the register call.
+		log.Printf("tunnel: connect REGISTER_RACE_LOST key=%q user=%q", domain, user.Email)
 		ws.Close()
 		return
 	}
@@ -320,11 +358,15 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 	historyID := s.recordTunnelConnect(domain, user.Email, authRequired)
 	tc.historyID = historyID
 
+	log.Printf("tunnel: registered key=%q user=%q project=%q auth_required=%v registry_size=%d keys=%q",
+		domain, user.Email, boundProject, authRequired, s.tunnels.size(), s.tunnels.dumpKeys())
 	log.Printf("Tunnel registered: %s.%s (user: %s)", domain, s.baseDomain, user.Email)
 	defer func() {
 		s.tunnels.unregister(domain, tc)
 		ws.Close()
 		s.recordTunnelDisconnect(historyID)
+		log.Printf("tunnel: unregistered key=%q user=%q project=%q registry_size=%d",
+			domain, user.Email, boundProject, s.tunnels.size())
 		log.Printf("Tunnel closed: %s.%s", domain, s.baseDomain)
 	}()
 
@@ -358,22 +400,30 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 // forwarding is byte-level, any protocol that runs over HTTP (including
 // WebSocket upgrades) works transparently.
 func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
+	rawHost := r.Host
+	xfHost := r.Header.Get("X-Forwarded-Host")
+	host := rawHost
 	if idx := strings.LastIndex(host, ":"); idx != -1 {
 		host = host[:idx]
 	}
 	suffix := "." + s.baseDomain
 	if !strings.HasSuffix(host, suffix) {
+		log.Printf("tunnel: traffic REJECT_SUFFIX raw_host=%q x_forwarded_host=%q stripped=%q base_domain=%q method=%s path=%q remote=%s",
+			rawHost, xfHost, host, s.baseDomain, r.Method, r.URL.Path, r.RemoteAddr)
 		http.Error(w, "unknown tunnel host", http.StatusBadGateway)
 		return
 	}
 	domain := strings.TrimSuffix(host, suffix)
+	log.Printf("tunnel: traffic in raw_host=%q x_forwarded_host=%q derived_domain=%q method=%s path=%q remote=%s",
+		rawHost, xfHost, domain, r.Method, r.URL.Path, r.RemoteAddr)
 
 	// Record tunnel traffic for project-bound tunnels asynchronously.
 	s.recordTunnelTraffic(r, domain)
 
 	tc := s.tunnels.get(domain)
 	if tc == nil {
+		log.Printf("tunnel: traffic MISS domain=%q domain_only=%v registry_size=%d registry_keys=%q",
+			domain, s.isDomainOnlyPrefix(domain), s.tunnels.size(), s.tunnels.dumpKeys())
 		// If this prefix belongs to a domain_only project, the reservation
 		// outlives the tunnel connection — serve a friendly placeholder so the
 		// user can confirm the domain is correct and the service is just down.
@@ -384,6 +434,8 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tunnel not connected", http.StatusBadGateway)
 		return
 	}
+	log.Printf("tunnel: traffic HIT domain=%q tc_project=%q tc_user=%q tc_connected_at=%s",
+		domain, tc.projectName, tc.userEmail, tc.connectedAt.Format(time.RFC3339))
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -433,9 +485,15 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 	_ = bufrw.Flush()
 
 	stream := tc.newStream()
-	defer tc.removeStream(stream.id)
+	log.Printf("tunnel: stream OPEN domain=%q sid=%d host=%q method=%s path=%q",
+		domain, stream.id, rawHost, r.Method, r.URL.Path)
+	defer func() {
+		tc.removeStream(stream.id)
+		log.Printf("tunnel: stream CLOSE domain=%q sid=%d", domain, stream.id)
+	}()
 
 	if err := tc.writeFrame(frameOpen, stream.id, nil); err != nil {
+		log.Printf("tunnel: stream OPEN_WRITE_ERR domain=%q sid=%d err=%v", domain, stream.id, err)
 		return
 	}
 	// Send the reconstructed request in 16KB chunks so one huge frame doesn't
