@@ -42,17 +42,23 @@ If `SECRET_ENCRYPTION_KEY` is not set, secret creation will be disabled. Back up
 
 ## Secret Types
 
-| Type | Use case |
-|---|---|
-| `password` | API tokens, database passwords, generic credentials |
-| `ssh_key` | PEM-format SSH private keys for cloning private git repositories |
+| Type | Use case | Display |
+|---|---|---|
+| `password` | API tokens, database passwords, generic credentials | Write-only (value never shown) |
+| `ssh_key` | PEM-format SSH private keys for cloning private git repositories | Write-only (value never shown) |
+| `api_key` | API keys / provider tokens where a masked fingerprint helps identify which key is which | Shows first 4 + last 4 characters (e.g. `sk-1****wxyz`) |
+| `env_var` | Non-sensitive configuration (public endpoints, feature flags) that benefits from central management | Shows full plaintext in the secrets list |
+
+:::warning
+Only use `env_var` for values that are safe to view in the UI. Anything sensitive should use `password` or `api_key`.
+:::
 
 ## Managing Secrets in the UI
 
 Navigate to **Secrets** in the sidebar to:
 
-- View all your secrets (names and types only — values are never shown)
-- Create a new secret (password or SSH key)
+- View all your secrets (names, types, and — for `api_key` / `env_var` — their preview)
+- Create a new secret (one of the four types above)
 - Delete a secret
 
 ## Binding Secrets to a Project

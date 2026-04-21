@@ -129,10 +129,17 @@ export interface CreatedApiToken {
   token: string
 }
 
+export type SecretType = 'password' | 'ssh_key' | 'api_key' | 'env_var'
+
 export interface Secret {
   id: string
   name: string
-  type: 'password' | 'ssh_key'
+  type: SecretType
+  // value_preview is a non-sensitive display string:
+  // - api_key: masked fingerprint like "sk-1****wxyz"
+  // - env_var: full plaintext value
+  // - password / ssh_key: empty string
+  value_preview: string
   created_at: string
   updated_at: string
 }
@@ -140,7 +147,7 @@ export interface Secret {
 export interface ProjectSecretBinding {
   secret_id: string
   secret_name: string
-  secret_type: 'password' | 'ssh_key'
+  secret_type: SecretType
   env_var_name: string
   use_for_git: boolean
   use_for_build: boolean

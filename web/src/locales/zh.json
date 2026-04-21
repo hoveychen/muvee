@@ -309,7 +309,7 @@
     "sectionLabel": "凭证管理",
     "heading": "密钥",
     "newSecret": "新建密钥",
-    "infoText": "密钥在存储时加密（AES-256-GCM）。值为 <strong>只写</strong> — 创建后不可读取。在项目的<strong>密钥</strong>标签中将密钥绑定到项目。",
+    "infoText": "密钥在存储时加密（AES-256-GCM）。<strong>password</strong> 和 <strong>ssh_key</strong> 为<strong>只写</strong>；<strong>api_key</strong> 会展示脱敏片段；<strong>env_var</strong> 以明文展示。在项目的<strong>密钥</strong>标签中将密钥绑定到项目。",
     "loading": "加载中...",
     "columns": {
       "name": "名称",
@@ -318,6 +318,8 @@
     },
     "sshKey": "SSH 密钥",
     "password": "密码",
+    "apiKey": "API KEY",
+    "envVar": "环境变量",
     "deleteTitle": "删除密钥",
     "deleteConfirm": "确认删除此密钥？使用它的项目在下次部署时将失去访问权限。",
     "form": {
@@ -326,7 +328,11 @@
       "type": "类型",
       "sshKey": "SSH 密钥",
       "passwordToken": "密码 / Token",
+      "apiKey": "API Key",
+      "envVar": "环境变量",
       "sshKeyHint": "粘贴 <strong>私钥</strong>（PEM 格式）。在项目密钥标签中启用它作为 git clone 密钥。",
+      "apiKeyHint": "列表中会展示脱敏片段（前 4 位 + 后 4 位）。完整值加密存储，永不回传。",
+      "envVarHint": "值虽加密存储，但会在密钥列表中<strong>以明文展示</strong>。请仅用于非敏感配置。",
       "value": "值",
       "valueWriteOnly": "（只写 — 保存后不可读取）",
       "secretPlaceholder": "输入密钥值",
@@ -338,7 +344,7 @@
     },
     "empty": {
       "title": "暂无密钥",
-      "hint": "添加密码、API Token 或 SSH 密钥，安全地注入到部署中。"
+      "hint": "添加密码、API Token、SSH 密钥或环境变量，安全地注入到部署中。"
     },
     "disabledBanner": "密钥功能未启用。请在 <code>.env</code> 文件中设置 <code>SECRET_ENCRYPTION_KEY</code> 并重启服务器以开启此功能。"
   },

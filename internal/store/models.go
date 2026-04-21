@@ -269,6 +269,12 @@ type SecretType string
 const (
 	SecretTypePassword SecretType = "password"
 	SecretTypeSSHKey   SecretType = "ssh_key"
+	// SecretTypeAPIKey stores an API key / token. The full value is encrypted;
+	// a masked preview (head4 + **** + tail4) is stored alongside for UI display.
+	SecretTypeAPIKey SecretType = "api_key"
+	// SecretTypeEnvVar stores a non-sensitive environment variable value.
+	// The full plaintext is stored as the value preview and shown in the UI.
+	SecretTypeEnvVar SecretType = "env_var"
 )
 
 type Secret struct {
@@ -277,8 +283,11 @@ type Secret struct {
 	Name           string     `db:"name"`
 	Type           SecretType `db:"type"`
 	EncryptedValue string     `db:"encrypted_value"`
-	CreatedAt      time.Time  `db:"created_at"`
-	UpdatedAt      time.Time  `db:"updated_at"`
+	// ValuePreview is a non-sensitive display string: masked fingerprint for api_key,
+	// full plaintext for env_var, and empty for password / ssh_key.
+	ValuePreview string    `db:"value_preview"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
 }
 
 type ProjectSecret struct {

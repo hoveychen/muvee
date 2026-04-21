@@ -101,7 +101,7 @@ export const api = {
 
   secrets: {
     list: () => request<import('./types').Secret[]>('/api/secrets'),
-    create: (data: { name: string; type: 'password' | 'ssh_key'; value: string }) =>
+    create: (data: { name: string; type: import('./types').SecretType; value: string }) =>
       request<import('./types').Secret>('/api/secrets', { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: string) => request(`/api/secrets/${id}`, { method: 'DELETE' }),
   },

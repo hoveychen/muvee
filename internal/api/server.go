@@ -2412,20 +2412,22 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type safeSecret struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		Type      string `json:"type"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
+		ID           string `json:"id"`
+		Name         string `json:"name"`
+		Type         string `json:"type"`
+		ValuePreview string `json:"value_preview"`
+		CreatedAt    string `json:"created_at"`
+		UpdatedAt    string `json:"updated_at"`
 	}
 	out := make([]safeSecret, 0, len(secrets))
 	for _, sec := range secrets {
 		out = append(out, safeSecret{
-			ID:        sec.ID.String(),
-			Name:      sec.Name,
-			Type:      string(sec.Type),
-			CreatedAt: sec.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: sec.UpdatedAt.Format(time.RFC3339),
+			ID:           sec.ID.String(),
+			Name:         sec.Name,
+			Type:         string(sec.Type),
+			ValuePreview: sec.ValuePreview,
+			CreatedAt:    sec.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    sec.UpdatedAt.Format(time.RFC3339),
 		})
 	}
 	jsonOK(w, out)
@@ -2446,8 +2448,10 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, fmt.Errorf("name and value are required"), 400)
 		return
 	}
-	if body.Type != "password" && body.Type != "ssh_key" {
-		jsonErr(w, fmt.Errorf("type must be 'password' or 'ssh_key'"), 400)
+	switch store.SecretType(body.Type) {
+	case store.SecretTypePassword, store.SecretTypeSSHKey, store.SecretTypeAPIKey, store.SecretTypeEnvVar:
+	default:
+		jsonErr(w, fmt.Errorf("type must be one of: password, ssh_key, api_key, env_var"), 400)
 		return
 	}
 	sec, err := s.store.CreateSecret(r.Context(), user.ID, body.Name, store.SecretType(body.Type), body.Value)
@@ -2456,9 +2460,10 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{
-		"id":   sec.ID.String(),
-		"name": sec.Name,
-		"type": string(sec.Type),
+		"id":            sec.ID.String(),
+		"name":          sec.Name,
+		"type":          string(sec.Type),
+		"value_preview": sec.ValuePreview,
 	})
 }
 

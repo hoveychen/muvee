@@ -24,7 +24,7 @@ func init() {
 
 	// secrets create flags
 	secretsCreateCmd.Flags().String("name", "", "Secret name (required)")
-	secretsCreateCmd.Flags().String("type", "", "Type: password or ssh_key (required)")
+	secretsCreateCmd.Flags().String("type", "", "Type: password, ssh_key, api_key, or env_var (required)")
 	secretsCreateCmd.Flags().String("value", "", "Secret value")
 	secretsCreateCmd.Flags().String("value-file", "", "Read secret value from file (useful for SSH keys)")
 	secretsCreateCmd.MarkFlagRequired("name")
@@ -66,7 +66,7 @@ var secretsListCmd = &cobra.Command{
 			fmt.Println("No secrets found.")
 			return nil
 		}
-		printTable(items, []string{"id", "name", "type", "created_at"})
+		printTable(items, []string{"id", "name", "type", "value_preview", "created_at"})
 		return nil
 	},
 }
@@ -109,7 +109,12 @@ var secretsCreateCmd = &cobra.Command{
 			printJSON(result)
 			return nil
 		}
-		fmt.Printf("Created secret %q (ID: %s, type: %s)\n", str(result, "name"), str(result, "id"), str(result, "type"))
+		preview := str(result, "value_preview")
+		if preview != "" {
+			fmt.Printf("Created secret %q (ID: %s, type: %s, preview: %s)\n", str(result, "name"), str(result, "id"), str(result, "type"), preview)
+		} else {
+			fmt.Printf("Created secret %q (ID: %s, type: %s)\n", str(result, "name"), str(result, "id"), str(result, "type"))
+		}
 		return nil
 	},
 }

@@ -1,13 +1,40 @@
 import { useEffect, useState } from 'react'
 import { KeyRound, Plus, Trash2, Eye, EyeOff, Lock, AlertTriangle } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Secret } from '../lib/types'
+import type { Secret, SecretType } from '../lib/types'
 import { timeAgo } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
-type SecretType = 'password' | 'ssh_key'
+const SECRET_TYPES: SecretType[] = ['password', 'ssh_key', 'api_key', 'env_var']
+
+function typeLabelKey(type: SecretType): string {
+  switch (type) {
+    case 'ssh_key': return 'secrets.sshKey'
+    case 'api_key': return 'secrets.apiKey'
+    case 'env_var': return 'secrets.envVar'
+    default: return 'secrets.password'
+  }
+}
+
+function typeBadgeClass(type: SecretType): string {
+  switch (type) {
+    case 'ssh_key': return 'badge-info'
+    case 'api_key': return 'badge-warning'
+    case 'env_var': return 'badge-success'
+    default: return 'badge-neutral'
+  }
+}
+
+function formTypeLabelKey(type: SecretType): string {
+  switch (type) {
+    case 'ssh_key': return 'secrets.form.sshKey'
+    case 'api_key': return 'secrets.form.apiKey'
+    case 'env_var': return 'secrets.form.envVar'
+    default: return 'secrets.form.passwordToken'
+  }
+}
 
 export default function SecretsPage() {
   const [secrets, setSecrets] = useState<Secret[]>([])
@@ -115,7 +142,7 @@ export default function SecretsPage() {
 
 function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: number; total: number; onDelete: (id: string) => void }) {
   const { t } = useTranslation()
-  const typeLabel = secret.type === 'ssh_key' ? t('secrets.sshKey') : t('secrets.password')
+  const typeLabel = t(typeLabelKey(secret.type))
 
   return (
     <div
@@ -129,14 +156,32 @@ function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: 
       onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)' }}
       onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-card)' }}
     >
-      <div className="flex items-center gap-3">
-        <Lock size={14} style={{ color: 'var(--fg-muted)', flexShrink: 0 }} />
-        <span style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
-          {secret.name}
-        </span>
+      <div className="flex flex-col gap-1 min-w-0">
+        <div className="flex items-center gap-3">
+          <Lock size={14} style={{ color: 'var(--fg-muted)', flexShrink: 0 }} />
+          <span style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
+            {secret.name}
+          </span>
+        </div>
+        {secret.value_preview && (
+          <span
+            style={{
+              fontFamily: MONO,
+              fontSize: '0.75rem',
+              color: 'var(--fg-muted)',
+              marginLeft: '1.625rem',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={secret.value_preview}
+          >
+            {secret.value_preview}
+          </span>
+        )}
       </div>
 
-      <span className={`badge ${secret.type === 'ssh_key' ? 'badge-info' : 'badge-neutral'}`}>
+      <span className={`badge ${typeBadgeClass(secret.type)}`}>
         {typeLabel}
       </span>
 
@@ -208,8 +253,8 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
           <label className="form-label">
             {t('secrets.form.type')}
           </label>
-          <div className="flex gap-2">
-            {(['password', 'ssh_key'] as SecretType[]).map(typOpt => (
+          <div className="flex gap-2 flex-wrap">
+            {SECRET_TYPES.map(typOpt => (
               <button
                 key={typOpt}
                 type="button"
@@ -217,7 +262,7 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
                 className={type === typOpt ? 'btn-primary' : 'btn-secondary'}
                 style={{ fontSize: '0.8125rem' }}
               >
-                {typOpt === 'ssh_key' ? t('secrets.form.sshKey') : t('secrets.form.passwordToken')}
+                {t(formTypeLabelKey(typOpt))}
               </button>
             ))}
           </div>
@@ -225,6 +270,18 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
             <p
               style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}
               dangerouslySetInnerHTML={{ __html: t('secrets.form.sshKeyHint') }}
+            />
+          )}
+          {type === 'api_key' && (
+            <p
+              style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}
+              dangerouslySetInnerHTML={{ __html: t('secrets.form.apiKeyHint') }}
+            />
+          )}
+          {type === 'env_var' && (
+            <p
+              style={{ fontSize: '0.8125rem', color: 'var(--warning)', marginTop: '0.5rem' }}
+              dangerouslySetInnerHTML={{ __html: t('secrets.form.envVarHint') }}
             />
           )}
         </div>

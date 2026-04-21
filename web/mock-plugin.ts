@@ -158,10 +158,13 @@ interface MockApiToken {
   created_at: string
 }
 
+type MockSecretType = 'password' | 'ssh_key' | 'api_key' | 'env_var'
+
 interface MockSecret {
   id: string
   name: string
-  type: 'password' | 'ssh_key'
+  type: MockSecretType
+  value_preview: string
   created_at: string
   updated_at: string
 }
@@ -175,7 +178,7 @@ interface MockProjectDataset {
 interface MockProjectSecretBinding {
   secret_id: string
   secret_name: string
-  secret_type: 'password' | 'ssh_key'
+  secret_type: MockSecretType
   env_var_name: string
   use_for_git: boolean
   use_for_build: boolean
@@ -390,6 +393,7 @@ function buildInitialState() {
       id: 'sec-001',
       name: 'github-pat',
       type: 'password',
+      value_preview: '',
       created_at: SEED_TIME,
       updated_at: SEED_TIME,
     },
@@ -397,6 +401,23 @@ function buildInitialState() {
       id: 'sec-002',
       name: 'deploy-ssh-key',
       type: 'ssh_key',
+      value_preview: '',
+      created_at: SEED_TIME2,
+      updated_at: SEED_TIME2,
+    },
+    {
+      id: 'sec-003',
+      name: 'openai-api-key',
+      type: 'api_key',
+      value_preview: 'sk-1****wxyz',
+      created_at: SEED_TIME2,
+      updated_at: SEED_TIME2,
+    },
+    {
+      id: 'sec-004',
+      name: 'public-api-endpoint',
+      type: 'env_var',
+      value_preview: 'https://api.example.com/v1',
       created_at: SEED_TIME2,
       updated_at: SEED_TIME2,
     },
@@ -752,10 +773,19 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
     // ---------- /api/secrets ----------
     defineRoute('GET', '/api/secrets', () => state.secrets),
     defineRoute('POST', '/api/secrets', ({ body }) => {
+      const type = (body.type as MockSecretType) || 'password'
+      const value = (body.value as string) || ''
+      let preview = ''
+      if (type === 'env_var') {
+        preview = value
+      } else if (type === 'api_key') {
+        preview = value.length >= 12 ? value.slice(0, 4) + '****' + value.slice(-4) : '****'
+      }
       const secret: MockSecret = {
         id: makeId(),
         name: (body.name as string) || 'new-secret',
-        type: (body.type as 'password' | 'ssh_key') || 'password',
+        type,
+        value_preview: preview,
         created_at: isoNow(),
         updated_at: isoNow(),
       }

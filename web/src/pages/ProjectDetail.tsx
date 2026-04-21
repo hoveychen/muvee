@@ -1233,8 +1233,16 @@ function SecretsTab({
                       <span style={{ fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
                         {sec.name}
                       </span>
-                      <span className={sec.type === 'ssh_key' ? 'badge badge-info' : 'badge badge-neutral'}>
-                        {sec.type === 'ssh_key' ? t('secrets.sshKey') : t('secrets.password')}
+                      <span className={`badge ${
+                        sec.type === 'ssh_key' ? 'badge-info' :
+                        sec.type === 'api_key' ? 'badge-warning' :
+                        sec.type === 'env_var' ? 'badge-success' :
+                        'badge-neutral'
+                      }`}>
+                        {sec.type === 'ssh_key' ? t('secrets.sshKey') :
+                         sec.type === 'api_key' ? t('secrets.apiKey') :
+                         sec.type === 'env_var' ? t('secrets.envVar') :
+                         t('secrets.password')}
                       </span>
                     </div>
 

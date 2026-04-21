@@ -1185,6 +1185,24 @@ func (s *Store) DeleteAPIToken(ctx context.Context, id, userID uuid.UUID) error 
 
 // ─── Secrets ─────────────────────────────────────────────────────────────────
 
+// computeSecretPreview derives the non-sensitive display string for a secret:
+// - api_key: head 4 + "****" + tail 4 if the value is long enough to safely mask, otherwise fully masked.
+// - env_var: full plaintext (values of this type are treated as non-sensitive).
+// - password / ssh_key: empty string (values remain write-only).
+func computeSecretPreview(secretType SecretType, plaintextValue string) string {
+	switch secretType {
+	case SecretTypeEnvVar:
+		return plaintextValue
+	case SecretTypeAPIKey:
+		if len(plaintextValue) >= 12 {
+			return plaintextValue[:4] + "****" + plaintextValue[len(plaintextValue)-4:]
+		}
+		return "****"
+	default:
+		return ""
+	}
+}
+
 func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string, secretType SecretType, plaintextValue string) (*Secret, error) {
 	if s.encryptionKey == nil {
 		return nil, fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
@@ -1199,13 +1217,14 @@ func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string,
 		Name:           name,
 		Type:           secretType,
 		EncryptedValue: encrypted,
+		ValuePreview:   computeSecretPreview(secretType, plaintextValue),
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO secrets (id, user_id, name, type, encrypted_value, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, sec.ID, sec.UserID, sec.Name, sec.Type, sec.EncryptedValue, sec.CreatedAt, sec.UpdatedAt)
+		INSERT INTO secrets (id, user_id, name, type, encrypted_value, value_preview, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, sec.ID, sec.UserID, sec.Name, sec.Type, sec.EncryptedValue, sec.ValuePreview, sec.CreatedAt, sec.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1214,7 +1233,7 @@ func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string,
 
 func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Secret, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, user_id, name, type, encrypted_value, created_at, updated_at
+		SELECT id, user_id, name, type, encrypted_value, value_preview, created_at, updated_at
 		FROM secrets WHERE user_id = $1 ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
@@ -1224,7 +1243,7 @@ func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Se
 	secrets := make([]*Secret, 0)
 	for rows.Next() {
 		var sec Secret
-		if err := rows.Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.CreatedAt, &sec.UpdatedAt); err != nil {
+		if err := rows.Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.ValuePreview, &sec.CreatedAt, &sec.UpdatedAt); err != nil {
 			return nil, err
 		}
 		secrets = append(secrets, &sec)
@@ -1235,9 +1254,9 @@ func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Se
 func (s *Store) GetSecret(ctx context.Context, id, userID uuid.UUID) (*Secret, error) {
 	var sec Secret
 	err := s.db.QueryRow(ctx, `
-		SELECT id, user_id, name, type, encrypted_value, created_at, updated_at
+		SELECT id, user_id, name, type, encrypted_value, value_preview, created_at, updated_at
 		FROM secrets WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.CreatedAt, &sec.UpdatedAt)
+	`, id, userID).Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.ValuePreview, &sec.CreatedAt, &sec.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

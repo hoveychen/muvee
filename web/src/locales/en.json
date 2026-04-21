@@ -309,7 +309,7 @@
     "sectionLabel": "CREDENTIALS",
     "heading": "Secrets",
     "newSecret": "New Secret",
-    "infoText": "Secrets are encrypted at rest (AES-256-GCM). Values are <strong>write-only</strong> — they cannot be retrieved after creation. Attach secrets to projects from the project's <strong>Secrets</strong> tab.",
+    "infoText": "Secrets are encrypted at rest (AES-256-GCM). Values for <strong>password</strong> and <strong>ssh_key</strong> types are write-only; <strong>api_key</strong> shows a masked preview and <strong>env_var</strong> is displayed in plaintext. Attach secrets to projects from the project's <strong>Secrets</strong> tab.",
     "loading": "Loading...",
     "columns": {
       "name": "NAME",
@@ -318,6 +318,8 @@
     },
     "sshKey": "SSH KEY",
     "password": "PASSWORD",
+    "apiKey": "API KEY",
+    "envVar": "ENV VAR",
     "deleteTitle": "Delete secret",
     "deleteConfirm": "Delete this secret? Projects using it will lose access on next deploy.",
     "form": {
@@ -326,7 +328,11 @@
       "type": "TYPE",
       "sshKey": "SSH Key",
       "passwordToken": "Password / Token",
+      "apiKey": "API Key",
+      "envVar": "Env Var",
       "sshKeyHint": "Paste the <strong>private key</strong> (PEM format). You can enable it as the git clone key in the project's Secrets tab.",
+      "apiKeyHint": "A masked preview (first 4 + last 4 chars) will be shown in the list. The full value stays encrypted and is never returned.",
+      "envVarHint": "The value will be stored encrypted but <strong>displayed in plaintext</strong> in the secrets list. Use this only for non-sensitive configuration.",
       "value": "VALUE",
       "valueWriteOnly": "(write-only — not retrievable after saving)",
       "secretPlaceholder": "Enter secret value",
@@ -338,7 +344,7 @@
     },
     "empty": {
       "title": "No Secrets Yet",
-      "hint": "Add passwords, API tokens, or SSH keys to securely inject into your deployments."
+      "hint": "Add passwords, API tokens, SSH keys, or env vars to securely inject into your deployments."
     },
     "disabledBanner": "Secrets are disabled. Set <code>SECRET_ENCRYPTION_KEY</code> in your <code>.env</code> file and restart the server to enable this feature."
   },
