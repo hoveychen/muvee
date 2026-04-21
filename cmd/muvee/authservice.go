@@ -160,6 +160,7 @@ func setUserHeaders(w http.ResponseWriter, claims *authClaims) {
 
 // handleUserInfo returns the authenticated user's info as JSON.
 func handleUserInfo(w http.ResponseWriter, r *http.Request) {
+	applyUserInfoCORS(w, r)
 	claims, err := resolveAuthClaims(r)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -172,6 +173,41 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 		"avatar_url": claims.AvatarURL,
 		"provider":   claims.Provider,
 	})
+}
+
+// applyUserInfoCORS lets SPAs on any project subdomain of BASE_DOMAIN fetch
+// /_oauth/userinfo cross-origin with credentials. Origins outside the BASE_DOMAIN
+// tree are rejected by simply not echoing the Origin header back.
+func applyUserInfoCORS(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" || cookieDomain == "" {
+		return
+	}
+	if !originMatchesBaseDomain(origin, cookieDomain) {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Vary", "Origin")
+}
+
+// originMatchesBaseDomain reports whether origin is https://base or
+// https://*.base (scheme is not constrained; a misconfigured plaintext
+// deployment would still be accepted, matching how cookies already flow).
+func originMatchesBaseDomain(origin, base string) bool {
+	// Origin format: scheme://host[:port]
+	i := strings.Index(origin, "://")
+	if i < 0 {
+		return false
+	}
+	host := origin[i+3:]
+	if j := strings.IndexByte(host, '/'); j >= 0 {
+		host = host[:j]
+	}
+	if k := strings.IndexByte(host, ':'); k >= 0 {
+		host = host[:k]
+	}
+	return host == base || strings.HasSuffix(host, "."+base)
 }
 
 // handleFwdLogout clears the forward-auth session cookie and redirects.

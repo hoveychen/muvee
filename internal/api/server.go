@@ -1991,12 +1991,15 @@ type traefikForwardAuth struct {
 // device-flow routers.  It points to the authservice backend.
 const deviceFlowServiceName = "muvee-authservice-device"
 
-// addDeviceFlowRouter creates a high-priority router that forwards
-// /_oauth/device/* on a project subdomain to the authservice, bypassing
-// ForwardAuth so that unauthenticated CLI clients can perform the device flow.
+// addDeviceFlowRouter creates a high-priority router that forwards the whole
+// /_oauth namespace on a project subdomain to the authservice, bypassing
+// ForwardAuth. This covers the CLI device flow (/_oauth/device/*) as well as
+// the client-facing /_oauth/logout and /_oauth/userinfo endpoints documented
+// in service-auth-integration.md, so downstream frontends can call them with
+// a relative path (same-origin, no CORS) or a full {BASE_DOMAIN} URL.
 func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName, host string, tls *traefikTLS) {
 	cfg.HTTP.Routers[routerName+"-device-flow"] = traefikRouter{
-		Rule:        fmt.Sprintf("Host(`%s`) && PathPrefix(`/_oauth/device`)", host),
+		Rule:        fmt.Sprintf("Host(`%s`) && PathPrefix(`/_oauth`)", host),
 		EntryPoints: []string{"websecure"},
 		Service:     deviceFlowServiceName,
 		TLS:         tls,
