@@ -10,7 +10,30 @@ sidebar_position: 4
 
 ## 安装
 
-从 [Releases 页面](https://github.com/hoveychen/muvee/releases/latest)安装 `muveectl` 官方预编译版本。除非你需要指定版本，否则优先选择最新稳定版。
+### 一行安装（推荐，需要已运行的 hub）
+
+你的 muvee hub 会提供一份已填好自己地址的安装脚本：
+
+```bash
+curl -fsSL https://YOUR_MUVEE_SERVER/api/install.sh | sh
+```
+
+脚本会自动识别操作系统和架构，并从 hub 下载对应的 binary。hub 构建时会把 `muveectl` 和 server 一起交叉编译并内嵌进去，因此整个安装过程不依赖外网。如果 hub 构建时没内嵌（例如本地 dev 构建），`/api/muveectl/*` 会自动 302 重定向到对应的 GitHub release 资产——对用户完全透明。
+
+### 直接从 hub 下载
+
+如果你想脚本化地抓取 binary（例如固定版本），可以直接访问 hub：
+
+```bash
+curl -Lo muveectl https://YOUR_MUVEE_SERVER/api/muveectl/muveectl_darwin_arm64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+```
+
+把资产名换成你的平台：`muveectl_darwin_{arm64,amd64}`、`muveectl_linux_{amd64,arm64}` 或 `muveectl_windows_{amd64,arm64}.exe`。
+
+### 直接从 GitHub 下载
+
+如果还没有 hub（比如正准备在这台机器上装 hub），可以使用 [Releases 页面](https://github.com/hoveychen/muvee/releases/latest) 的官方预编译版本：
 
 **macOS（Apple Silicon）**
 ```bash

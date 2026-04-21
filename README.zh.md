@@ -253,7 +253,17 @@ curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_
 ./muvee_linux_amd64 authservice # Traefik ForwardAuth 认证服务
 ```
 
-**muveectl** — 命令行客户端，支持 Linux / macOS / Windows：
+**muveectl** — 命令行客户端，支持 Linux / macOS / Windows。
+
+最快方式——hub 起来之后，用一行命令让脚本自动判断 OS/arch 并安装：
+
+```bash
+curl -fsSL https://YOUR_MUVEE_SERVER/api/install.sh | sh
+```
+
+hub 把 `muveectl` binary 和 server 一起交叉编译并内嵌，所以安装过程完全不依赖外网。如果 hub 构建时没内嵌（例如本地 dev 构建），`/api/muveectl/*` 会自动 302 到对应的 GitHub release 资产。
+
+如果还没有 hub（例如正准备装的就是这台 hub 机器），可以直接从 GitHub 下载：
 
 ```bash
 # macOS (Apple Silicon)

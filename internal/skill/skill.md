@@ -8,29 +8,35 @@ description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages pr
 
 ## Installation
 
-Download the latest binary from [GitHub Releases](https://github.com/hoveychen/muvee/releases/latest):
+Fastest path (macOS/Linux) — one-liner that auto-detects OS/arch and installs from your muvee hub:
+
+```bash
+curl -fsSL YOUR_SERVER_URL/api/install.sh | sh
+```
+
+Or download the binary directly. The hub serves embedded binaries when available and transparently falls back to the matching GitHub release asset otherwise:
 
 **macOS (Apple Silicon)**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_arm64
+curl -Lo muveectl YOUR_SERVER_URL/api/muveectl/muveectl_darwin_arm64
 chmod +x muveectl && sudo mv muveectl /usr/local/bin/
 ```
 
 **macOS (Intel)**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_darwin_amd64
+curl -Lo muveectl YOUR_SERVER_URL/api/muveectl/muveectl_darwin_amd64
 chmod +x muveectl && sudo mv muveectl /usr/local/bin/
 ```
 
 **Linux (amd64)**
 ```bash
-curl -Lo muveectl https://github.com/hoveychen/muvee/releases/latest/download/muveectl_linux_amd64
+curl -Lo muveectl YOUR_SERVER_URL/api/muveectl/muveectl_linux_amd64
 chmod +x muveectl && sudo mv muveectl /usr/local/bin/
 ```
 
 **Windows (PowerShell)**
 ```powershell
-Invoke-WebRequest -Uri https://github.com/hoveychen/muvee/releases/latest/download/muveectl_windows_amd64.exe -OutFile muveectl.exe
+Invoke-WebRequest -Uri YOUR_SERVER_URL/api/muveectl/muveectl_windows_amd64.exe -OutFile muveectl.exe
 # Move to a directory in your PATH, e.g.:
 Move-Item muveectl.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\muveectl.exe"
 ```

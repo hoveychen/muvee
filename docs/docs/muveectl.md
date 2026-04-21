@@ -47,7 +47,30 @@ After adding the skill, just tell your AI: *"Deploy my app at github.com/me/repo
 
 ## Installation
 
-Install `muveectl` from the official prebuilt assets on the [Releases page](https://github.com/hoveychen/muvee/releases/latest). Pick the latest stable release unless you need a specific version.
+### One-liner (recommended, requires a running hub)
+
+Your muvee hub serves an install script pre-filled with its own URL:
+
+```bash
+curl -fsSL https://YOUR_MUVEE_SERVER/api/install.sh | sh
+```
+
+The script auto-detects OS/arch and downloads the matching binary from the hub. The hub serves `muveectl` binaries that were cross-compiled alongside the server, so the install works even without internet access to GitHub. If the hub was built without embedded binaries, `/api/muveectl/*` transparently 302-redirects to the matching GitHub release asset — no action needed from the user.
+
+### Direct download from the hub
+
+If you prefer to fetch the binary yourself (e.g. to script a specific version), hit the hub directly:
+
+```bash
+curl -Lo muveectl https://YOUR_MUVEE_SERVER/api/muveectl/muveectl_darwin_arm64
+chmod +x muveectl && sudo mv muveectl /usr/local/bin/
+```
+
+Replace the asset name with your platform: `muveectl_darwin_{arm64,amd64}`, `muveectl_linux_{amd64,arm64}`, or `muveectl_windows_{amd64,arm64}.exe`.
+
+### Direct download from GitHub
+
+If you don't yet have a hub (e.g. installing on the machine that will host it), use the prebuilt assets on the [Releases page](https://github.com/hoveychen/muvee/releases/latest):
 
 **macOS (Apple Silicon)**
 ```bash

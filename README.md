@@ -254,7 +254,17 @@ curl -L https://github.com/hoveychen/muvee/releases/latest/download/muvee_linux_
 ./muvee_linux_amd64 authservice # Traefik ForwardAuth sidecar
 ```
 
-**muveectl** — CLI client for Linux, macOS, and Windows:
+**muveectl** — CLI client for Linux, macOS, and Windows.
+
+Fastest path — once your hub is up, a one-liner installs the right binary for your OS/arch:
+
+```bash
+curl -fsSL https://YOUR_MUVEE_SERVER/api/install.sh | sh
+```
+
+The hub serves `muveectl` binaries that were cross-compiled alongside the server, so the install works fully offline. If the hub wasn't built with embedded binaries, `/api/muveectl/*` transparently 302-redirects to the matching GitHub release asset.
+
+If you don't have a hub yet (e.g. installing on the machine that will host it), pull directly from GitHub:
 
 ```bash
 # macOS (Apple Silicon)

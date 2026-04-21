@@ -19,6 +19,29 @@ RUN cd web && npm ci && npm run build
 RUN rm -rf web/embed/dist && cp -r web/dist web/embed/dist
 
 COPY . .
+
+# Cross-compile muveectl for all supported platforms and gzip into the embed
+# directory so the server binary picks them up via //go:embed. Must run before
+# the server build below.
+RUN set -eux; \
+    VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"; \
+    LDFLAGS="-s -w -X main.version=$VERSION"; \
+    mkdir -p internal/muveectlbin/binaries; \
+    for GOOS in linux darwin; do \
+      for GOARCH in amd64 arm64; do \
+        OUTPUT="/tmp/muveectl_${GOOS}_${GOARCH}"; \
+        CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/muveectl; \
+        gzip -9 -c "$OUTPUT" > "internal/muveectlbin/binaries/$(basename $OUTPUT).gz"; \
+        rm -f "$OUTPUT"; \
+      done; \
+    done; \
+    for GOARCH in amd64 arm64; do \
+      OUTPUT="/tmp/muveectl_windows_${GOARCH}.exe"; \
+      CGO_ENABLED=0 GOOS=windows GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/muveectl; \
+      gzip -9 -c "$OUTPUT" > "internal/muveectlbin/binaries/$(basename $OUTPUT).gz"; \
+      rm -f "$OUTPUT"; \
+    done
+
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
     -o /muvee ./cmd/muvee
