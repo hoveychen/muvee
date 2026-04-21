@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -366,14 +367,53 @@ func checkSkillNotice() {
 	}
 }
 
+func parseSemver(v string) ([3]int, bool) {
+	var out [3]int
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) == 0 || len(parts) > 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+func shouldShowUpdateNotice(cachedLatest, current string) bool {
+	if cachedLatest == "" || current == "dev" {
+		return false
+	}
+	remote, ok := parseSemver(cachedLatest)
+	if !ok {
+		return false
+	}
+	local, ok := parseSemver(current)
+	if !ok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if remote[i] != local[i] {
+			return remote[i] > local[i]
+		}
+	}
+	return false
+}
+
 func checkUpdateNotice() {
 	cachePath := updateCachePath()
 	var cache updateCache
 	if data, err := os.ReadFile(cachePath); err == nil {
 		_ = json.Unmarshal(data, &cache)
 	}
-	// Print notice if cached result shows a newer version
-	if cache.LatestVersion != "" && cache.LatestVersion != version && version != "dev" {
+	if shouldShowUpdateNotice(cache.LatestVersion, version) {
 		fmt.Fprintf(os.Stderr, "Notice: New version available (%s → %s). Download: https://github.com/hoveychen/muvee/releases/latest\n", version, cache.LatestVersion)
 	}
 	// Refresh cache in background if stale (> 24h)
