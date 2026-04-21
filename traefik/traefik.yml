@@ -10,8 +10,17 @@ entryPoints:
         entryPoint:
           to: websecure
           scheme: https
+    # Traefik v3 defaults readTimeout to 60s, which kills long-running
+    # dataset uploads mid-stream. Disable it so `muveectl dataset push`
+    # of large files works over slow links.
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
   websecure:
     address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
 
 certificatesResolvers:
   letsencrypt:
