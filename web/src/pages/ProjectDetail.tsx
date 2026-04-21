@@ -177,7 +177,7 @@ export default function ProjectDetail() {
           <span style={{ fontFamily: MONO }}>{project.domain_prefix}.{baseDomain}</span>
         </div>
         {!isTunnel && project.git_source === 'hosted' && project.git_push_url && (
-          <PushUrlBadge url={project.git_push_url} />
+          <PushUrlBadge url={project.git_push_url} projectId={project.id} />
         )}
         {isTunnel && (
           <div style={{ marginTop: '0.5rem', marginLeft: '1.75rem', fontSize: '0.8125rem', color: 'var(--fg-muted)', fontFamily: MONO, background: 'var(--bg-hover)', padding: '0.5rem 0.75rem', borderRadius: '6px', display: 'inline-block' }}>
@@ -1361,21 +1361,115 @@ function SecretsTab({
 
 // ─── Push URL Badge (for hosted repos) ──────────────────────────────────────
 
-function PushUrlBadge({ url }: { url: string }) {
+function PushUrlBadge({ url, projectId }: { url: string; projectId: string }) {
   const [copied, setCopied] = useState(false)
+  const [tokenCopied, setTokenCopied] = useState(false)
+  const [generatedToken, setGeneratedToken] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [showToken, setShowToken] = useState(false)
+  const [error, setError] = useState('')
   const { t } = useTranslation()
+
+  const urlWithToken = generatedToken
+    ? url.replace(/^(https?:\/\/)/, (_m, scheme) => `${scheme}x:${generatedToken}@`)
+    : url
+
   const copy = () => {
     navigator.clipboard.writeText(url)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
+
+  const copyWithToken = () => {
+    navigator.clipboard.writeText(urlWithToken)
+    setTokenCopied(true)
+    setTimeout(() => setTokenCopied(false), 2000)
+  }
+
+  const generate = async () => {
+    setGenerating(true)
+    setError('')
+    try {
+      const result = await api.tokens.create(projectId, t('newProject.hostedCreated.tokenName'))
+      setGeneratedToken(result.token)
+      setShowToken(true)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   return (
-    <div className="flex items-center gap-2 mt-2 ml-7">
-      <span className="page-subtitle" style={{ fontSize: '0.8125rem' }}>{t('projectDetail.pushUrl')}</span>
-      <code style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--accent)', wordBreak: 'break-all' }}>{url}</code>
-      <button onClick={copy} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '2px' }}>
-        {copied ? <Check size={12} style={{ color: 'var(--accent)' }} /> : <Copy size={12} />}
-      </button>
+    <div className="flex flex-col gap-2 mt-2 ml-7" style={{ maxWidth: '640px' }}>
+      <div className="flex items-center gap-2">
+        <span className="page-subtitle" style={{ fontSize: '0.8125rem' }}>{t('projectDetail.pushUrl')}</span>
+        <code style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--accent)', wordBreak: 'break-all' }}>{url}</code>
+        <button onClick={copy} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '2px' }}>
+          {copied ? <Check size={12} style={{ color: 'var(--accent)' }} /> : <Copy size={12} />}
+        </button>
+        {!generatedToken && (
+          <button
+            type="button"
+            onClick={generate}
+            disabled={generating}
+            title={t('projectDetail.pushUrlGenerateTokenTooltip')}
+            style={{ background: 'none', border: '1px solid var(--border)', cursor: 'pointer', color: 'var(--fg-muted)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            <Key size={11} />
+            {generating ? t('newProject.hostedCreated.generating') : t('projectDetail.pushUrlGenerateToken')}
+          </button>
+        )}
+      </div>
+      {error && (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--danger)' }}>{error}</p>
+      )}
+      {generatedToken && (
+        <div className="card" style={{
+          background: 'rgba(37,99,235,0.08)', borderColor: 'rgba(37,99,235,0.3)',
+          padding: '0.75rem 1rem',
+        }}>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--accent)', marginBottom: '0.4rem', fontWeight: 600 }}>
+            {t('newProject.hostedCreated.tokenReadyHeading')}
+          </p>
+          <div className="flex items-center gap-2" style={{ marginBottom: '0.5rem' }}>
+            <code style={{
+              fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', flex: 1,
+              wordBreak: 'break-all',
+            }}>
+              {showToken ? generatedToken : '•'.repeat(40)}
+            </code>
+            <button
+              type="button"
+              onClick={() => setShowToken(!showToken)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '4px' }}
+            >
+              {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <code style={{
+              flex: 1, fontFamily: MONO, fontSize: '0.8125rem', padding: '0.4rem 0.6rem',
+              background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '4px',
+              color: 'var(--fg-primary)', wordBreak: 'break-all',
+            }}>{urlWithToken}</code>
+            <button
+              type="button"
+              onClick={copyWithToken}
+              className="btn-secondary flex items-center gap-1"
+              style={{
+                fontSize: '0.8125rem', padding: '3px 8px',
+                color: tokenCopied ? 'var(--success)' : 'var(--fg-muted)',
+              }}
+            >
+              {tokenCopied ? <Check size={12} /> : <Copy size={12} />}
+            </button>
+          </div>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.4rem' }}>
+            {t('newProject.hostedCreated.tokenWarning')}
+          </p>
+        </div>
+      )}
     </div>
   )
 }

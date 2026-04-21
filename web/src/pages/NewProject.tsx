@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio } from 'lucide-react'
+import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project, Secret } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
@@ -294,6 +294,11 @@ export default function NewProject() {
   })
   const [createdProject, setCreatedProject] = useState<Project | null>(null)
   const [copied, setCopied] = useState(false)
+  const [generatedToken, setGeneratedToken] = useState<string | null>(null)
+  const [generatingToken, setGeneratingToken] = useState(false)
+  const [tokenError, setTokenError] = useState('')
+  const [showToken, setShowToken] = useState(false)
+  const [tokenCopied, setTokenCopied] = useState(false)
   const [cred, setCred] = useState<CredConfig>({
     mode: 'none',
     existingSecretId: '',
@@ -404,10 +409,33 @@ export default function NewProject() {
   // If a hosted project was just created, show the push URL
   if (createdProject && createdProject.git_push_url) {
     const pushUrl = createdProject.git_push_url
+    const urlWithToken = generatedToken
+      ? pushUrl.replace(/^(https?:\/\/)/, (_m, scheme) => `${scheme}x:${generatedToken}@`)
+      : pushUrl
     const copyUrl = () => {
-      navigator.clipboard.writeText(pushUrl)
+      navigator.clipboard.writeText(urlWithToken)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
+    }
+    const copyToken = () => {
+      if (!generatedToken) return
+      navigator.clipboard.writeText(generatedToken)
+      setTokenCopied(true)
+      setTimeout(() => setTokenCopied(false), 2000)
+    }
+    const generateToken = async () => {
+      if (!createdProject) return
+      setGeneratingToken(true)
+      setTokenError('')
+      try {
+        const result = await api.tokens.create(createdProject.id, t('newProject.hostedCreated.tokenName'))
+        setGeneratedToken(result.token)
+        setShowToken(true)
+      } catch (err) {
+        setTokenError((err as Error).message)
+      } finally {
+        setGeneratingToken(false)
+      }
     }
     return (
       <div className="page-enter" style={{ maxWidth: '520px' }}>
@@ -419,6 +447,73 @@ export default function NewProject() {
           <p style={{ fontSize: '0.875rem', color: 'var(--fg-secondary)', lineHeight: 1.6 }}>
             {t('newProject.hostedCreated.description', { name: createdProject.name })}
           </p>
+
+          {/* Token generation section */}
+          {!generatedToken ? (
+            <div className="card" style={{ padding: '0.875rem 1rem', borderColor: 'var(--border)' }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: '0.5rem' }}>
+                <Key size={14} style={{ color: 'var(--accent)' }} />
+                <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)' }}>
+                  {t('newProject.hostedCreated.tokenPendingHeading')}
+                </span>
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
+                {t('newProject.hostedCreated.tokenPendingHint')}
+              </p>
+              <button
+                type="button"
+                onClick={generateToken}
+                disabled={generatingToken}
+                className="btn-primary flex items-center gap-2"
+                style={{ fontSize: '0.8125rem', padding: '0.4rem 0.9rem' }}
+              >
+                <Key size={13} />
+                {generatingToken ? t('newProject.hostedCreated.generating') : t('newProject.hostedCreated.generateToken')}
+              </button>
+              {tokenError && (
+                <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginTop: '0.5rem' }}>{tokenError}</p>
+              )}
+            </div>
+          ) : (
+            <div className="card" style={{
+              background: 'rgba(37,99,235,0.08)', borderColor: 'rgba(37,99,235,0.3)',
+              padding: '0.75rem 1rem',
+            }}>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--accent)', marginBottom: '0.4rem', fontWeight: 600 }}>
+                {t('newProject.hostedCreated.tokenReadyHeading')}
+              </p>
+              <div className="flex items-center gap-2">
+                <code style={{
+                  fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', flex: 1,
+                  wordBreak: 'break-all',
+                }}>
+                  {showToken ? generatedToken : '•'.repeat(40)}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => setShowToken(!showToken)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: '4px' }}
+                >
+                  {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={copyToken}
+                  className="btn-secondary flex items-center gap-1"
+                  style={{
+                    fontSize: '0.8125rem', padding: '3px 8px',
+                    color: tokenCopied ? 'var(--success)' : 'var(--fg-muted)',
+                  }}
+                >
+                  {tokenCopied ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.4rem' }}>
+                {t('newProject.hostedCreated.tokenWarning')}
+              </p>
+            </div>
+          )}
+
           <div>
             <label className="form-label">{t('newProject.hostedCreated.pushUrl')}</label>
             <div className="flex items-center gap-2">
@@ -426,18 +521,20 @@ export default function NewProject() {
                 flex: 1, fontFamily: MONO, fontSize: '0.875rem', padding: '0.5rem 0.75rem',
                 background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: '6px',
                 color: 'var(--accent)', wordBreak: 'break-all',
-              }}>{pushUrl}</code>
+              }}>{urlWithToken}</code>
               <button type="button" onClick={copyUrl} className="btn-secondary" style={{ padding: '0.5rem' }}>
                 {copied ? <Check size={14} style={{ color: 'var(--accent)' }} /> : <Copy size={14} />}
               </button>
             </div>
           </div>
           <div style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)', lineHeight: 1.8, background: 'var(--bg-hover)', padding: '0.75rem 1rem', borderRadius: '6px' }}>
-            <div>git remote add muvee {pushUrl}</div>
+            <div>git remote add muvee {urlWithToken}</div>
             <div>git push muvee main</div>
           </div>
           <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
-            {t('newProject.hostedCreated.authHint')}
+            {generatedToken
+              ? t('newProject.hostedCreated.authHintWithToken')
+              : t('newProject.hostedCreated.authHint')}
           </p>
           <button
             onClick={() => navigate(`/projects/${createdProject.id}`)}
