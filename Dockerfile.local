@@ -4,6 +4,12 @@
 # Usage:
 #   make build          # builds web + embeds frontend first
 #   docker build -f Dockerfile.local -t muvee:local .
+#
+# CI fast-path: when internal/muveectlbin/binaries/ already contains all six
+# expected muveectl_<os>_<arch>[.exe].gz files in the build context, the
+# cross-compile step below is skipped. The release workflow pre-builds those
+# natively on the runner, which avoids redoing the work under QEMU when the
+# target image platform is arm64.
 
 FROM golang:1.26-alpine AS builder
 WORKDIR /app
@@ -11,7 +17,7 @@ WORKDIR /app
 RUN apk add --no-cache git nodejs npm
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # Build frontend and embed it
 COPY web/ ./web/
@@ -22,27 +28,45 @@ COPY . .
 
 # Cross-compile muveectl for all supported platforms and gzip into the embed
 # directory so the server binary picks them up via //go:embed. Must run before
-# the server build below.
-RUN set -eux; \
-    VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"; \
-    LDFLAGS="-s -w -X main.version=$VERSION"; \
+# the server build below. Skipped when pre-built binaries are already present
+# in the build context (CI path).
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    set -eux; \
+    EXPECTED="muveectl_linux_amd64.gz muveectl_linux_arm64.gz \
+              muveectl_darwin_amd64.gz muveectl_darwin_arm64.gz \
+              muveectl_windows_amd64.exe.gz muveectl_windows_arm64.exe.gz"; \
     mkdir -p internal/muveectlbin/binaries; \
-    for GOOS in linux darwin; do \
+    all_present=1; \
+    for f in $EXPECTED; do \
+      [ -s "internal/muveectlbin/binaries/$f" ] || { all_present=0; break; }; \
+    done; \
+    if [ "$all_present" = "1" ]; then \
+      echo "Pre-built muveectl binaries present in build context; skipping cross-compile."; \
+      ls -lh internal/muveectlbin/binaries/; \
+    else \
+      echo "Cross-compiling muveectl from source."; \
+      VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"; \
+      LDFLAGS="-s -w -X main.version=$VERSION"; \
+      for GOOS in linux darwin; do \
+        for GOARCH in amd64 arm64; do \
+          OUTPUT="/tmp/muveectl_${GOOS}_${GOARCH}"; \
+          CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/muveectl; \
+          gzip -9 -c "$OUTPUT" > "internal/muveectlbin/binaries/$(basename $OUTPUT).gz"; \
+          rm -f "$OUTPUT"; \
+        done; \
+      done; \
       for GOARCH in amd64 arm64; do \
-        OUTPUT="/tmp/muveectl_${GOOS}_${GOARCH}"; \
-        CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/muveectl; \
+        OUTPUT="/tmp/muveectl_windows_${GOARCH}.exe"; \
+        CGO_ENABLED=0 GOOS=windows GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/muveectl; \
         gzip -9 -c "$OUTPUT" > "internal/muveectlbin/binaries/$(basename $OUTPUT).gz"; \
         rm -f "$OUTPUT"; \
       done; \
-    done; \
-    for GOARCH in amd64 arm64; do \
-      OUTPUT="/tmp/muveectl_windows_${GOARCH}.exe"; \
-      CGO_ENABLED=0 GOOS=windows GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/muveectl; \
-      gzip -9 -c "$OUTPUT" > "internal/muveectlbin/binaries/$(basename $OUTPUT).gz"; \
-      rm -f "$OUTPUT"; \
-    done
+    fi
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
     -o /muvee ./cmd/muvee
 
