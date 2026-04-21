@@ -1,7 +1,7 @@
 ---
 name: muveectl
 version: 2
-description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete), datasets (create, scan, delete), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, or manage infrastructure resources.
+description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete), datasets (create, scan, delete, file ops), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, manage infrastructure resources, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
 ---
 
 # muveectl – Muvee CLI
@@ -210,6 +210,36 @@ muveectl datasets create --name NAME --nfs-path NFS_PATH
 muveectl datasets get DATASET_ID
 muveectl datasets scan DATASET_ID
 muveectl datasets delete DATASET_ID
+```
+
+### Dataset File Operations
+
+Manage files inside a dataset's NFS directory — works like an object storage client.
+
+```bash
+# List files in the dataset root (or a subdirectory)
+muveectl datasets ls DATASET_ID
+muveectl datasets ls DATASET_ID some/subdir
+
+# Download a file from the dataset
+muveectl datasets pull DATASET_ID remote/path/file.txt
+muveectl datasets pull DATASET_ID remote/path/file.txt local_copy.txt
+
+# Upload a local file to the dataset
+muveectl datasets push DATASET_ID local_file.bin
+muveectl datasets push DATASET_ID local_file.bin --remote-path uploads/file.bin
+
+# Delete a file or directory from the dataset
+muveectl datasets rm DATASET_ID remote/path/file.txt
+
+# Create a directory
+muveectl datasets mkdir DATASET_ID new/subdir
+
+# Move or rename a file/directory
+muveectl datasets mv DATASET_ID old/path new/path
+
+# Copy a file within the dataset
+muveectl datasets cp DATASET_ID source/file.txt dest/file.txt
 ```
 
 ## API Tokens

@@ -248,6 +248,15 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/datasets/{id}/snapshots", s.listSnapshots)
 		r.Get("/api/datasets/{id}/history", s.listFileHistory)
 
+		// Dataset file operations (OSS-style)
+		r.Get("/api/datasets/{id}/files", s.datasetFileList)
+		r.Get("/api/datasets/{id}/files/download", s.datasetFileDownload)
+		r.Post("/api/datasets/{id}/files/upload", s.requireAuthorized(s.datasetFileUpload))
+		r.Delete("/api/datasets/{id}/files", s.requireAuthorized(s.datasetFileDelete))
+		r.Post("/api/datasets/{id}/files/mkdir", s.requireAuthorized(s.datasetFileMkdir))
+		r.Post("/api/datasets/{id}/files/move", s.requireAuthorized(s.datasetFileMove))
+		r.Post("/api/datasets/{id}/files/copy", s.requireAuthorized(s.datasetFileCopy))
+
 		// Nodes & admin-only operations
 		r.Group(func(r chi.Router) {
 			r.Use(auth.AdminOnly)
@@ -1129,6 +1138,355 @@ func (s *Server) listFileHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, history)
+}
+
+// ─── Dataset File Operations ────────────────────────────────────────────────
+
+// datasetDir resolves a dataset's NFS directory given its UUID.
+func (s *Server) datasetDir(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, isAdmin bool) (string, error) {
+	if s.datasetNFSBasePath == "" {
+		return "", fmt.Errorf("DATASET_NFS_BASE_PATH is not configured")
+	}
+	ok, _ := s.store.CanAccessDataset(ctx, userID, datasetID, isAdmin)
+	if !ok {
+		return "", fmt.Errorf("not found")
+	}
+	ds, err := s.store.GetDataset(ctx, datasetID)
+	if err != nil || ds == nil {
+		return "", fmt.Errorf("dataset not found")
+	}
+	return filepath.Join(s.datasetNFSBasePath, ds.NFSPath), nil
+}
+
+// datasetFileList lists files in a dataset directory.
+// GET /api/datasets/{id}/files?path=<subdir>
+func (s *Server) datasetFileList(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
+	if err != nil {
+		status := 503
+		if err.Error() == "not found" || err.Error() == "dataset not found" {
+			status = 404
+		}
+		jsonErr(w, err, status)
+		return
+	}
+	subPath := r.URL.Query().Get("path")
+	dir, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		jsonOK(w, []workspaceEntry{})
+		return
+	}
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	result := make([]workspaceEntry, 0, len(entries))
+	for _, e := range entries {
+		info, _ := e.Info()
+		var size int64
+		var modTime int64
+		if info != nil {
+			size = info.Size()
+			modTime = info.ModTime().Unix()
+		}
+		result = append(result, workspaceEntry{
+			Name:    e.Name(),
+			Size:    size,
+			IsDir:   e.IsDir(),
+			ModTime: modTime,
+		})
+	}
+	jsonOK(w, result)
+}
+
+// datasetFileDownload streams a single file from a dataset.
+// GET /api/datasets/{id}/files/download?path=<file>
+func (s *Server) datasetFileDownload(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
+	if err != nil {
+		status := 503
+		if err.Error() == "not found" || err.Error() == "dataset not found" {
+			status = 404
+		}
+		jsonErr(w, err, status)
+		return
+	}
+	subPath := r.URL.Query().Get("path")
+	if subPath == "" {
+		jsonErr(w, fmt.Errorf("path is required"), 400)
+		return
+	}
+	filePath, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	f, err := os.Open(filePath)
+	if os.IsNotExist(err) {
+		jsonErr(w, fmt.Errorf("file not found"), 404)
+		return
+	}
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	defer f.Close()
+	info, _ := f.Stat()
+	if info != nil && info.IsDir() {
+		jsonErr(w, fmt.Errorf("path is a directory"), 400)
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(filePath))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = io.Copy(w, f)
+}
+
+// datasetFileUpload saves an uploaded file into a dataset.
+// POST /api/datasets/{id}/files/upload?path=<subdir>
+func (s *Server) datasetFileUpload(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
+	if err != nil {
+		status := 503
+		if err.Error() == "not found" || err.Error() == "dataset not found" {
+			status = 404
+		}
+		jsonErr(w, err, status)
+		return
+	}
+	if err := r.ParseMultipartForm(256 << 20); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	defer file.Close()
+	subPath := r.URL.Query().Get("path")
+	destDir, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	destPath := filepath.Join(destDir, filepath.Base(header.Filename))
+	out, err := os.Create(destPath)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, file); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok", "path": strings.TrimPrefix(destPath, base)})
+}
+
+// datasetFileDelete removes a file or directory from a dataset.
+// DELETE /api/datasets/{id}/files?path=<path>
+func (s *Server) datasetFileDelete(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
+	if err != nil {
+		status := 503
+		if err.Error() == "not found" || err.Error() == "dataset not found" {
+			status = 404
+		}
+		jsonErr(w, err, status)
+		return
+	}
+	subPath := r.URL.Query().Get("path")
+	if subPath == "" {
+		jsonErr(w, fmt.Errorf("path is required"), 400)
+		return
+	}
+	target, err := workspaceSafePath(base, subPath)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if target == base {
+		jsonErr(w, fmt.Errorf("cannot delete the dataset root"), 400)
+		return
+	}
+	if err := os.RemoveAll(target); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// datasetFileMkdir creates a directory inside a dataset.
+// POST /api/datasets/{id}/files/mkdir  body: {"path":"subdir/name"}
+func (s *Server) datasetFileMkdir(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
+	if err != nil {
+		status := 503
+		if err.Error() == "not found" || err.Error() == "dataset not found" {
+			status = 404
+		}
+		jsonErr(w, err, status)
+		return
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if body.Path == "" {
+		jsonErr(w, fmt.Errorf("path is required"), 400)
+		return
+	}
+	target, err := workspaceSafePath(base, body.Path)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := os.MkdirAll(target, 0755); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok", "path": body.Path})
+}
+
+// datasetFileMove moves/renames a file or directory inside a dataset.
+// POST /api/datasets/{id}/files/move  body: {"src":"old/path","dst":"new/path"}
+func (s *Server) datasetFileMove(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
+	if err != nil {
+		status := 503
+		if err.Error() == "not found" || err.Error() == "dataset not found" {
+			status = 404
+		}
+		jsonErr(w, err, status)
+		return
+	}
+	var body struct {
+		Src string `json:"src"`
+		Dst string `json:"dst"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if body.Src == "" || body.Dst == "" {
+		jsonErr(w, fmt.Errorf("src and dst are required"), 400)
+		return
+	}
+	srcPath, err := workspaceSafePath(base, body.Src)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	dstPath, err := workspaceSafePath(base, body.Dst)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if err := os.Rename(srcPath, dstPath); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// datasetFileCopy copies a file inside a dataset.
+// POST /api/datasets/{id}/files/copy  body: {"src":"path/a","dst":"path/b"}
+func (s *Server) datasetFileCopy(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
+	if err != nil {
+		status := 503
+		if err.Error() == "not found" || err.Error() == "dataset not found" {
+			status = 404
+		}
+		jsonErr(w, err, status)
+		return
+	}
+	var body struct {
+		Src string `json:"src"`
+		Dst string `json:"dst"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if body.Src == "" || body.Dst == "" {
+		jsonErr(w, fmt.Errorf("src and dst are required"), 400)
+		return
+	}
+	srcPath, err := workspaceSafePath(base, body.Src)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	dstPath, err := workspaceSafePath(base, body.Dst)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	srcFile, err := os.Open(srcPath)
+	if os.IsNotExist(err) {
+		jsonErr(w, fmt.Errorf("source file not found"), 404)
+		return
+	}
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	defer srcFile.Close()
+	info, err := srcFile.Stat()
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if info.IsDir() {
+		jsonErr(w, fmt.Errorf("cannot copy a directory; use mkdir + individual file copies"), 400)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	dstFile, err := os.Create(dstPath)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	defer dstFile.Close()
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 // ─── Nodes & Users ───────────────────────────────────────────────────────────
