@@ -184,7 +184,7 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 
 	for {
 		sessionStart := time.Now()
-		err := tunnelSession(wsURL, wsHeader, localAddr)
+		err := tunnelSession(ctx, wsURL, wsHeader, localAddr)
 		if ctx.Err() != nil {
 			fmt.Println("\nTunnel stopped.")
 			return nil
@@ -212,8 +212,9 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 }
 
 // tunnelSession runs a single WebSocket connection. It returns when the
-// connection is lost or closed. The caller decides whether to reconnect.
-func tunnelSession(wsURL string, header http.Header, localAddr string) error {
+// connection is lost, closed, or ctx is canceled. The caller decides whether
+// to reconnect.
+func tunnelSession(ctx context.Context, wsURL string, header http.Header, localAddr string) error {
 	const pongTimeout = 45 * time.Second
 
 	dialer := websocket.Dialer{
@@ -226,6 +227,19 @@ func tunnelSession(wsURL string, header http.Header, localAddr string) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer ws.Close()
+
+	// Server pings keep refreshing the read deadline, so ReadMessage below
+	// would otherwise block forever on Ctrl+C. Close the ws when ctx is
+	// canceled so ReadMessage returns and the outer loop sees ctx.Err().
+	sessionDone := make(chan struct{})
+	defer close(sessionDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			ws.Close()
+		case <-sessionDone:
+		}
+	}()
 
 	writer := &wsMutexWriter{ws: ws}
 
