@@ -118,7 +118,7 @@ services:
     volumes:
       - ./db/migrations:/app/db/migrations:ro
       - ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:rw
-      - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:ro
+      - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:rw
       - ${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:rw
       - traefik_logs:/var/log/traefik:ro
       # Read-only view of Traefik's ACME store so the admin "Certificates"

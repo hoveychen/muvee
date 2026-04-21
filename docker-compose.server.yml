@@ -115,9 +115,10 @@ services:
       # Uncomment the line below (and set VOLUME_NFS_BASE_PATH in .env) to enable workspace file management.
       # The NFS share must already be mounted on this host at that path.
       # - ${VOLUME_NFS_BASE_PATH}:${VOLUME_NFS_BASE_PATH}:rw
-      # Uncomment to enable dataset monitor access (server scans dataset files directly).
+      # Uncomment to enable dataset access (server scans datasets and serves
+      # file operations: upload/delete/mkdir/move/copy). Must be :rw.
       # The NFS share must already be mounted on this host at DATASET_NFS_BASE_PATH.
-      # - ${DATASET_NFS_BASE_PATH}:${DATASET_NFS_BASE_PATH}:ro
+      # - ${DATASET_NFS_BASE_PATH}:${DATASET_NFS_BASE_PATH}:rw
       # Uncomment to enable self-hosted git repositories (set GIT_REPO_BASE_PATH in .env).
       # - ${GIT_REPO_BASE_PATH}:${GIT_REPO_BASE_PATH}:rw
     ports:

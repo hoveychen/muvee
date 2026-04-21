@@ -40,7 +40,7 @@ sidebar_position: 3
 | `REGISTRY_PASSWORD` | — | 镜像仓库基础认证密码。下发给 Agent。 |
 | `SECRET_ENCRYPTION_KEY` | — | 64 字符十六进制字符串（32 字节），用于以 AES-256-GCM 加密静态密钥。启用 Secrets 功能时必填。使用 `openssl rand -hex 32` 生成。 |
 | `VOLUME_NFS_BASE_PATH` | — | 控制平面主机上用于项目工作区卷的 NFS 基础目录（如 `/mnt/nfs/volumes`）。每个项目的子目录会在该路径下自动创建。同时通过 `/api/agent/config` 下发给部署 Agent，Agent 使用该路径将卷 bind mount 到容器中。未设置时工作区功能不可用。 |
-| `DATASET_NFS_BASE_PATH` | — | 数据集 NFS 基础目录（如 `/mnt/nfs/datasets`）。Dataset 的 `nfs_path` 会被视为该目录下的相对子路径（例如 `warehouse` → `/mnt/nfs/datasets/warehouse`）。server monitor 与 deploy agent 都会直接访问该路径；相关机器需使用相同绝对路径挂载。 |
+| `DATASET_NFS_BASE_PATH` | — | 数据集 NFS 基础目录（如 `/mnt/nfs/datasets`）。Dataset 的 `nfs_path` 会被视为该目录下的相对子路径（例如 `warehouse` → `/mnt/nfs/datasets/warehouse`）。相关机器需使用相同绝对路径挂载。**控制平面 server 需要可写（`:rw`）**——它不仅跑文件监控，还直接处理 dataset 文件操作（上传 / 删除 / 建目录 / 移动 / 复制），因此 NFS export 必须允许 server 主机写入。Deploy agent 只需要只读（`:ro`，用于 rsync 与 bind-mount 到用户容器）。 |
 
 ## ForwardAuth 服务（`muvee-authservice`）
 
