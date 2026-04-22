@@ -40,6 +40,7 @@ const sidebars = {
         'secrets',
         'upgrade',
         'muveectl',
+        'ai-agent',
       ],
     },
   ],

@@ -1127,27 +1127,28 @@ func (s *Store) SetNodeHealthReport(ctx context.Context, nodeID uuid.UUID, repor
 
 // ─── API Tokens ───────────────────────────────────────────────────────────────
 
-func (s *Store) CreateAPIToken(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID, name, tokenHash string) (*ApiToken, error) {
+func (s *Store) CreateAPIToken(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID, name, tokenHash string, expiresAt *time.Time) (*ApiToken, error) {
 	t := &ApiToken{
 		ID:        uuid.New(),
 		UserID:    userID,
 		ProjectID: projectID,
 		Name:      name,
 		TokenHash: tokenHash,
+		ExpiresAt: expiresAt,
 		CreatedAt: time.Now(),
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO api_tokens (id, user_id, project_id, name, token_hash, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6)
-	`, t.ID, t.UserID, t.ProjectID, t.Name, t.TokenHash, t.CreatedAt)
+		INSERT INTO api_tokens (id, user_id, project_id, name, token_hash, expires_at, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, t.ID, t.UserID, t.ProjectID, t.Name, t.TokenHash, t.ExpiresAt, t.CreatedAt)
 	return t, err
 }
 
 func (s *Store) GetAPITokenByHash(ctx context.Context, tokenHash string) (*ApiToken, error) {
 	var t ApiToken
 	err := s.db.QueryRow(ctx, `
-		SELECT id, user_id, project_id, name, token_hash, last_used_at, created_at FROM api_tokens WHERE token_hash = $1
-	`, tokenHash).Scan(&t.ID, &t.UserID, &t.ProjectID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.CreatedAt)
+		SELECT id, user_id, project_id, name, token_hash, last_used_at, expires_at, created_at FROM api_tokens WHERE token_hash = $1
+	`, tokenHash).Scan(&t.ID, &t.UserID, &t.ProjectID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -1161,7 +1162,7 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, tokenHash string) (*ApiTo
 
 func (s *Store) ListAPITokensForProject(ctx context.Context, projectID uuid.UUID) ([]*ApiToken, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, user_id, project_id, name, token_hash, last_used_at, created_at FROM api_tokens WHERE project_id = $1 ORDER BY created_at DESC
+		SELECT id, user_id, project_id, name, token_hash, last_used_at, expires_at, created_at FROM api_tokens WHERE project_id = $1 ORDER BY created_at DESC
 	`, projectID)
 	if err != nil {
 		return nil, err
@@ -1170,7 +1171,30 @@ func (s *Store) ListAPITokensForProject(ctx context.Context, projectID uuid.UUID
 	tokens := make([]*ApiToken, 0)
 	for rows.Next() {
 		var t ApiToken
-		if err := rows.Scan(&t.ID, &t.UserID, &t.ProjectID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.ProjectID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, &t)
+	}
+	return tokens, nil
+}
+
+// ListUserAPITokens returns personal access tokens (project_id IS NULL) owned by the user.
+func (s *Store) ListUserAPITokens(ctx context.Context, userID uuid.UUID) ([]*ApiToken, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, user_id, project_id, name, token_hash, last_used_at, expires_at, created_at
+		FROM api_tokens
+		WHERE user_id = $1 AND project_id IS NULL
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tokens := make([]*ApiToken, 0)
+	for rows.Next() {
+		var t ApiToken
+		if err := rows.Scan(&t.ID, &t.UserID, &t.ProjectID, &t.Name, &t.TokenHash, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		tokens = append(tokens, &t)
@@ -1180,6 +1204,13 @@ func (s *Store) ListAPITokensForProject(ctx context.Context, projectID uuid.UUID
 
 func (s *Store) DeleteAPIToken(ctx context.Context, id, userID uuid.UUID) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM api_tokens WHERE id = $1 AND user_id = $2`, id, userID)
+	return err
+}
+
+// DeleteUserAPIToken deletes a personal access token (project_id IS NULL) owned by the user.
+// Guarded so project tokens cannot be removed via the personal-token endpoint.
+func (s *Store) DeleteUserAPIToken(ctx context.Context, id, userID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM api_tokens WHERE id = $1 AND user_id = $2 AND project_id IS NULL`, id, userID)
 	return err
 }
 

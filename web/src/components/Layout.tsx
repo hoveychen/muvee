@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Home, LayoutGrid, Database, KeyRound, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle, Copy, Check, Globe, ShieldAlert, Clock, Loader } from 'lucide-react'
+import { Home, LayoutGrid, Database, KeyRound, Key, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle, Copy, Check, Globe, ShieldAlert, Clock, Loader } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
 import { useSettings } from '../lib/settings'
@@ -59,6 +59,7 @@ export default function Layout({ children }: { children?: ReactNode }) {
     { to: '/projects', icon: LayoutGrid, label: t('nav.projects'), adminOnly: false, hidden: false, requireAuth: true },
     { to: '/datasets', icon: Database, label: t('nav.datasets'), adminOnly: false, hidden: false, requireAuth: true },
     { to: '/secrets', icon: KeyRound, label: t('nav.secrets'), adminOnly: false, hidden: runtimeConfig !== null && !runtimeConfig.secrets_enabled, requireAuth: true },
+    { to: '/settings/tokens', icon: Key, label: t('nav.tokens'), adminOnly: false, hidden: false, requireAuth: true },
     { to: '/nodes', icon: Server, label: t('nav.nodes'), adminOnly: true, hidden: false, requireAuth: false },
     { to: '/tunnels', icon: Globe, label: t('nav.tunnels'), adminOnly: true, hidden: false, requireAuth: false },
     { to: '/users', icon: Users, label: t('nav.users'), adminOnly: true, hidden: false, requireAuth: false },

@@ -99,6 +99,13 @@ export const api = {
     delete: (projectId: string, tokenId: string) => request(`/api/projects/${projectId}/tokens/${tokenId}`, { method: 'DELETE' }),
   },
 
+  meTokens: {
+    list: () => request<import('./types').ApiToken[]>('/api/me/tokens'),
+    create: (data: { name: string; expires_in?: string }) =>
+      request<import('./types').CreatedApiToken>('/api/me/tokens', { method: 'POST', body: JSON.stringify(data) }),
+    delete: (tokenId: string) => request(`/api/me/tokens/${tokenId}`, { method: 'DELETE' }),
+  },
+
   secrets: {
     list: () => request<import('./types').Secret[]>('/api/secrets'),
     create: (data: { name: string; type: import('./types').SecretType; value: string }) =>

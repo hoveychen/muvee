@@ -19,6 +19,7 @@
     "projects": "Projects",
     "datasets": "Datasets",
     "secrets": "Secrets",
+    "tokens": "Access Tokens",
     "nodes": "Nodes",
     "tunnels": "Tunnels",
     "users": "Users",
@@ -198,6 +199,39 @@
         "lastUsed": "LAST USED",
         "created": "CREATED"
       }
+    }
+  },
+  "settingsTokens": {
+    "title": "Personal Access Tokens",
+    "hint": "Personal access tokens authenticate as you from automated tools (AI agents, scripts). Each token carries your full account permissions — store them like passwords. Use with muveectl via MUVEECTL_TOKEN or the --token flag.",
+    "nameLabel": "Name",
+    "namePlaceholder": "e.g. ai-agent-laptop",
+    "expiryLabel": "Expires",
+    "defaultName": "Personal Access Token",
+    "create": "Create Token",
+    "creating": "Creating…",
+    "created": "Token created — copy it now, you won't see it again.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyWarning": "Store this token securely; it will not be shown again.",
+    "expiresOn": "Expires on",
+    "deleteConfirm": "Revoke this token? Any tool using it will lose access immediately.",
+    "delete": "Revoke",
+    "empty": "No personal access tokens yet. Create one to let a tool act on your behalf.",
+    "never": "Never",
+    "expired": "Expired",
+    "neverUsed": "Never used",
+    "expiry": {
+      "30d": "30 days",
+      "90d": "90 days",
+      "365d": "1 year",
+      "never": "Never"
+    },
+    "columns": {
+      "name": "NAME",
+      "expires": "EXPIRES",
+      "lastUsed": "LAST USED",
+      "created": "CREATED"
     }
   },
   "datasets": {

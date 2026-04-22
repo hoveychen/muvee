@@ -172,7 +172,7 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 	}
 
 	wsHeader := http.Header{}
-	wsHeader.Set("Authorization", "Bearer "+c.cfg.Token)
+	wsHeader.Set("Authorization", "Bearer "+c.token)
 	log.Printf("tunnel: ws url=%s local=%s public=%s", wsURL, localAddr, publicURL)
 
 	authLabel := "on (ForwardAuth)"

@@ -120,6 +120,7 @@ export interface ApiToken {
   id: string
   name: string
   last_used_at: string | null
+  expires_at?: string | null
   created_at: string
 }
 
@@ -127,6 +128,7 @@ export interface CreatedApiToken {
   id: string
   name: string
   token: string
+  expires_at?: string
 }
 
 export type SecretType = 'password' | 'ssh_key' | 'api_key' | 'env_var'
