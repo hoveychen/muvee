@@ -19,6 +19,9 @@ export interface Project {
   domain_prefix: string
   dockerfile_path: string
   owner_id: string
+  owner_name?: string
+  owner_email?: string
+  owner_avatar_url?: string
   auth_required: boolean
   auth_allowed_domains: string
   auth_bypass_paths: string

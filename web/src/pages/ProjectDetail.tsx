@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
+import { useAuth } from '../lib/auth'
 
 const MONO = 'var(--font-mono)'
 
@@ -27,6 +28,8 @@ export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { t } = useTranslation()
+  const { user: me } = useAuth()
+  const isAdmin = me?.role === 'admin'
   const [project, setProject] = useState<Project | null>(null)
   const [deployments, setDeployments] = useState<Deployment[]>([])
   const [datasets, setDatasets] = useState<Dataset[]>([])
@@ -98,6 +101,13 @@ export default function ProjectDetail() {
     if (!id || !confirm(t('projectDetail.config.deleteConfirm'))) return
     await api.projects.delete(id)
     navigate('/projects')
+  }
+
+  const handleChangeOwner = async (newOwnerId: string) => {
+    if (!id) return
+    const updated = await api.projects.changeOwner(id, newOwnerId)
+    setProject(updated)
+    setEditForm(updated)
   }
 
   const toggleDataset = async (dsId: string, mode: 'dependency' | 'readwrite') => {
@@ -236,6 +246,8 @@ export default function ProjectDetail() {
             onDelete={handleDelete}
             saving={saving}
             saveError={saveError}
+            isAdmin={isAdmin}
+            onChangeOwner={handleChangeOwner}
           />
         )}
         {tab === 'auth' && (
@@ -616,15 +628,38 @@ function TunnelTrafficTab({ projectId }: { projectId: string }) {
   return <TrafficPanel traffic={traffic} />
 }
 
-function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
+function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmin, onChangeOwner }: {
   form: Partial<Project>
   onChange: (f: Partial<Project>) => void
   onSave: () => void
   onDelete: () => void
   saving: boolean
   saveError?: string | null
+  isAdmin: boolean
+  onChangeOwner: (newOwnerId: string) => Promise<void>
 }) {
   const { t } = useTranslation()
+  const [users, setUsers] = useState<User[] | null>(null)
+  const [ownerSaving, setOwnerSaving] = useState(false)
+  const [ownerError, setOwnerError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!isAdmin) return
+    api.users.list().then(setUsers).catch(() => setUsers([]))
+  }, [isAdmin])
+
+  const handleOwnerSelect = async (newOwnerId: string) => {
+    if (!newOwnerId || newOwnerId === form.owner_id) return
+    setOwnerSaving(true)
+    setOwnerError(null)
+    try {
+      await onChangeOwner(newOwnerId)
+    } catch (err) {
+      setOwnerError((err as Error).message)
+    } finally {
+      setOwnerSaving(false)
+    }
+  }
   const field = (label: string, key: keyof Project, hint?: string) => (
     <div key={key}>
       <label className="form-label">
@@ -653,6 +688,39 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
       {field(t('projectDetail.config.projectName'), 'name')}
       {field(t('projectDetail.config.gitUrl'), 'git_url')}
       {field(t('projectDetail.config.gitBranch'), 'git_branch')}
+
+      <div>
+        <label className="form-label">
+          {t('projectDetail.config.owner').toUpperCase()}
+        </label>
+        {isAdmin ? (
+          <>
+            <OwnerCombobox
+              users={users}
+              currentOwnerId={form.owner_id}
+              currentOwnerLabel={
+                form.owner_name
+                  ? `${form.owner_name}${form.owner_email ? ` (${form.owner_email})` : ''}`
+                  : (form.owner_email || form.owner_id || '')
+              }
+              disabled={ownerSaving}
+              onSelect={handleOwnerSelect}
+            />
+            <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+              {ownerSaving
+                ? t('projectDetail.config.ownerSaving')
+                : t('projectDetail.config.ownerHint')}
+            </p>
+            {ownerError && (
+              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--danger)' }}>{ownerError}</p>
+            )}
+          </>
+        ) : (
+          <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)' }}>
+            {form.owner_name ? `${form.owner_name}${form.owner_email ? ` (${form.owner_email})` : ''}` : (form.owner_email || form.owner_id)}
+          </p>
+        )}
+      </div>
 
       <div>
         <label className="form-label">
@@ -721,6 +789,124 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError }: {
           <Trash2 size={13} /> {t('projectDetail.config.delete')}
         </button>
       </div>
+    </div>
+  )
+}
+
+function OwnerCombobox({ users, currentOwnerId, currentOwnerLabel, disabled, onSelect }: {
+  users: User[] | null
+  currentOwnerId?: string
+  currentOwnerLabel: string
+  disabled: boolean
+  onSelect: (userId: string) => void
+}) {
+  const { t } = useTranslation()
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const [highlight, setHighlight] = useState(0)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+        setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [open])
+
+  const filtered = useMemo(() => {
+    if (!users) return []
+    const q = query.trim().toLowerCase()
+    if (!q) return users
+    return users.filter(u =>
+      (u.name ?? '').toLowerCase().includes(q) ||
+      (u.email ?? '').toLowerCase().includes(q)
+    )
+  }, [users, query])
+
+  useEffect(() => { setHighlight(0) }, [query, open])
+
+  const choose = (u: User) => {
+    setOpen(false)
+    setQuery('')
+    onSelect(u.id)
+  }
+
+  const displayValue = open ? query : currentOwnerLabel
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <input
+        type="text"
+        value={displayValue}
+        onFocus={() => { setOpen(true); setQuery('') }}
+        onChange={e => { setQuery(e.target.value); setOpen(true) }}
+        onKeyDown={e => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setOpen(true)
+            setHighlight(h => Math.min(h + 1, Math.max(filtered.length - 1, 0)))
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setHighlight(h => Math.max(h - 1, 0))
+          } else if (e.key === 'Enter') {
+            e.preventDefault()
+            const u = filtered[highlight]
+            if (u) choose(u)
+          } else if (e.key === 'Escape') {
+            setOpen(false)
+            setQuery('')
+          }
+        }}
+        placeholder={currentOwnerLabel}
+        disabled={disabled}
+        className="form-input w-full"
+        style={{ fontFamily: MONO }}
+      />
+      {open && users !== null && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            marginTop: '4px',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            maxHeight: '240px',
+            overflowY: 'auto',
+            zIndex: 10,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          }}
+        >
+          {filtered.length === 0 ? (
+            <div style={{ padding: '0.75rem', fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
+              {t('projectDetail.config.ownerNoMatches')}
+            </div>
+          ) : filtered.map((u, i) => (
+            <div
+              key={u.id}
+              onMouseDown={e => { e.preventDefault(); choose(u) }}
+              onMouseEnter={() => setHighlight(i)}
+              style={{
+                padding: '0.5rem 0.75rem',
+                fontSize: '0.8125rem',
+                fontFamily: MONO,
+                background: i === highlight ? 'var(--bg-hover)' : 'transparent',
+                cursor: 'pointer',
+                color: u.id === currentOwnerId ? 'var(--accent)' : 'var(--fg-primary)',
+              }}
+            >
+              {u.name ? `${u.name} (${u.email})` : u.email}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

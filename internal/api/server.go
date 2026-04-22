@@ -275,6 +275,8 @@ func (s *Server) Router() http.Handler {
 			r.Get("/api/nodes/{id}/metrics", s.getNodeMetrics)
 			r.Get("/api/users", s.listUsers)
 			r.Put("/api/users/{id}/role", s.setUserRole)
+			// Reassign a project to a different owner (admin-only).
+			r.Put("/api/projects/{id}/owner", s.changeProjectOwner)
 			// System settings (admin-only read/write)
 			r.Get("/api/admin/settings", s.handleGetAdminSettings)
 			r.Put("/api/admin/settings", s.handleUpdateAdminSettings)
@@ -1032,6 +1034,62 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		s.refreshDomainOnlyCache(r.Context())
 	}
 	jsonOK(w, p)
+}
+
+// changeProjectOwner reassigns a project to a different owner.
+// Admin-only (enforced by the route group's AdminOnly middleware).
+func (s *Server) changeProjectOwner(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	var body struct {
+		OwnerID uuid.UUID `json:"owner_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if body.OwnerID == uuid.Nil {
+		jsonErr(w, fmt.Errorf("owner_id is required"), 400)
+		return
+	}
+	existing, err := s.store.GetProject(r.Context(), id)
+	if err != nil || existing == nil {
+		jsonErr(w, err, 404)
+		return
+	}
+	if existing.OwnerID == body.OwnerID {
+		jsonOK(w, existing)
+		return
+	}
+	newOwner, err := s.store.GetUserByID(r.Context(), body.OwnerID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if newOwner == nil {
+		jsonErr(w, fmt.Errorf("user not found"), 404)
+		return
+	}
+	// Project name must be unique per owner (projects_owner_name_key).
+	if byName, err := s.store.GetProjectByOwnerAndName(r.Context(), body.OwnerID, existing.Name); err != nil {
+		jsonErr(w, err, 500)
+		return
+	} else if byName != nil && byName.ID != id {
+		jsonErr(w, fmt.Errorf("target user already has a project named %q", existing.Name), 409)
+		return
+	}
+	if err := s.store.UpdateProjectOwner(r.Context(), id, body.OwnerID); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	updated, err := s.store.GetProject(r.Context(), id)
+	if err != nil || updated == nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if updated.GitSource == store.GitSourceHosted {
+		updated.GitPushURL = s.hostedGitPushURL(updated.ID)
+	}
+	jsonOK(w, updated)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {

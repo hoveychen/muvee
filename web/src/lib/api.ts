@@ -27,6 +27,8 @@ export const api = {
     get: (id: string) => request<import('./types').Project>(`/api/projects/${id}`),
     create: (data: Partial<import('./types').Project>) => request<import('./types').Project>('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<import('./types').Project>) => request<import('./types').Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    changeOwner: (id: string, ownerId: string) =>
+      request<import('./types').Project>(`/api/projects/${id}/owner`, { method: 'PUT', body: JSON.stringify({ owner_id: ownerId }) }),
     delete: (id: string) => request(`/api/projects/${id}`, { method: 'DELETE' }),
     datasets: (id: string) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`),
     setDatasets: (id: string, data: import('./types').ProjectDataset[]) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`, { method: 'PUT', body: JSON.stringify(data) }),

@@ -88,10 +88,25 @@ func (s *Store) SetUserRole(ctx context.Context, id uuid.UUID, role UserRole) er
 // so domain_only projects (which have NULL git_url) scan into an empty string.
 const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, created_at, updated_at`
 
+// projectColumnsPrefixed is projectColumns with every column qualified by the
+// `p.` alias. Used when the query JOINs another table (e.g. users) so bare
+// column names like `id` or `name` would be ambiguous.
+const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.created_at, p.updated_at`
+
+// ownerJoinColumns is the tail of the SELECT list for projects queried with
+// `LEFT JOIN users u ON u.id = p.owner_id`.
+const ownerJoinColumns = `, COALESCE(u.name, '') AS owner_name, COALESCE(u.email, '') AS owner_email, COALESCE(u.avatar_url, '') AS owner_avatar_url`
+
 func scanProject(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
 	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.CreatedAt, &p.UpdatedAt)
+}
+
+func scanProjectWithOwner(scanner interface {
+	Scan(dest ...interface{}) error
+}, p *Project) error {
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.CreatedAt, &p.UpdatedAt, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
 }
 
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
@@ -131,7 +146,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 
 func (s *Store) GetProject(ctx context.Context, id uuid.UUID) (*Project, error) {
 	var p Project
-	err := scanProject(s.db.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = $1`, id), &p)
+	err := scanProjectWithOwner(s.db.QueryRow(ctx,
+		`SELECT `+projectColumnsPrefixed+ownerJoinColumns+
+			` FROM projects p LEFT JOIN users u ON u.id = p.owner_id WHERE p.id = $1`, id), &p)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -142,10 +159,15 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	var query string
 	var args []interface{}
 	if isAdmin {
-		query = `SELECT ` + projectColumns + ` FROM projects ORDER BY created_at DESC`
+		query = `SELECT ` + projectColumnsPrefixed + ownerJoinColumns +
+			` FROM projects p LEFT JOIN users u ON u.id = p.owner_id ORDER BY p.created_at DESC`
 	} else {
-		query = `SELECT ` + projectColumns + `
-			FROM projects p JOIN project_members pm ON p.id = pm.project_id WHERE pm.user_id = $1 ORDER BY p.created_at DESC`
+		query = `SELECT ` + projectColumnsPrefixed + ownerJoinColumns + `
+			FROM projects p
+			JOIN project_members pm ON p.id = pm.project_id
+			LEFT JOIN users u ON u.id = p.owner_id
+			WHERE pm.user_id = $1
+			ORDER BY p.created_at DESC`
 		args = []interface{}{userID}
 	}
 	rows, err := s.db.Query(ctx, query, args...)
@@ -156,12 +178,35 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID, isAdm
 	projects := make([]*Project, 0)
 	for rows.Next() {
 		var p Project
-		if err := scanProject(rows, &p); err != nil {
+		if err := scanProjectWithOwner(rows, &p); err != nil {
 			return nil, err
 		}
 		projects = append(projects, &p)
 	}
 	return projects, nil
+}
+
+// UpdateProjectOwner reassigns a project to a new owner. The new owner is also
+// granted access via project_members (existing members, including the old
+// owner, are left untouched so their access is preserved unless explicitly
+// revoked elsewhere).
+func (s *Store) UpdateProjectOwner(ctx context.Context, projectID, newOwnerID uuid.UUID) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx,
+		`UPDATE projects SET owner_id = $1, updated_at = $2 WHERE id = $3`,
+		newOwnerID, time.Now(), projectID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO project_members (project_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		projectID, newOwnerID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) UpdateProject(ctx context.Context, p *Project) error {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLink, Radio } from 'lucide-react'
+import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLink, Radio, User } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project } from '../lib/types'
 import { timeAgo, statusColor } from '../lib/utils'
@@ -137,6 +137,18 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
           </div>
         )}
       </div>
+
+      {/* Owner */}
+      {project.owner_name && (
+        <div
+          className="hidden md:flex items-center gap-1 flex-shrink-0"
+          style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          title={project.owner_email || project.owner_name}
+        >
+          <User size={11} />
+          {project.owner_name}
+        </div>
+      )}
 
       {/* Domain */}
       <div className="hidden md:flex items-center gap-1 flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>

@@ -58,6 +58,10 @@ type Project struct {
 	UpdatedAt          time.Time   `db:"updated_at"           json:"updated_at"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
+	// Owner display fields, populated by ListProjectsForUser / GetProject via LEFT JOIN users.
+	OwnerName      string `db:"-" json:"owner_name,omitempty"`
+	OwnerEmail     string `db:"-" json:"owner_email,omitempty"`
+	OwnerAvatarURL string `db:"-" json:"owner_avatar_url,omitempty"`
 }
 
 type MountMode string
