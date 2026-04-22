@@ -50,7 +50,7 @@ type Server struct {
 	tunnelBackendURL   string   // URL that Traefik uses to reach this server for tunnel traffic
 	acmeStoragePath    string   // path to Traefik's acme.json (admin cert-status panel)
 	tunnels            *tunnelRegistry
-	cliPending         sync.Map // state -> cli_port (string)
+	cliPending         sync.Map // state -> cliPendingEntry
 	oauthPending       sync.Map // state -> provider name (string); fallback when cookie is missing
 
 	// domainOnlyMu guards domainOnlyPrefixes, a cache of the current set of
@@ -342,8 +342,16 @@ func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
+// cliPendingEntry carries the state the server needs to complete a CLI login
+// after the OAuth provider redirects back to us.
+type cliPendingEntry struct {
+	Port     string
+	Hostname string // machine name of the CLI caller; used to label the issued API token
+}
+
 // handleCLILogin initiates the device-flow OAuth for muveectl.
-// The CLI passes ?port=PORT and an optional ?provider=NAME.
+// The CLI passes ?port=PORT, an optional ?provider=NAME, and an optional
+// ?hostname=HOSTNAME used to label the issued token.
 // Defaults to the first configured provider when provider is omitted.
 func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 	port := r.URL.Query().Get("port")
@@ -361,7 +369,11 @@ func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown provider", http.StatusNotFound)
 		return
 	}
-	s.cliPending.Store(state, port)
+	hostname := strings.TrimSpace(r.URL.Query().Get("hostname"))
+	if len(hostname) > 64 {
+		hostname = hostname[:64]
+	}
+	s.cliPending.Store(state, cliPendingEntry{Port: port, Hostname: hostname})
 	http.SetCookie(w, &http.Cookie{
 		Name: "oauth_state", Value: providerName + ":" + state,
 		MaxAge: 300, HttpOnly: true, Path: "/",
@@ -406,13 +418,18 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Check if this was initiated by the CLI device-flow
-	if portVal, ok := s.cliPending.LoadAndDelete(state); ok {
-		port := portVal.(string)
-		apiToken, err := s.auth.CreateAPIToken(r.Context(), user.ID, nil, "CLI Token", nil)
+	if entryVal, ok := s.cliPending.LoadAndDelete(state); ok {
+		entry := entryVal.(cliPendingEntry)
+		tokenName := "CLI Token"
+		if entry.Hostname != "" {
+			tokenName = fmt.Sprintf("CLI Token (%s)", entry.Hostname)
+		}
+		apiToken, err := s.auth.CreateAPIToken(r.Context(), user.ID, nil, tokenName, nil)
 		if err != nil {
 			http.Error(w, "failed to create token", http.StatusInternalServerError)
 			return
 		}
+		port := entry.Port
 		// Show the token on the page for remote/headless use, and also attempt
 		// the local redirect via JS so the normal flow still works seamlessly.
 		callbackURL := fmt.Sprintf("http://127.0.0.1:%s?token=%s", port, apiToken.Token)

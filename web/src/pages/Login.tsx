@@ -14,6 +14,7 @@ export default function LoginPage() {
 
   const brandName = settings.site_name || 'muvee'
   const cliPort = new URLSearchParams(window.location.search).get('port')
+  const cliHostname = new URLSearchParams(window.location.search).get('hostname')
 
   useEffect(() => {
     document.title = `${brandName} — Sign In`
@@ -111,7 +112,7 @@ export default function LoginPage() {
             )}
             <div className="flex flex-col gap-3">
               {providers.map(p => (
-                <ProviderButton key={p.id} provider={p} cliPort={cliPort} />
+                <ProviderButton key={p.id} provider={p} cliPort={cliPort} cliHostname={cliHostname} />
               ))}
             </div>
           </div>
@@ -128,10 +129,10 @@ export default function LoginPage() {
   )
 }
 
-function ProviderButton({ provider, cliPort }: { provider: ProviderInfo; cliPort: string | null }) {
+function ProviderButton({ provider, cliPort, cliHostname }: { provider: ProviderInfo; cliPort: string | null; cliHostname: string | null }) {
   const { t } = useTranslation()
   const href = cliPort
-    ? `/auth/cli/login?port=${cliPort}&provider=${provider.id}`
+    ? `/auth/cli/login?port=${cliPort}&provider=${provider.id}${cliHostname ? `&hostname=${encodeURIComponent(cliHostname)}` : ''}`
     : `/auth/${provider.id}/login`
   return (
     <a

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +54,15 @@ func cmdLogin(cfg *Config) error {
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	// Open the login page with the port so the user can pick a provider in the browser.
+	// Include the local hostname so the server can label the issued API token
+	// (e.g. "CLI Token (my-laptop)") — this makes it easy to identify which
+	// machine a token belongs to on the tokens management page.
 	loginURL := fmt.Sprintf("%s/login?port=%d", cfg.Server, port)
+	if h, err := os.Hostname(); err == nil {
+		if h = strings.TrimSpace(h); h != "" {
+			loginURL += "&hostname=" + url.QueryEscape(h)
+		}
+	}
 	fmt.Printf("Opening browser for authentication...\n%s\n\n", loginURL)
 	fmt.Println("If you are on a remote server, open the URL above in your local browser.")
 	fmt.Println("After authentication, paste the token shown on the page below.")
