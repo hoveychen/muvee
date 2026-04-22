@@ -27,9 +27,16 @@ var version = "dev"
 
 var (
 	serverOverride string
+	tokenOverride  string
 	jsonMode       bool
 	cfg            *Config
 	cl             *client
+)
+
+// Env var names for credential injection (flag > env > config).
+const (
+	envServer = "MUVEECTL_SERVER"
+	envToken  = "MUVEECTL_TOKEN"
 )
 
 // ─── Root command ────────────────────────────────────────────────────────────
@@ -40,7 +47,7 @@ var rootCmd = &cobra.Command{
 	Long:  "muveectl is the command-line interface for the Muvee self-hosted PaaS.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		cfg, _ = loadConfig()
-		cl = newClient(cfg, serverOverride, jsonMode)
+		cl = newClient(cfg, serverOverride, tokenOverride, jsonMode)
 		printNotices()
 	},
 	SilenceUsage:  true,
@@ -48,7 +55,8 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&serverOverride, "server", "", "Override the configured server URL")
+	rootCmd.PersistentFlags().StringVar(&serverOverride, "server", "", "Override the configured server URL (also via MUVEECTL_SERVER)")
+	rootCmd.PersistentFlags().StringVar(&tokenOverride, "token", "", "Override the API token (also via MUVEECTL_TOKEN)")
 	rootCmd.PersistentFlags().BoolVar(&jsonMode, "json", false, "Output raw JSON")
 }
 
@@ -108,16 +116,35 @@ func saveConfig(c *Config) error {
 type client struct {
 	cfg    *Config
 	server string
+	token  string
 	json   bool
 }
 
-func newClient(cfg *Config, serverOverride string, jsonMode bool) *client {
-	s := cfg.Server
-	if serverOverride != "" {
-		s = serverOverride
+// resolveCreds applies the flag > env > config precedence for server and token.
+// Pass os.Getenv for production; tests inject a fake lookup.
+func resolveCreds(cfg *Config, serverOverride, tokenOverride string, getenv func(string) string) (server, token string) {
+	server = cfg.Server
+	if v := getenv(envServer); v != "" {
+		server = v
 	}
-	s = strings.TrimRight(s, "/")
-	return &client{cfg: cfg, server: s, json: jsonMode}
+	if serverOverride != "" {
+		server = serverOverride
+	}
+	server = strings.TrimRight(server, "/")
+
+	token = cfg.Token
+	if v := getenv(envToken); v != "" {
+		token = v
+	}
+	if tokenOverride != "" {
+		token = tokenOverride
+	}
+	return server, token
+}
+
+func newClient(cfg *Config, serverOverride, tokenOverride string, jsonMode bool) *client {
+	s, t := resolveCreds(cfg, serverOverride, tokenOverride, os.Getenv)
+	return &client{cfg: cfg, server: s, token: t, json: jsonMode}
 }
 
 func (c *client) do(method, path string, body interface{}) (map[string]interface{}, error) {
@@ -138,8 +165,8 @@ func (c *client) doRaw(method, path string, body interface{}) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -171,8 +198,8 @@ func (c *client) doSlice(method, path string, body interface{}) (map[string]inte
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -215,8 +242,8 @@ func (c *client) doArray(method, path string, body interface{}) ([]interface{}, 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

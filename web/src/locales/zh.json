@@ -19,6 +19,7 @@
     "projects": "项目",
     "datasets": "数据集",
     "secrets": "密钥",
+    "tokens": "访问令牌",
     "nodes": "节点",
     "tunnels": "隧道",
     "users": "用户",
@@ -198,6 +199,39 @@
         "lastUsed": "最近使用",
         "created": "创建时间"
       }
+    }
+  },
+  "settingsTokens": {
+    "title": "个人访问令牌",
+    "hint": "个人访问令牌可让自动化工具（AI Agent、脚本）以你的身份发起请求。每个令牌继承你账号的全部权限，请像密码一样妥善保管。在 muveectl 中通过 MUVEECTL_TOKEN 环境变量或 --token 参数使用。",
+    "nameLabel": "名称",
+    "namePlaceholder": "例如：ai-agent-laptop",
+    "expiryLabel": "有效期",
+    "defaultName": "个人访问令牌",
+    "create": "创建令牌",
+    "creating": "创建中…",
+    "created": "令牌已创建 — 请立即复制，之后无法再次查看。",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyWarning": "请妥善保存此令牌，此后将不再显示。",
+    "expiresOn": "过期时间：",
+    "deleteConfirm": "撤销此令牌？使用该令牌的任何工具将立即失去访问权限。",
+    "delete": "撤销",
+    "empty": "暂无个人访问令牌。创建一个以便工具代表你操作。",
+    "never": "永不",
+    "expired": "已过期",
+    "neverUsed": "从未使用",
+    "expiry": {
+      "30d": "30 天",
+      "90d": "90 天",
+      "365d": "1 年",
+      "never": "永不过期"
+    },
+    "columns": {
+      "name": "名称",
+      "expires": "过期时间",
+      "lastUsed": "最近使用",
+      "created": "创建时间"
     }
   },
   "datasets": {

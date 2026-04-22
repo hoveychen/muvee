@@ -236,18 +236,48 @@ func (s *Service) ParseJWT(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
+// Token prefixes. `mvt_` is used for project-scoped API tokens; `mvp_` is used
+// for personal access tokens (project_id IS NULL) created by users for
+// programmatic access (e.g. AI agents). Legacy CLI-login tokens also use the
+// `mvt_` prefix with project_id NULL — those are accepted for backwards
+// compatibility.
+const (
+	tokenPrefixProject = "mvt_"
+	tokenPrefixUser    = "mvp_"
+)
+
+func isAPITokenPrefix(s string) bool {
+	return strings.HasPrefix(s, tokenPrefixProject) || strings.HasPrefix(s, tokenPrefixUser)
+}
+
+// isTokenExpired reports whether an ApiToken.ExpiresAt timestamp is past.
+// A nil ExpiresAt means the token never expires. Exactly-equal-to-now counts
+// as expired (strict "after" comparison).
+func isTokenExpired(expiresAt *time.Time, now time.Time) bool {
+	if expiresAt == nil {
+		return false
+	}
+	return !expiresAt.After(now)
+}
+
 // CreateAPIToken generates a new random API token for a user, stores its hash, and returns the token.
-// If projectID is non-nil the token is scoped to that project.
-func (s *Service) CreateAPIToken(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID, name string) (*store.ApiToken, error) {
+// If projectID is non-nil the token is scoped to that project and uses the
+// `mvt_` prefix; otherwise it's a personal access token and uses `mvp_`.
+// expiresAt is optional: nil means never expires.
+func (s *Service) CreateAPIToken(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID, name string, expiresAt *time.Time) (*store.ApiToken, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, fmt.Errorf("generate token: %w", err)
 	}
-	tokenStr := "mvt_" + hex.EncodeToString(raw)
+	prefix := tokenPrefixProject
+	if projectID == nil {
+		prefix = tokenPrefixUser
+	}
+	tokenStr := prefix + hex.EncodeToString(raw)
 	hash := sha256.Sum256([]byte(tokenStr))
 	hashHex := hex.EncodeToString(hash[:])
 
-	t, err := s.store.CreateAPIToken(ctx, userID, projectID, name, hashHex)
+	t, err := s.store.CreateAPIToken(ctx, userID, projectID, name, hashHex, expiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -262,11 +292,14 @@ func (s *Service) lookupAPIToken(ctx context.Context, tokenStr string) (*store.U
 	if err != nil || apiToken == nil {
 		return nil, fmt.Errorf("invalid token")
 	}
+	if isTokenExpired(apiToken.ExpiresAt, time.Now()) {
+		return nil, fmt.Errorf("token expired")
+	}
 	return s.store.GetUserByID(ctx, apiToken.UserID)
 }
 
 // Middleware injects the authenticated user into the request context.
-// Accepts both JWT session tokens and long-lived API tokens (prefix "mvt_").
+// Accepts JWT session tokens and long-lived API tokens (prefixes "mvt_" / "mvp_").
 func (s *Service) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := extractToken(r)
@@ -277,8 +310,8 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 
 		var user *store.User
 
-		if strings.HasPrefix(tokenStr, "mvt_") {
-			// API token path
+		if isAPITokenPrefix(tokenStr) {
+			// API token path (personal or project-scoped)
 			var err error
 			user, err = s.lookupAPIToken(r.Context(), tokenStr)
 			if err != nil || user == nil {

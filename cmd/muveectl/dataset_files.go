@@ -96,8 +96,8 @@ var datasetPullCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if cl.cfg.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+cl.cfg.Token)
+		if cl.token != "" {
+			req.Header.Set("Authorization", "Bearer "+cl.token)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -167,8 +167,8 @@ var datasetPushCmd = &cobra.Command{
 			return err
 		}
 		req.Header.Set("Content-Type", mw.FormDataContentType())
-		if cl.cfg.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+cl.cfg.Token)
+		if cl.token != "" {
+			req.Header.Set("Authorization", "Bearer "+cl.token)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

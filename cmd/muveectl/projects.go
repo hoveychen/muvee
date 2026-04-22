@@ -461,7 +461,7 @@ var projectsPortForwardCmd = &cobra.Command{
 					proxyReq.Header.Add(k, v)
 				}
 			}
-			proxyReq.Header.Set("Authorization", "Bearer "+cl.cfg.Token)
+			proxyReq.Header.Set("Authorization", "Bearer "+cl.token)
 
 			resp, err := http.DefaultClient.Do(proxyReq)
 			if err != nil {

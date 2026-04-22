@@ -33,6 +33,10 @@ func init() {
 func cmdLogin(cfg *Config) error {
 	if serverOverride != "" {
 		cfg.Server = strings.TrimRight(serverOverride, "/")
+	} else if cfg.Server == "" {
+		if v := os.Getenv(envServer); v != "" {
+			cfg.Server = strings.TrimRight(v, "/")
+		}
 	}
 	if cfg.Server == "" {
 		fmt.Print("Enter Muvee server URL (e.g. https://www.example.com): ")

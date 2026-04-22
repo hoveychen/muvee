@@ -192,6 +192,12 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.auth.Middleware)
 
 		r.Get("/api/me", s.handleMe)
+		// Personal Access Tokens — per-user, not project-scoped. Used by AI
+		// agents and other programmatic clients to call the API on behalf of
+		// the signed-in user without holding their JWT.
+		r.Get("/api/me/tokens", s.listUserTokens)
+		r.Post("/api/me/tokens", s.createUserToken)
+		r.Delete("/api/me/tokens/{tokenId}", s.deleteUserToken)
 		r.Get("/api/runtime/config", s.handleRuntimeConfig)
 
 		// Authorization – any authenticated user can check status and submit requests
@@ -402,7 +408,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	// Check if this was initiated by the CLI device-flow
 	if portVal, ok := s.cliPending.LoadAndDelete(state); ok {
 		port := portVal.(string)
-		apiToken, err := s.auth.CreateAPIToken(r.Context(), user.ID, nil, "CLI Token")
+		apiToken, err := s.auth.CreateAPIToken(r.Context(), user.ID, nil, "CLI Token", nil)
 		if err != nil {
 			http.Error(w, "failed to create token", http.StatusInternalServerError)
 			return
@@ -548,6 +554,97 @@ echo ""
 
 // ─── API Tokens ──────────────────────────────────────────────────────────────
 
+// safeUserToken is the client-safe representation of a Personal Access Token.
+// token_hash is never returned; the raw token value is only surfaced once at
+// creation time (see createUserToken).
+type safeUserToken struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	LastUsedAt *string `json:"last_used_at"`
+	ExpiresAt  *string `json:"expires_at"`
+	CreatedAt  string  `json:"created_at"`
+}
+
+func toSafeUserToken(t *store.ApiToken) safeUserToken {
+	out := safeUserToken{
+		ID:        t.ID.String(),
+		Name:      t.Name,
+		CreatedAt: t.CreatedAt.Format(time.RFC3339),
+	}
+	if t.LastUsedAt != nil {
+		v := t.LastUsedAt.Format(time.RFC3339)
+		out.LastUsedAt = &v
+	}
+	if t.ExpiresAt != nil {
+		v := t.ExpiresAt.Format(time.RFC3339)
+		out.ExpiresAt = &v
+	}
+	return out
+}
+
+func (s *Server) listUserTokens(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	tokens, err := s.store.ListUserAPITokens(r.Context(), user.ID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	out := make([]safeUserToken, 0, len(tokens))
+	for _, t := range tokens {
+		out = append(out, toSafeUserToken(t))
+	}
+	jsonOK(w, out)
+}
+
+func (s *Server) createUserToken(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	var body struct {
+		Name      string `json:"name"`
+		ExpiresIn string `json:"expires_in"` // Go duration string, e.g. "720h"; empty = never
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		body.Name = "Personal Access Token"
+	}
+	var expiresAt *time.Time
+	if body.ExpiresIn != "" {
+		d, err := time.ParseDuration(body.ExpiresIn)
+		if err != nil || d <= 0 {
+			jsonErr(w, fmt.Errorf("invalid expires_in: want positive Go duration like 720h"), 400)
+			return
+		}
+		t := time.Now().Add(d)
+		expiresAt = &t
+	}
+	token, err := s.auth.CreateAPIToken(r.Context(), user.ID, nil, body.Name, expiresAt)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	resp := map[string]interface{}{
+		"id":    token.ID.String(),
+		"name":  token.Name,
+		"token": token.Token,
+	}
+	if token.ExpiresAt != nil {
+		resp["expires_at"] = token.ExpiresAt.Format(time.RFC3339)
+	}
+	jsonOK(w, resp)
+}
+
+func (s *Server) deleteUserToken(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	tokenID := mustParseUUID(chi.URLParam(r, "tokenId"))
+	if err := s.store.DeleteUserAPIToken(r.Context(), tokenID, user.ID); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) listProjectTokens(w http.ResponseWriter, r *http.Request) {
 	projectID := mustParseUUID(chi.URLParam(r, "id"))
 	tokens, err := s.store.ListAPITokensForProject(r.Context(), projectID)
@@ -591,7 +688,7 @@ func (s *Server) createProjectToken(w http.ResponseWriter, r *http.Request) {
 	if body.Name == "" {
 		body.Name = "Git Token"
 	}
-	token, err := s.auth.CreateAPIToken(r.Context(), user.ID, &projectID, body.Name)
+	token, err := s.auth.CreateAPIToken(r.Context(), user.ID, &projectID, body.Name, nil)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return

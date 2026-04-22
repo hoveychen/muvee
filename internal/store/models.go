@@ -229,6 +229,7 @@ type ApiToken struct {
 	Name       string     `db:"name"`
 	TokenHash  string     `db:"token_hash"`
 	LastUsedAt *time.Time `db:"last_used_at"`
+	ExpiresAt  *time.Time `db:"expires_at"`
 	CreatedAt  time.Time  `db:"created_at"`
 	// Token is only populated when freshly created (never stored)
 	Token string `db:"-"`
