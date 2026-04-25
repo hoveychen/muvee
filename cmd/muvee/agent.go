@@ -264,9 +264,17 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		}
 
 	case store.TaskTypeDeploy:
-		hostPort, err := runDeploy(ctx, task, cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath, func(line string) {
-			appendLog(ctx, baseURL, secret, task.DeploymentID, line)
-		})
+		var hostPort int
+		var err error
+		if str(task.Payload, "mode") == "compose" {
+			hostPort, err = runComposeDeploy(ctx, task, func(line string) {
+				appendLog(ctx, baseURL, secret, task.DeploymentID, line)
+			})
+		} else {
+			hostPort, err = runDeploy(ctx, task, cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath, func(line string) {
+				appendLog(ctx, baseURL, secret, task.DeploymentID, line)
+			})
+		}
 		taskErr = err
 		if err == nil && hostPort > 0 {
 			extra["host_port"] = hostPort
@@ -367,6 +375,33 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }
 
+func runComposeDeploy(ctx context.Context, task *store.Task, logFn func(string)) (int, error) {
+	p := task.Payload
+	envVars := make(map[string]string)
+	if evRaw, ok := p["env_vars"].(map[string]interface{}); ok {
+		for k, v := range evRaw {
+			if s, ok := v.(string); ok {
+				envVars[k] = s
+			}
+		}
+	}
+	cfg := deployer.ComposeConfig{
+		DeploymentID:    str(p, "deployment_id"),
+		ProjectID:       str(p, "project_id"),
+		DomainPrefix:    str(p, "domain_prefix"),
+		GitURL:          str(p, "git_url"),
+		GitBranch:       str(p, "git_branch"),
+		GitSSHKey:       str(p, "git_ssh_key"),
+		GitUsername:     str(p, "git_username"),
+		GitToken:        str(p, "git_token"),
+		ComposeFilePath: str(p, "compose_file_path"),
+		ExposeService:   str(p, "expose_service"),
+		ExposePort:      intVal(p, "expose_port"),
+		EnvVars:         envVars,
+	}
+	return deployer.DeployCompose(ctx, cfg, logFn)
+}
+
 func completeTask(ctx context.Context, baseURL, secret string, taskID uuid.UUID, status store.TaskStatus, extra map[string]interface{}) {
 	body := map[string]interface{}{"status": string(status)}
 	for k, v := range extra {
@@ -418,6 +453,14 @@ func runCleanup(ctx context.Context, task *store.Task) error {
 	domainPrefix := str(task.Payload, "domain_prefix")
 	if domainPrefix == "" {
 		return fmt.Errorf("cleanup task missing domain_prefix")
+	}
+	if str(task.Payload, "mode") == "compose" {
+		projectID := str(task.Payload, "project_id")
+		composeFilePath := str(task.Payload, "compose_file_path")
+		log.Printf("Cleanup: tearing down compose project %s", domainPrefix)
+		return deployer.CleanupCompose(ctx, projectID, domainPrefix, composeFilePath, "", func(line string) {
+			log.Print(line)
+		})
 	}
 	containerName := "muvee-" + domainPrefix
 	log.Printf("Cleanup: removing stale container %s", containerName)

@@ -1,0 +1,35 @@
+services:
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - web_html:/usr/share/nginx/html
+    depends_on:
+      - data-init
+    networks:
+      - app
+
+  data-init:
+    image: busybox:1.36
+    command: sh -c "echo '<html><body><h1>Hello from muvee compose</h1><p>Counter: '$$(cat /data/counter 2>/dev/null || echo 0)'</p></body></html>' > /web/index.html && expr $$(cat /data/counter 2>/dev/null || echo 0) + 1 > /data/counter"
+    volumes:
+      - web_html:/web
+      - app_data:/data
+    networks:
+      - app
+
+  cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - app
+
+volumes:
+  web_html:
+  app_data:
+  redis_data:
+
+networks:
+  app:

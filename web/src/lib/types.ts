@@ -11,7 +11,7 @@ export interface User {
 export interface Project {
   id: string
   name: string
-  project_type: 'deployment' | 'domain_only'
+  project_type: 'deployment' | 'domain_only' | 'compose'
   git_url: string
   git_branch: string
   git_source: 'external' | 'hosted'
@@ -30,6 +30,11 @@ export interface Project {
   description: string
   icon: string
   tags: string
+  // Compose-specific fields (only meaningful when project_type === 'compose').
+  compose_file_path?: string
+  expose_service?: string
+  expose_port?: number
+  pinned_node_id?: string | null
   created_at: string
   updated_at: string
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key } from 'lucide-react'
+import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key, Layers } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project, Secret } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
@@ -283,7 +283,7 @@ function PrivateRepoSection({
 // ─── Main NewProject component ────────────────────────────────────────────────
 
 export default function NewProject() {
-  const [projectType, setProjectType] = useState<'deployment' | 'domain_only'>('deployment')
+  const [projectType, setProjectType] = useState<'deployment' | 'domain_only' | 'compose'>('deployment')
   const [form, setForm] = useState<Partial<Project>>({
     git_source: 'external',
     git_branch: 'main',
@@ -291,6 +291,7 @@ export default function NewProject() {
     auth_required: false,
     auth_allowed_domains: '',
     memory_limit: '4g',
+    compose_file_path: 'docker-compose.yml',
   })
   const [createdProject, setCreatedProject] = useState<Project | null>(null)
   const [copied, setCopied] = useState(false)
@@ -334,13 +335,36 @@ export default function NewProject() {
     setSaving(true)
     try {
       // Step 1: create the project
-      const payload: Partial<Project> = projectType === 'domain_only'
-        ? { name: form.name, domain_prefix: form.domain_prefix, project_type: 'domain_only' }
-        : { ...form, project_type: 'deployment' }
+      let payload: Partial<Project>
+      if (projectType === 'domain_only') {
+        payload = { name: form.name, domain_prefix: form.domain_prefix, project_type: 'domain_only' }
+      } else if (projectType === 'compose') {
+        payload = {
+          name: form.name,
+          domain_prefix: form.domain_prefix,
+          git_url: form.git_url,
+          git_branch: form.git_branch,
+          git_source: 'external',
+          compose_file_path: form.compose_file_path || 'docker-compose.yml',
+          expose_service: form.expose_service,
+          expose_port: form.expose_port,
+          description: form.description,
+          icon: form.icon,
+          tags: form.tags,
+          project_type: 'compose',
+        }
+      } else {
+        payload = { ...form, project_type: 'deployment' }
+      }
       const project = await api.projects.create(payload)
 
       // domain_only projects — no credentials, just navigate
       if (projectType === 'domain_only') {
+        navigate(`/projects/${project.id}`)
+        return
+      }
+      // compose projects also skip credential setup for now and navigate.
+      if (projectType === 'compose') {
         navigate(`/projects/${project.id}`)
         return
       }
@@ -564,6 +588,7 @@ export default function NewProject() {
             <div className="flex gap-2">
               {([
                 { id: 'deployment' as const, icon: Globe, label: t('newProject.projectType.deployment') },
+                { id: 'compose' as const, icon: Layers, label: t('newProject.projectType.compose') },
                 { id: 'domain_only' as const, icon: Radio, label: t('newProject.projectType.tunnel') },
               ]).map(opt => (
                 <button
@@ -587,6 +612,11 @@ export default function NewProject() {
             {projectType === 'domain_only' && (
               <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
                 {t('newProject.projectType.tunnelHint')}
+              </p>
+            )}
+            {projectType === 'compose' && (
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.projectType.composeHint')}
               </p>
             )}
           </div>
@@ -637,8 +667,8 @@ export default function NewProject() {
             />
           </div>
 
-          {/* Git URL — only for deployment + external repos */}
-          {projectType === 'deployment' && !isHosted && (
+          {/* Git URL — for deployment+external and compose */}
+          {((projectType === 'deployment' && !isHosted) || projectType === 'compose') && (
             <div>
               {fieldLabel(t('newProject.fields.gitUrl'))}
               <input
@@ -661,8 +691,8 @@ export default function NewProject() {
             />
           )}
 
-          {/* Branch — only for deployment + external repos */}
-          {projectType === 'deployment' && !isHosted && (
+          {/* Branch — for deployment+external and compose */}
+          {((projectType === 'deployment' && !isHosted) || projectType === 'compose') && (
             <div>
               {fieldLabel(t('newProject.fields.gitBranch'), false)}
               <input
@@ -672,6 +702,53 @@ export default function NewProject() {
                 className="form-input"
               />
             </div>
+          )}
+
+          {/* Compose-specific fields */}
+          {projectType === 'compose' && (
+            <>
+              <div>
+                {fieldLabel(t('newProject.fields.composeFilePath'), false)}
+                <input
+                  value={form.compose_file_path ?? ''}
+                  onChange={e => setForm({ ...form, compose_file_path: e.target.value })}
+                  placeholder="docker-compose.yml"
+                  className="form-input"
+                />
+                <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                  {t('newProject.fields.composeFilePathHint')}
+                </p>
+              </div>
+              <div>
+                {fieldLabel(t('newProject.fields.exposeService'))}
+                <input
+                  value={form.expose_service ?? ''}
+                  onChange={e => setForm({ ...form, expose_service: e.target.value })}
+                  required
+                  placeholder="web"
+                  className="form-input"
+                />
+                <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                  {t('newProject.fields.exposeServiceHint')}
+                </p>
+              </div>
+              <div>
+                {fieldLabel(t('newProject.fields.exposePort'))}
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={form.expose_port ?? ''}
+                  onChange={e => setForm({ ...form, expose_port: e.target.value === '' ? undefined : Number(e.target.value) })}
+                  required
+                  placeholder="8080"
+                  className="form-input"
+                />
+                <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                  {t('newProject.fields.exposePortHint')}
+                </p>
+              </div>
+            </>
           )}
 
           {/* Domain prefix — required for domain_only, optional for deployment */}
