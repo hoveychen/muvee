@@ -807,8 +807,42 @@ func validateProject(p *store.Project) error {
 			return fmt.Errorf("domain_prefix %q conflicts with the ephemeral tunnel namespace (t-*)", p.DomainPrefix)
 		}
 		return nil
+	case store.ProjectTypeCompose:
+		if p.GitURL == "" {
+			return fmt.Errorf("git_url is required for compose projects")
+		}
+		// Hosted git is not supported for compose — the agent clones an
+		// external repo on the pinned deploy node before running compose.
+		if p.GitSource == store.GitSourceHosted {
+			return fmt.Errorf("compose projects must use an external git repository")
+		}
+		p.GitSource = store.GitSourceExternal
+		// Build-related fields don't apply: compose images come pre-built.
+		p.DockerfilePath = ""
+		p.MemoryLimit = ""
+		p.VolumeMountPath = ""
+		if strings.TrimSpace(p.ComposeFilePath) == "" {
+			p.ComposeFilePath = "docker-compose.yml"
+		}
+		if strings.TrimSpace(p.ExposeService) == "" {
+			return fmt.Errorf("expose_service is required for compose projects")
+		}
+		if p.ExposePort <= 0 || p.ExposePort > 65535 {
+			return fmt.Errorf("expose_port must be between 1 and 65535")
+		}
+		// container_port mirrors expose_port so the rest of the system (router,
+		// health checks) can keep treating it as the canonical app port.
+		p.ContainerPort = p.ExposePort
+		if p.DomainPrefix == "" {
+			if err := validateDomainPrefix(p.Name); err != nil {
+				return fmt.Errorf("domain_prefix is required because project name %q cannot be used as a subdomain: %w", p.Name, err)
+			}
+			p.DomainPrefix = p.Name
+			return nil
+		}
+		return validateDomainPrefix(p.DomainPrefix)
 	default:
-		return fmt.Errorf("project_type must be 'deployment' or 'domain_only'")
+		return fmt.Errorf("project_type must be 'deployment', 'domain_only', or 'compose'")
 	}
 }
 
@@ -1101,6 +1135,15 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proj, _ := s.store.GetProject(r.Context(), id)
+	// Best-effort: tear down the compose stack on its pinned node before
+	// deleting the project. Tied to the latest deployment so the task survives
+	// the cascade, since tasks.deployment_id is ON DELETE CASCADE; if no
+	// deployment ever ran we skip the dispatch and leave the stack untouched.
+	if proj != nil && proj.ProjectType == store.ProjectTypeCompose && proj.PinnedNodeID != nil {
+		if deployments, err := s.store.ListDeployments(r.Context(), proj.ID); err == nil && len(deployments) > 0 {
+			_ = s.sched.DispatchComposeCleanup(r.Context(), proj, deployments[0].ID)
+		}
+	}
 	// Clean up hosted git repo if applicable.
 	if proj != nil && s.gitRepoBasePath != "" && proj.GitSource == store.GitSourceHosted {
 		_ = gitrepo.DeleteRepo(gitrepo.RepoPath(s.gitRepoBasePath, id))
@@ -1171,6 +1214,16 @@ func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
 	deployment, err := s.store.CreateDeployment(r.Context(), &store.Deployment{ProjectID: id})
 	if err != nil {
 		jsonErr(w, err, 500)
+		return
+	}
+	// Compose projects skip the build phase: images are pulled by `docker
+	// compose up` directly on the pinned deploy node.
+	if project.ProjectType == store.ProjectTypeCompose {
+		if err := s.sched.DispatchDeploy(r.Context(), deployment, project, ""); err != nil {
+			jsonErr(w, err, 500)
+			return
+		}
+		jsonOK(w, deployment)
 		return
 	}
 	if err := s.sched.DispatchBuild(r.Context(), deployment, project); err != nil {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLink, Radio, User } from 'lucide-react'
+import { PlusCircle, GitBranch, Globe, Circle, Terminal, Copy, Check, ExternalLink, Radio, User, Layers } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project } from '../lib/types'
 import { timeAgo, statusColor } from '../lib/utils'
@@ -69,6 +69,7 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
   const [latestDeploy, setLatestDeploy] = useState<import('../lib/types').Deployment | null>(null)
   const { t } = useTranslation()
   const isTunnel = project.project_type === 'domain_only'
+  const isCompose = project.project_type === 'compose'
 
   useEffect(() => {
     if (isTunnel) return
@@ -127,8 +128,17 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
         ) : (
           <div className="flex items-center gap-2 mt-1">
             <span style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
-              <GitBranch size={10} className="inline mr-1" />
-              {project.git_branch}
+              {isCompose ? (
+                <>
+                  <Layers size={10} className="inline mr-1" />
+                  compose
+                </>
+              ) : (
+                <>
+                  <GitBranch size={10} className="inline mr-1" />
+                  {project.git_branch}
+                </>
+              )}
             </span>
             <span style={{ color: 'var(--border)' }}>·</span>
             <span style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>

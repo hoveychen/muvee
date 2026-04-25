@@ -33,6 +33,7 @@ type ProjectType string
 const (
 	ProjectTypeDeployment ProjectType = "deployment"
 	ProjectTypeDomainOnly ProjectType = "domain_only"
+	ProjectTypeCompose    ProjectType = "compose"
 )
 
 type Project struct {
@@ -54,8 +55,20 @@ type Project struct {
 	Description        string      `db:"description"          json:"description"`
 	Icon               string      `db:"icon"                 json:"icon"`
 	Tags               string      `db:"tags"                 json:"tags"`
-	CreatedAt          time.Time   `db:"created_at"           json:"created_at"`
-	UpdatedAt          time.Time   `db:"updated_at"           json:"updated_at"`
+	// ComposeFilePath is the path (relative to repo root) of the docker-compose
+	// file to deploy. Only used when ProjectType == "compose".
+	ComposeFilePath string `db:"compose_file_path" json:"compose_file_path"`
+	// ExposeService names the compose service whose port is exposed via Traefik.
+	ExposeService string `db:"expose_service"    json:"expose_service"`
+	// ExposePort is the container-internal port on ExposeService that should be
+	// published as the project's host port.
+	ExposePort int `db:"expose_port"       json:"expose_port"`
+	// PinnedNodeID locks a compose project to one specific deploy node so its
+	// docker named volumes survive across redeploys. Set on first deploy and
+	// reused thereafter.
+	PinnedNodeID *uuid.UUID `db:"pinned_node_id"    json:"pinned_node_id,omitempty"`
+	CreatedAt    time.Time  `db:"created_at"           json:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at"           json:"updated_at"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 	// Owner display fields, populated by ListProjectsForUser / GetProject via LEFT JOIN users.

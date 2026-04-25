@@ -59,6 +59,10 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("auth-domains", "", "Comma-separated allowed email domains")
 	cmd.Flags().String("auth-bypass-paths", "", "Newline-separated paths that bypass auth (use * suffix for prefix match, e.g. /api/public/*)")
 	cmd.Flags().Bool("domain-only", false, "Reserve a tunnel domain prefix without a git repo (no deployment)")
+	cmd.Flags().Bool("compose", false, "Deploy via docker-compose (images only, no build)")
+	cmd.Flags().String("compose-file", "", "Compose file path relative to repo root (default: docker-compose.yml)")
+	cmd.Flags().String("expose-service", "", "Compose service name to expose via the muvee router")
+	cmd.Flags().Int("expose-port", 0, "Container port on the exposed service to publish")
 	cmd.Flags().String("description", "", "Project description")
 	cmd.Flags().String("icon", "", "Project icon (inline SVG or URL)")
 	cmd.Flags().String("tags", "", "Comma-separated project tags")
@@ -108,6 +112,23 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		if v, _ := cmd.Flags().GetBool("domain-only"); v {
 			p["project_type"] = "domain_only"
 		}
+	}
+	if cmd.Flags().Changed("compose") {
+		if v, _ := cmd.Flags().GetBool("compose"); v {
+			p["project_type"] = "compose"
+		}
+	}
+	if cmd.Flags().Changed("compose-file") {
+		v, _ := cmd.Flags().GetString("compose-file")
+		p["compose_file_path"] = v
+	}
+	if cmd.Flags().Changed("expose-service") {
+		v, _ := cmd.Flags().GetString("expose-service")
+		p["expose_service"] = v
+	}
+	if cmd.Flags().Changed("expose-port") {
+		v, _ := cmd.Flags().GetInt("expose-port")
+		p["expose_port"] = v
 	}
 	if cmd.Flags().Changed("description") {
 		v, _ := cmd.Flags().GetString("description")
@@ -161,8 +182,25 @@ var projectsCreateCmd = &cobra.Command{
 		}
 		p := collectProjectFlags(cmd)
 		domainOnly, _ := cmd.Flags().GetBool("domain-only")
+		composeMode, _ := cmd.Flags().GetBool("compose")
 		isHosted, _ := cmd.Flags().GetString("git-source")
-		if domainOnly {
+		if domainOnly && composeMode {
+			return fmt.Errorf("--domain-only and --compose are mutually exclusive")
+		}
+		if composeMode {
+			if !cmd.Flags().Changed("git-url") {
+				return fmt.Errorf("--git-url is required for compose projects")
+			}
+			if isHosted == "hosted" {
+				return fmt.Errorf("compose projects must use an external git repository")
+			}
+			if !cmd.Flags().Changed("expose-service") {
+				return fmt.Errorf("--expose-service is required for compose projects")
+			}
+			if !cmd.Flags().Changed("expose-port") {
+				return fmt.Errorf("--expose-port is required for compose projects")
+			}
+		} else if domainOnly {
 			if !cmd.Flags().Changed("domain") {
 				return fmt.Errorf("--domain is required when --domain-only is set")
 			}
@@ -170,7 +208,7 @@ var projectsCreateCmd = &cobra.Command{
 				return fmt.Errorf("--git-url and --git-source are not allowed with --domain-only")
 			}
 		} else if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
-			return fmt.Errorf("--git-url is required (or use --git-source hosted, or --domain-only)")
+			return fmt.Errorf("--git-url is required (or use --git-source hosted, --domain-only, or --compose)")
 		}
 		result, err := cl.do("POST", "/api/projects", p)
 		if err != nil {

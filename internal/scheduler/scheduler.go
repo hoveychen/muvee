@@ -145,10 +145,36 @@ func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stopp
 	return err
 }
 
+// DispatchComposeCleanup tears down a compose project on its pinned node,
+// including its docker named volumes. Used when a compose project is deleted.
+// deploymentID is optional — if zero, the cleanup is not tied to a specific
+// deployment row.
+func (s *Scheduler) DispatchComposeCleanup(ctx context.Context, project *store.Project, deploymentID uuid.UUID) error {
+	if project.PinnedNodeID == nil {
+		return nil // never deployed; nothing to clean up
+	}
+	task := &store.Task{
+		Type:         store.TaskTypeCleanup,
+		NodeID:       project.PinnedNodeID,
+		DeploymentID: deploymentID,
+		Payload: map[string]interface{}{
+			"mode":              "compose",
+			"project_id":        project.ID.String(),
+			"domain_prefix":     project.DomainPrefix,
+			"compose_file_path": project.ComposeFilePath,
+		},
+	}
+	_, err := s.store.CreateTask(ctx, task)
+	return err
+}
+
 // DispatchBuild creates a build task on the best builder node.
 func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
 	if project.ProjectType == store.ProjectTypeDomainOnly {
 		return fmt.Errorf("cannot dispatch build for domain_only project")
+	}
+	if project.ProjectType == store.ProjectTypeCompose {
+		return fmt.Errorf("cannot dispatch build for compose project (compose deploys must use image: only)")
 	}
 	builderNode, err := s.PickBuilderNode(ctx)
 	if err != nil {
@@ -221,6 +247,9 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 	if project.ProjectType == store.ProjectTypeDomainOnly {
 		return fmt.Errorf("cannot dispatch deploy for domain_only project")
 	}
+	if project.ProjectType == store.ProjectTypeCompose {
+		return s.dispatchComposeDeploy(ctx, deployment, project)
+	}
 	pds, err := s.store.GetProjectDatasets(ctx, project.ID)
 	if err != nil {
 		return err
@@ -286,4 +315,104 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 	}
 	_, err = s.store.CreateTask(ctx, task)
 	return err
+}
+
+// dispatchComposeDeploy schedules a docker-compose deploy on the project's
+// pinned node. The first deploy picks any active deploy node and persists the
+// pin on the project; subsequent deploys must run on the same node so docker
+// named volumes survive across redeploys.
+func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
+	if project.GitURL == "" {
+		return fmt.Errorf("compose project has no git_url")
+	}
+	if project.ExposeService == "" || project.ExposePort == 0 {
+		return fmt.Errorf("compose project must declare expose_service and expose_port")
+	}
+
+	deployNode, err := s.pickOrReusePinnedNode(ctx, project)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetDeploymentNode(ctx, deployment.ID, deployNode.ID); err != nil {
+		return err
+	}
+
+	// Collect git credentials and project env vars (compose receives env vars
+	// via a generated .env file that all services interpolate from).
+	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
+	var gitSSHKey, gitUsername, gitToken string
+	envVars := make(map[string]string)
+	for _, sec := range secrets {
+		if sec.UseForGit {
+			switch sec.SecretType {
+			case store.SecretTypeSSHKey:
+				gitSSHKey = sec.PlainValue
+			case store.SecretTypePassword:
+				gitUsername = sec.GitUsername
+				gitToken = sec.PlainValue
+			}
+		}
+		if sec.EnvVarName != "" {
+			envVars[sec.EnvVarName] = sec.PlainValue
+		}
+	}
+
+	payload := map[string]interface{}{
+		"mode":              "compose",
+		"deployment_id":     deployment.ID.String(),
+		"project_id":        project.ID.String(),
+		"domain_prefix":     project.DomainPrefix,
+		"git_url":           project.GitURL,
+		"git_branch":        project.GitBranch,
+		"compose_file_path": project.ComposeFilePath,
+		"expose_service":    project.ExposeService,
+		"expose_port":       project.ExposePort,
+		"env_vars":          envVars,
+	}
+	if gitSSHKey != "" {
+		payload["git_ssh_key"] = gitSSHKey
+	}
+	if gitUsername != "" && gitToken != "" {
+		payload["git_username"] = gitUsername
+		payload["git_token"] = gitToken
+	}
+
+	task := &store.Task{
+		Type:         store.TaskTypeDeploy,
+		NodeID:       &deployNode.ID,
+		DeploymentID: deployment.ID,
+		Payload:      payload,
+	}
+	_, err = s.store.CreateTask(ctx, task)
+	return err
+}
+
+// pickOrReusePinnedNode returns the project's pinned deploy node, picking and
+// persisting one on first use. If the previously pinned node has gone offline,
+// the dispatch fails rather than silently migrating (which would orphan the
+// named volumes on the old node).
+func (s *Scheduler) pickOrReusePinnedNode(ctx context.Context, project *store.Project) (*store.Node, error) {
+	if project.PinnedNodeID != nil {
+		node, err := s.store.GetNode(ctx, *project.PinnedNodeID)
+		if err != nil {
+			return nil, fmt.Errorf("get pinned node: %w", err)
+		}
+		if node == nil {
+			return nil, fmt.Errorf("compose project's pinned deploy node no longer exists")
+		}
+		if time.Since(node.LastSeenAt) > 2*time.Minute {
+			return nil, fmt.Errorf("compose project's pinned deploy node %q is offline; data is on that node, refusing to migrate", node.Hostname)
+		}
+		return node, nil
+	}
+
+	node, err := s.PickDeployNode(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.SetProjectPinnedNode(ctx, project.ID, node.ID); err != nil {
+		return nil, fmt.Errorf("pin project to node: %w", err)
+	}
+	project.PinnedNodeID = &node.ID
+	return node, nil
 }

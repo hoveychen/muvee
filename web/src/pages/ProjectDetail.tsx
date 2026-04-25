@@ -135,6 +135,7 @@ export default function ProjectDetail() {
   if (!project) return <div style={{ color: 'var(--fg-muted)', padding: '2rem' }}>{t('projects.loading')}</div>
 
   const isTunnel = project.project_type === 'domain_only'
+  const isCompose = project.project_type === 'compose'
   const latestDeploy = deployments[0]
   const color = isTunnel ? 'var(--accent)' : statusColor(latestDeploy?.status ?? 'pending')
 
@@ -194,6 +195,15 @@ export default function ProjectDetail() {
             {t('projectDetail.tunnelHint', { name: project.name })}
           </div>
         )}
+        {isCompose && (
+          <div style={{ marginTop: '0.5rem', marginLeft: '1.75rem', fontSize: '0.8125rem', color: 'var(--fg-muted)', fontFamily: MONO, background: 'var(--bg-hover)', padding: '0.5rem 0.75rem', borderRadius: '6px', display: 'inline-block' }}>
+            {t('projectDetail.composeHint', {
+              service: project.expose_service ?? '',
+              port: project.expose_port ?? 0,
+              pinned: project.pinned_node_id ? t('projectDetail.composePinned') : t('projectDetail.composeUnpinned'),
+            })}
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -208,10 +218,17 @@ export default function ProjectDetail() {
           ['config', Settings, t('projectDetail.tabs.config')],
           ['auth', Shield, t('projectDetail.tabs.auth')],
           ...(project.git_source === 'hosted' ? [['repository', GitBranch, t('projectDetail.tabs.repository')] as const] : []),
-          ['datasets', Database, t('projectDetail.tabs.datasets')],
+          // Datasets and workspace are not wired up for compose projects: the
+          // agent runs `docker compose up` directly without NFS mounts or a
+          // singleton container the user can browse into.
+          ...(isCompose ? [] : [
+            ['datasets', Database, t('projectDetail.tabs.datasets')] as const,
+          ]),
           ['secrets', KeyRound, t('projectDetail.tabs.secrets')],
           ['tokens', Key, t('projectDetail.tabs.tokens')],
-          ['workspace', HardDrive, t('projectDetail.tabs.workspace')],
+          ...(isCompose ? [] : [
+            ['workspace', HardDrive, t('projectDetail.tabs.workspace')] as const,
+          ]),
         ] as const).map(([key, Icon, label]) => (
           <button
             key={key}
@@ -682,12 +699,14 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
 
   const nameIsValidPrefix = isValidDomainPrefix(form.name ?? '')
   const domainPrefixRequired = !nameIsValidPrefix
+  const isCompose = form.project_type === 'compose'
+  const isTunnelType = form.project_type === 'domain_only'
 
   return (
     <div className="max-w-lg space-y-5">
       {field(t('projectDetail.config.projectName'), 'name')}
-      {field(t('projectDetail.config.gitUrl'), 'git_url')}
-      {field(t('projectDetail.config.gitBranch'), 'git_branch')}
+      {!isTunnelType && field(t('projectDetail.config.gitUrl'), 'git_url')}
+      {!isTunnelType && field(t('projectDetail.config.gitBranch'), 'git_branch')}
 
       <div>
         <label className="form-label">
@@ -765,9 +784,46 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
         </p>
       </div>
 
-      {field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
-      {field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
-      {field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
+      {/* Build / runtime fields — deployment only. Compose uses image: directives, no Dockerfile or per-container memory. */}
+      {!isCompose && !isTunnelType && field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
+      {!isCompose && !isTunnelType && field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
+      {!isCompose && !isTunnelType && field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
+
+      {/* Compose-specific fields */}
+      {isCompose && field(t('projectDetail.config.composeFilePath'), 'compose_file_path', t('projectDetail.config.composeFilePathHint'))}
+      {isCompose && field(t('projectDetail.config.exposeService'), 'expose_service', t('projectDetail.config.exposeServiceHint'))}
+      {isCompose && (
+        <div>
+          <label className="form-label">
+            {t('projectDetail.config.exposePort').toUpperCase()}
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={form.expose_port ?? ''}
+            onChange={e => onChange({ ...form, expose_port: e.target.value === '' ? undefined : Number(e.target.value) })}
+            className="form-input w-full"
+            style={{ fontFamily: MONO }}
+          />
+          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            {t('projectDetail.config.exposePortHint')}
+          </p>
+        </div>
+      )}
+      {isCompose && (
+        <div>
+          <label className="form-label">
+            {t('projectDetail.config.pinnedNode').toUpperCase()}
+          </label>
+          <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: form.pinned_node_id ? 'var(--fg-primary)' : 'var(--fg-muted)' }}>
+            {form.pinned_node_id || t('projectDetail.config.pinnedNodeNone')}
+          </p>
+          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            {t('projectDetail.config.pinnedNodeHint')}
+          </p>
+        </div>
+      )}
 
       {saveError && (
         <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
