@@ -192,6 +192,7 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.auth.Middleware)
 
 		r.Get("/api/me", s.handleMe)
+		r.Patch("/api/me", s.handleUpdateMe)
 		// Personal Access Tokens — per-user, not project-scoped. Used by AI
 		// agents and other programmatic clients to call the API on behalf of
 		// the signed-in user without holding their JWT.
@@ -465,6 +466,56 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
 	jsonOK(w, user)
+}
+
+// validateProfileUpdate enforces the same rules used by handleUpdateMe so the
+// validation can be exercised by a pure unit test without spinning up a DB.
+// nil arguments mean "leave that field unchanged"; an empty avatar URL is
+// allowed as a way to clear the avatar.
+func validateProfileUpdate(name *string, avatarURL *string) error {
+	if name != nil {
+		t := strings.TrimSpace(*name)
+		if len(t) < 1 || len(t) > 100 {
+			return fmt.Errorf("name must be 1-100 characters")
+		}
+	}
+	if avatarURL != nil {
+		t := strings.TrimSpace(*avatarURL)
+		if t != "" && !strings.HasPrefix(t, "http://") && !strings.HasPrefix(t, "https://") {
+			return fmt.Errorf("avatar_url must start with http:// or https://")
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	var body struct {
+		Name      *string `json:"name"`
+		AvatarURL *string `json:"avatar_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := validateProfileUpdate(body.Name, body.AvatarURL); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if body.Name != nil {
+		trimmed := strings.TrimSpace(*body.Name)
+		body.Name = &trimmed
+	}
+	if body.AvatarURL != nil {
+		trimmed := strings.TrimSpace(*body.AvatarURL)
+		body.AvatarURL = &trimmed
+	}
+	updated, err := s.store.UpdateUserProfile(r.Context(), user.ID, body.Name, body.AvatarURL)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, updated)
 }
 
 // handleSkill serves a Markdown skill document that teaches Claude how to use muveectl.

@@ -217,6 +217,20 @@
       }
     }
   },
+  "settingsProfile": {
+    "title": "个人资料",
+    "hint": "自定义你在他人面前的显示名称和头像。一旦在此处修改，后续通过身份提供商再次登录都不会覆盖你的设置。",
+    "nameLabel": "显示名称",
+    "namePlaceholder": "你希望被怎么称呼",
+    "avatarLabel": "头像链接",
+    "nameOverriddenHint": "已自定义 —— 后续通过身份提供商登录不会再改动这一项。",
+    "avatarOverriddenHint": "已自定义 —— 后续通过身份提供商登录不会再改动这一项。",
+    "save": "保存",
+    "saving": "保存中…",
+    "saved": "已保存。",
+    "reset": "撤销",
+    "editTooltip": "编辑个人资料"
+  },
   "settingsTokens": {
     "title": "个人访问令牌",
     "hint": "个人访问令牌可让自动化工具（AI Agent、脚本）以你的身份发起请求。每个令牌继承你账号的全部权限，请像密码一样妥善保管。在 muveectl 中通过 MUVEECTL_TOKEN 环境变量或 --token 参数使用。",

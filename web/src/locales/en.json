@@ -217,6 +217,20 @@
       }
     }
   },
+  "settingsProfile": {
+    "title": "Profile",
+    "hint": "Customise the display name and avatar shown to other users. Once you change a field here, the value is yours — later sign-ins via your identity provider will not overwrite it.",
+    "nameLabel": "Display name",
+    "namePlaceholder": "How you want to appear",
+    "avatarLabel": "Avatar URL",
+    "nameOverriddenHint": "Custom — sign-ins via your identity provider will not change this.",
+    "avatarOverriddenHint": "Custom — sign-ins via your identity provider will not change this.",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved.",
+    "reset": "Reset",
+    "editTooltip": "Edit profile"
+  },
   "settingsTokens": {
     "title": "Personal Access Tokens",
     "hint": "Personal access tokens authenticate as you from automated tools (AI agents, scripts). Each token carries your full account permissions — store them like passwords. Use with muveectl via MUVEECTL_TOKEN or the --token flag.",

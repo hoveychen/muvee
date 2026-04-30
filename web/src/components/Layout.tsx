@@ -185,7 +185,20 @@ export default function Layout({ children }: { children?: ReactNode }) {
         {/* User */}
         {user && (
           <div className="p-4" style={{ borderTop: '1px solid var(--sidebar-border)' }}>
-            <div className="flex items-center gap-3">
+            <NavLink
+              to="/settings/profile"
+              title={t('settingsProfile.editTooltip', 'Edit profile')}
+              className="flex items-center gap-3"
+              style={{
+                textDecoration: 'none',
+                padding: '4px',
+                margin: '-4px',
+                borderRadius: '6px',
+                transition: 'background 120ms',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = 'var(--sidebar-hover)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = 'transparent' }}
+            >
               {user.avatar_url ? (
                 <img src={user.avatar_url} alt="" className="rounded-full" style={{ width: '32px', height: '32px' }} />
               ) : (
@@ -201,7 +214,7 @@ export default function Layout({ children }: { children?: ReactNode }) {
                   {user.email}
                 </div>
               </div>
-            </div>
+            </NavLink>
             <div className="flex items-center gap-1 mt-3">
               <button
                 onClick={toggleLang}
