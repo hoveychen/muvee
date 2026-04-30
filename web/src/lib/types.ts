@@ -6,6 +6,8 @@ export interface User {
   role: 'admin' | 'member'
   authorized: boolean
   created_at: string
+  name_overridden: boolean
+  avatar_overridden: boolean
 }
 
 export interface Project {

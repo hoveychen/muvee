@@ -36,24 +36,32 @@ func (s *Store) DB() *pgxpool.Pool {
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
+// userColumns is the canonical SELECT list for users. Keep it in lockstep with
+// scanUser so all User reads pick up new columns at once.
+const userColumns = `id, email, name, avatar_url, role, authorized, created_at, name_overridden, avatar_overridden`
+
+func scanUser(scanner interface {
+	Scan(dest ...interface{}) error
+}, u *User) error {
+	return scanner.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt, &u.NameOverridden, &u.AvatarOverridden)
+}
+
 func (s *Store) UpsertUser(ctx context.Context, email, name, avatarURL string) (*User, error) {
 	var u User
-	err := s.db.QueryRow(ctx, `
+	err := scanUser(s.db.QueryRow(ctx, `
 		INSERT INTO users (id, email, name, avatar_url, role, created_at)
 		VALUES ($1, $2, $3, $4, 'member', NOW())
-		ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, avatar_url = EXCLUDED.avatar_url
-		RETURNING id, email, name, avatar_url, role, authorized, created_at
-	`, uuid.New(), email, name, avatarURL).Scan(
-		&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt,
-	)
+		ON CONFLICT (email) DO UPDATE SET
+			name       = CASE WHEN users.name_overridden   THEN users.name       ELSE EXCLUDED.name       END,
+			avatar_url = CASE WHEN users.avatar_overridden THEN users.avatar_url ELSE EXCLUDED.avatar_url END
+		RETURNING `+userColumns,
+		uuid.New(), email, name, avatarURL), &u)
 	return &u, err
 }
 
 func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	var u User
-	err := s.db.QueryRow(ctx, `
-		SELECT id, email, name, avatar_url, role, authorized, created_at FROM users WHERE id = $1
-	`, id).Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt)
+	err := scanUser(s.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id), &u)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -61,7 +69,7 @@ func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, email, name, avatar_url, role, authorized, created_at FROM users ORDER BY created_at`)
+	rows, err := s.db.Query(ctx, `SELECT `+userColumns+` FROM users ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +77,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	users := make([]*User, 0)
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt); err != nil {
+		if err := scanUser(rows, &u); err != nil {
 			return nil, err
 		}
 		users = append(users, &u)
@@ -80,6 +88,37 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 func (s *Store) SetUserRole(ctx context.Context, id uuid.UUID, role UserRole) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET role = $1 WHERE id = $2`, role, id)
 	return err
+}
+
+// UpdateUserProfile updates the caller's display name and/or avatar URL. nil
+// arguments leave that field unchanged. When a field is updated, the matching
+// _overridden flag flips to TRUE so subsequent OAuth logins stop overwriting
+// the user's customisation in UpsertUser.
+func (s *Store) UpdateUserProfile(ctx context.Context, userID uuid.UUID, name *string, avatarURL *string) (*User, error) {
+	if name == nil && avatarURL == nil {
+		return s.GetUserByID(ctx, userID)
+	}
+	parts := make([]string, 0, 2)
+	args := make([]any, 0, 3)
+	idx := 1
+	if name != nil {
+		parts = append(parts, fmt.Sprintf("name = $%d, name_overridden = TRUE", idx))
+		args = append(args, *name)
+		idx++
+	}
+	if avatarURL != nil {
+		parts = append(parts, fmt.Sprintf("avatar_url = $%d, avatar_overridden = TRUE", idx))
+		args = append(args, *avatarURL)
+		idx++
+	}
+	args = append(args, userID)
+	q := fmt.Sprintf(`UPDATE users SET %s WHERE id = $%d RETURNING %s`,
+		strings.Join(parts, ", "), idx, userColumns)
+	var u User
+	if err := scanUser(s.db.QueryRow(ctx, q, args...), &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 // ─── Projects ────────────────────────────────────────────────────────────────

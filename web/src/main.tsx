@@ -15,6 +15,7 @@ import Datasets from './pages/Datasets'
 import NewDataset from './pages/NewDataset'
 import SecretsPage from './pages/Secrets'
 import SettingsTokensPage from './pages/SettingsTokens'
+import SettingsProfilePage from './pages/SettingsProfile'
 import OnboardPage from './pages/Onboard'
 import AdminSettingsPage from './pages/AdminSettings'
 import TunnelsPage from './pages/Tunnels'
@@ -61,6 +62,7 @@ function App() {
             <Route path="/datasets/new" element={<NewDataset />} />
             <Route path="/secrets" element={<SecretsPage />} />
             <Route path="/settings/tokens" element={<SettingsTokensPage />} />
+            <Route path="/settings/profile" element={<SettingsProfilePage />} />
             <Route path="/nodes" element={<NodesPage />} />
             <Route path="/tunnels" element={<TunnelsPage />} />
             <Route path="/users" element={<UsersPage />} />

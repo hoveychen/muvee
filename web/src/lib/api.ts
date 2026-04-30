@@ -18,6 +18,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => request<import('./types').User>('/api/me'),
+  updateMe: (data: { name?: string; avatar_url?: string }) =>
+    request<import('./types').User>('/api/me', { method: 'PATCH', body: JSON.stringify(data) }),
   runtime: {
     config: () => request<import('./types').RuntimeConfig>('/api/runtime/config'),
   },

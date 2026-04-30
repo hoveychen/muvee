@@ -21,6 +21,11 @@ type User struct {
 	Role       UserRole  `db:"role"       json:"role"`
 	Authorized bool      `db:"authorized" json:"authorized"`
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+	// NameOverridden / AvatarOverridden are flipped to TRUE by PATCH /api/me when
+	// the user customises the field. UpsertUser then keeps the customised value
+	// on subsequent OAuth logins instead of letting the IdP overwrite it.
+	NameOverridden   bool `db:"name_overridden"   json:"name_overridden"`
+	AvatarOverridden bool `db:"avatar_overridden" json:"avatar_overridden"`
 }
 
 const (
