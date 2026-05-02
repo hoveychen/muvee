@@ -185,7 +185,7 @@ func (s *Server) Router() http.Handler {
 
 	// Git Smart HTTP protocol – uses its own Basic Auth (API tokens)
 	if s.gitRepoBasePath != "" {
-		r.Handle("/git/*", gitrepo.HTTPHandler(s.gitRepoBasePath, s.gitHTTPAuth))
+		r.Handle("/git/*", gitrepo.HTTPHandler(s.gitRepoBasePath, s.gitHTTPAuth, s.gitPostReceive))
 	}
 
 	// Protected
@@ -1131,6 +1131,16 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ProjectType = existing.ProjectType
+	// last_tracked_commit_sha and last_tracked_image_digests are server-managed
+	// — never accept them from the client. Forcing a redeploy must go through
+	// POST /api/projects/:id/deploy.
+	p.LastTrackedCommitSHA = existing.LastTrackedCommitSHA
+	p.LastTrackedImageDigests = existing.LastTrackedImageDigests
+	// Auto-deploy can only be enabled for project types that actually deploy.
+	if p.AutoDeployEnabled && existing.ProjectType == store.ProjectTypeDomainOnly {
+		jsonErr(w, fmt.Errorf("auto_deploy_enabled is not supported for domain_only projects"), 400)
+		return
+	}
 	if err := validateProject(p); err != nil {
 		jsonErr(w, err, 400)
 		return
@@ -1295,31 +1305,18 @@ func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, nil, 403)
 		return
 	}
-	project, err := s.store.GetProject(r.Context(), id)
-	if err != nil || project == nil {
-		jsonErr(w, err, 404)
-		return
-	}
-	if project.ProjectType == store.ProjectTypeDomainOnly {
-		jsonErr(w, fmt.Errorf("domain_only projects cannot be deployed"), 400)
-		return
-	}
-	deployment, err := s.store.CreateDeployment(r.Context(), &store.Deployment{ProjectID: id})
+	deployment, err := s.sched.TriggerDeployment(r.Context(), id, "manual")
 	if err != nil {
-		jsonErr(w, err, 500)
-		return
-	}
-	// Compose projects skip the build phase: images are pulled by `docker
-	// compose up` directly on the pinned deploy node.
-	if project.ProjectType == store.ProjectTypeCompose {
-		if err := s.sched.DispatchDeploy(r.Context(), deployment, project, ""); err != nil {
-			jsonErr(w, err, 500)
+		// Treat missing / domain_only as 4xx; everything else 500.
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			jsonErr(w, err, 404)
 			return
 		}
-		jsonOK(w, deployment)
-		return
-	}
-	if err := s.sched.DispatchBuild(r.Context(), deployment, project); err != nil {
+		if strings.Contains(msg, "domain_only") {
+			jsonErr(w, err, 400)
+			return
+		}
 		jsonErr(w, err, 500)
 		return
 	}
@@ -3128,6 +3125,40 @@ func (s *Server) hostedGitPushURL(projectID uuid.UUID) string {
 		scheme = "http"
 	}
 	return fmt.Sprintf("%s://%s/git/%s.git", scheme, s.baseDomain, projectID)
+}
+
+// gitPostReceive runs after a successful git-receive-pack on a hosted repo.
+// When the project has auto_deploy_enabled and the tracked branch advanced,
+// it triggers a fresh deployment and records the new commit SHA. Errors are
+// logged but never propagated — the push has already succeeded as far as the
+// git client is concerned.
+func (s *Server) gitPostReceive(ctx context.Context, projectID uuid.UUID, repoPath string) {
+	if v, _ := s.store.GetSetting(ctx, "auto_deploy_master_enabled"); v == "false" {
+		return
+	}
+	project, err := s.store.GetProject(ctx, projectID)
+	if err != nil || project == nil {
+		return
+	}
+	if !project.AutoDeployEnabled {
+		return
+	}
+	branch := project.GitBranch
+	if branch == "" {
+		branch = gitrepo.DefaultBranch(repoPath)
+	}
+	sha := gitrepo.HeadSHA(ctx, repoPath, branch)
+	if sha == "" || sha == project.LastTrackedCommitSHA {
+		return
+	}
+	log.Printf("auto-deploy (push): project %q new commit %s (was %q)", project.Name, sha, project.LastTrackedCommitSHA)
+	if _, err := s.sched.TriggerDeployment(ctx, projectID, "auto-push"); err != nil {
+		log.Printf("auto-deploy (push): trigger failed for %s: %v", project.Name, err)
+		return
+	}
+	if err := s.store.SetProjectLastTrackedCommitSHA(ctx, projectID, sha); err != nil {
+		log.Printf("auto-deploy (push): record sha failed for %s: %v", project.Name, err)
+	}
 }
 
 // gitHTTPAuth authenticates a Git Smart HTTP request using HTTP Basic Auth.

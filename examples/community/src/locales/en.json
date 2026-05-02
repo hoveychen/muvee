@@ -13,6 +13,10 @@
     "runningCount": "{{count}} apps online",
     "loginRequired": "Login required",
     "noPreview": "Preview unavailable",
+    "skillLabel": "Claude skill",
+    "skillCopy": "Copy",
+    "skillCopied": "Copied",
+    "skillDesc": "Add this URL as a Claude skill so your agent can deploy projects on this private cloud.",
     "emptyTitle": "No apps running",
     "emptyDesc": "Projects will appear here once they are deployed and running",
     "authModal": {

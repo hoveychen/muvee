@@ -69,3 +69,18 @@ All configuration is via environment variables.
 :::info Registry credentials and BASE_DOMAIN are distributed automatically
 Agents fetch `REGISTRY_ADDR`, `REGISTRY_USER`, `REGISTRY_PASSWORD`, and `BASE_DOMAIN` from the control plane via `GET /api/agent/config` on startup. You only need to set these on the control plane — there is no need to configure them on individual agent nodes.
 :::
+
+## Runtime settings (admin UI)
+
+A few knobs are stored in the `system_settings` table and edited through
+the admin UI rather than environment variables. They take effect without a
+restart.
+
+| Key | Default | Notes |
+|---|---|---|
+| `auto_deploy_master_enabled` | `true` | Global kill switch for both auto-deploy triggers. |
+| `auto_deploy_poll_interval_seconds` | `60` | Git poll cadence for external repos (min `10`). |
+| `auto_deploy_image_watch_interval_seconds` | `600` | Image-digest poll cadence for compose projects (min `60`). |
+
+See [Auto Deploy](./auto-deploy) for the full behaviour and the per-project
+toggle.

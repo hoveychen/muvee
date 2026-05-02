@@ -5,6 +5,7 @@ package gitrepo
 import (
 	"compress/flate"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,6 +50,11 @@ func DeleteRepo(repoPath string) error {
 // control can be checked.
 type AuthFunc func(r *http.Request, projectID uuid.UUID) error
 
+// PostReceiveFunc is invoked after a successful git-receive-pack so the caller
+// can react to a push (e.g. trigger an auto-deploy). It runs synchronously
+// before the HTTP response completes; the caller should return quickly.
+type PostReceiveFunc func(ctx context.Context, projectID uuid.UUID, repoPath string)
+
 // reInfoRefs matches /git/{uuid}.git/info/refs
 // reService matches /git/{uuid}.git/git-{service}
 var (
@@ -58,7 +64,9 @@ var (
 
 // HTTPHandler returns an http.Handler that implements the Git Smart HTTP
 // protocol. It should be mounted at the server root (it matches /git/...).
-func HTTPHandler(basePath string, authFn AuthFunc) http.Handler {
+// onPostReceive may be nil; when provided, it is called after each successful
+// git-receive-pack so callers can wire push-triggered behaviour.
+func HTTPHandler(basePath string, authFn AuthFunc, onPostReceive PostReceiveFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
@@ -106,7 +114,10 @@ func HTTPHandler(basePath string, authFn AuthFunc) http.Handler {
 				http.Error(w, "repository not found", http.StatusNotFound)
 				return
 			}
-			serveService(w, r, repoPath, service)
+			ok := serveService(w, r, repoPath, service)
+			if ok && service == "git-receive-pack" && onPostReceive != nil {
+				onPostReceive(r.Context(), projectID, repoPath)
+			}
 			return
 		}
 
@@ -134,8 +145,10 @@ func serveInfoRefs(w http.ResponseWriter, r *http.Request, repoPath, service str
 	w.Write(out)
 }
 
-// serveService handles POST /git-{upload,receive}-pack
-func serveService(w http.ResponseWriter, r *http.Request, repoPath, service string) {
+// serveService handles POST /git-{upload,receive}-pack. Returns true when the
+// underlying git command exited cleanly so callers can wire post-success
+// behaviour (e.g. an auto-deploy trigger after a successful receive-pack).
+func serveService(w http.ResponseWriter, r *http.Request, repoPath, service string) bool {
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
 	w.Header().Set("Cache-Control", "no-cache")
 
@@ -146,7 +159,7 @@ func serveService(w http.ResponseWriter, r *http.Request, repoPath, service stri
 		gz, err := gzip.NewReader(body)
 		if err != nil {
 			http.Error(w, "bad gzip", http.StatusBadRequest)
-			return
+			return false
 		}
 		defer gz.Close()
 		body = gz
@@ -162,8 +175,37 @@ func serveService(w http.ResponseWriter, r *http.Request, repoPath, service stri
 	if err := cmd.Run(); err != nil {
 		// If we've already started writing, we can't send an HTTP error.
 		// The git client will see the broken stream and report the error.
-		return
+		return false
 	}
+	return true
+}
+
+// HeadSHA returns the current commit SHA at the tip of `branch` in the bare
+// repository at repoPath. Returns an empty string if the branch is not
+// present (e.g. the repo has no commits, or the push targeted a different
+// branch).
+func HeadSHA(ctx context.Context, repoPath, branch string) string {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "rev-parse", "refs/heads/"+branch)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// ReadBlobAtBranch returns the contents of `path` at the tip of `branch` in
+// the bare repository at repoPath. Used by the image-digest watcher to fetch
+// docker-compose.yml without checking out a working tree. Returns
+// (nil, nil) if the path or the branch does not exist.
+func ReadBlobAtBranch(ctx context.Context, repoPath, branch, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "show", "refs/heads/"+branch+":"+path)
+	out, err := cmd.Output()
+	if err != nil {
+		// `git show` returns non-zero for missing refs/paths; treat as "not
+		// found" so callers can skip without error.
+		return nil, nil
+	}
+	return out, nil
 }
 
 // pktFlush is the git pkt-line flush packet.

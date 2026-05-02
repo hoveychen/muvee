@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/hoveychen/muvee/internal/store"
 )
@@ -49,11 +50,14 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 
 	// Allowed keys (extend as needed)
 	allowed := map[string]bool{
-		"onboarded":   true,
-		"site_name":   true,
-		"logo_url":    true,
-		"favicon_url": true,
-		"access_mode": true,
+		"onboarded":                         true,
+		"site_name":                         true,
+		"logo_url":                          true,
+		"favicon_url":                       true,
+		"access_mode":                       true,
+		"auto_deploy_master_enabled":               true,
+		"auto_deploy_poll_interval_seconds":        true,
+		"auto_deploy_image_watch_interval_seconds": true,
 	}
 
 	ctx := r.Context()
@@ -66,6 +70,24 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 			case store.AccessModeOpen, store.AccessModeInvite, store.AccessModeRequest:
 			default:
 				jsonErr(w, fmt.Errorf("invalid access_mode: %q", v), http.StatusBadRequest)
+				return
+			}
+		}
+		if k == "auto_deploy_master_enabled" && v != "true" && v != "false" {
+			jsonErr(w, fmt.Errorf("auto_deploy_master_enabled must be 'true' or 'false'"), http.StatusBadRequest)
+			return
+		}
+		if k == "auto_deploy_poll_interval_seconds" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 10 {
+				jsonErr(w, fmt.Errorf("auto_deploy_poll_interval_seconds must be an integer >= 10"), http.StatusBadRequest)
+				return
+			}
+		}
+		if k == "auto_deploy_image_watch_interval_seconds" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 60 {
+				jsonErr(w, fmt.Errorf("auto_deploy_image_watch_interval_seconds must be an integer >= 60"), http.StatusBadRequest)
 				return
 			}
 		}

@@ -13,6 +13,11 @@ import (
 type Scheduler struct {
 	store       *store.Store
 	agentSecret string // shared secret for agent auth to hosted git repos
+	// Image watcher config — populated by SetImageWatchConfig at startup.
+	gitRepoBasePath  string
+	registryAddr     string
+	registryUser     string
+	registryPassword string
 }
 
 func New(st *store.Store) *Scheduler {
@@ -22,6 +27,19 @@ func New(st *store.Store) *Scheduler {
 // SetGitHostingConfig configures the scheduler for hosted git repo builds.
 func (s *Scheduler) SetGitHostingConfig(agentSecret string) {
 	s.agentSecret = agentSecret
+}
+
+// SetImageWatchConfig wires the values the compose image-digest watcher needs.
+// gitRepoBasePath is the on-disk root for hosted bare repos (used to read the
+// docker-compose.yml at the tracked branch's tip without checking out a tree).
+// registryAddr/User/Password are muvee's own private-registry credentials
+// (already distributed to agents); the watcher reuses them when an image's
+// host matches registryAddr, and falls back to anonymous auth otherwise.
+func (s *Scheduler) SetImageWatchConfig(gitRepoBasePath, registryAddr, registryUser, registryPassword string) {
+	s.gitRepoBasePath = gitRepoBasePath
+	s.registryAddr = registryAddr
+	s.registryUser = registryUser
+	s.registryPassword = registryPassword
 }
 
 type nodeScore struct {
@@ -166,6 +184,42 @@ func (s *Scheduler) DispatchComposeCleanup(ctx context.Context, project *store.P
 	}
 	_, err := s.store.CreateTask(ctx, task)
 	return err
+}
+
+// TriggerDeployment is the canonical entry point for "create a Deployment row
+// and dispatch the right build/deploy chain for the project". It is shared by
+// the manual-deploy API handler, the external-repo poller, and the hosted-repo
+// post-receive trigger so all three flows stay in lockstep.
+//
+// source is a free-form tag ("manual", "auto-poll", "auto-push") used only for
+// logging; it does not affect dispatch behaviour.
+func (s *Scheduler) TriggerDeployment(ctx context.Context, projectID uuid.UUID, source string) (*store.Deployment, error) {
+	project, err := s.store.GetProject(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("get project: %w", err)
+	}
+	if project == nil {
+		return nil, fmt.Errorf("project %s not found", projectID)
+	}
+	if project.ProjectType == store.ProjectTypeDomainOnly {
+		return nil, fmt.Errorf("domain_only projects cannot be deployed")
+	}
+	deployment, err := s.store.CreateDeployment(ctx, &store.Deployment{ProjectID: projectID})
+	if err != nil {
+		return nil, fmt.Errorf("create deployment: %w", err)
+	}
+	// Compose projects skip the build phase: images are pulled by `docker
+	// compose up` directly on the pinned deploy node.
+	if project.ProjectType == store.ProjectTypeCompose {
+		if err := s.DispatchDeploy(ctx, deployment, project, ""); err != nil {
+			return nil, fmt.Errorf("dispatch deploy: %w", err)
+		}
+		return deployment, nil
+	}
+	if err := s.DispatchBuild(ctx, deployment, project); err != nil {
+		return nil, fmt.Errorf("dispatch build: %w", err)
+	}
+	return deployment, nil
 }
 
 // DispatchBuild creates a build task on the best builder node.

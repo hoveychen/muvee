@@ -37,6 +37,15 @@ export interface Project {
   expose_service?: string
   expose_port?: number
   pinned_node_id?: string | null
+  // Auto-deploy: when true, the server triggers a fresh deployment whenever
+  // the tracked branch advances (push for hosted repos, poll for external).
+  auto_deploy_enabled: boolean
+  // last_tracked_commit_sha is server-managed (read-only from the client).
+  last_tracked_commit_sha: string
+  // last_tracked_image_digests is a JSON-encoded map (image -> digest) the
+  // image-digest watcher uses to detect upstream image updates for compose
+  // projects. Server-managed, read-only.
+  last_tracked_image_digests: string
   created_at: string
   updated_at: string
 }
