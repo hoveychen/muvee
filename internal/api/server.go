@@ -862,6 +862,12 @@ func validateProject(p *store.Project) error {
 		if p.GitSource != store.GitSourceExternal && p.GitSource != store.GitSourceHosted {
 			return fmt.Errorf("git_source must be 'external' or 'hosted'")
 		}
+		if strings.TrimSpace(p.DockerfilePath) == "" {
+			p.DockerfilePath = "Dockerfile"
+		}
+		if strings.TrimSpace(p.GitBranch) == "" {
+			p.GitBranch = "main"
+		}
 		if p.DomainPrefix == "" {
 			if err := validateDomainPrefix(p.Name); err != nil {
 				return fmt.Errorf("domain_prefix is required because project name %q cannot be used as a subdomain: %w", p.Name, err)

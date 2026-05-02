@@ -25,6 +25,29 @@ func TestValidateProject_DeploymentDefaults(t *testing.T) {
 	if p.DomainPrefix != "my-app" {
 		t.Errorf("expected domain_prefix defaulted to name, got %q", p.DomainPrefix)
 	}
+	if p.DockerfilePath != "Dockerfile" {
+		t.Errorf("expected dockerfile_path defaulted to %q, got %q", "Dockerfile", p.DockerfilePath)
+	}
+	if p.GitBranch != "main" {
+		t.Errorf("expected git_branch defaulted to %q, got %q", "main", p.GitBranch)
+	}
+}
+
+func TestValidateProject_DeploymentPreservesExplicitPaths(t *testing.T) {
+	p := store.Project{
+		Name:           "my-app",
+		DockerfilePath: "web/Dockerfile",
+		GitBranch:      "release",
+	}
+	if err := validateProject(&p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.DockerfilePath != "web/Dockerfile" {
+		t.Errorf("expected explicit dockerfile_path preserved, got %q", p.DockerfilePath)
+	}
+	if p.GitBranch != "release" {
+		t.Errorf("expected explicit git_branch preserved, got %q", p.GitBranch)
+	}
 }
 
 func TestValidateProject_EmptyName(t *testing.T) {
