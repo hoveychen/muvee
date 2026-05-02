@@ -222,6 +222,50 @@ const (
 	AuthRequestRejected AuthorizationRequestStatus = "rejected"
 )
 
+// AccessMode determines who is allowed to sign in and reach an authorized state.
+// Stored in system_settings under the "access_mode" key.
+type AccessMode string
+
+const (
+	// AccessModeOpen — any OAuth user passing the domain/org check is auto-authorized.
+	AccessModeOpen AccessMode = "open"
+	// AccessModeInvite — only emails on the invitations white-list (or holders
+	// of a valid invitation_link token) may sign in. Others are rejected.
+	AccessModeInvite AccessMode = "invite"
+	// AccessModeRequest — anyone passing the OAuth/domain check is created with
+	// authorized=FALSE and must request access via authorization_requests.
+	AccessModeRequest AccessMode = "request"
+)
+
+// Invitation is an email white-list entry consulted in AccessModeInvite.
+type Invitation struct {
+	ID        uuid.UUID  `db:"id"          json:"id"`
+	Email     string     `db:"email"       json:"email"`
+	InvitedBy *uuid.UUID `db:"invited_by"  json:"invited_by,omitempty"`
+	CreatedAt time.Time  `db:"created_at"  json:"created_at"`
+	// Joined display fields, populated by ListInvitations.
+	InvitedByName  string `db:"-" json:"invited_by_name,omitempty"`
+	InvitedByEmail string `db:"-" json:"invited_by_email,omitempty"`
+}
+
+// InvitationLink is a single-use access token that auto-authorizes the first
+// OAuth user who logs in carrying it. Used in AccessModeInvite.
+type InvitationLink struct {
+	ID        uuid.UUID  `db:"id"          json:"id"`
+	TokenHash string     `db:"token_hash"  json:"-"`
+	InvitedBy *uuid.UUID `db:"invited_by"  json:"invited_by,omitempty"`
+	ExpiresAt *time.Time `db:"expires_at"  json:"expires_at,omitempty"`
+	UsedAt    *time.Time `db:"used_at"     json:"used_at,omitempty"`
+	UsedBy    *uuid.UUID `db:"used_by"     json:"used_by,omitempty"`
+	CreatedAt time.Time  `db:"created_at"  json:"created_at"`
+	// Token is only populated when freshly created (one-time return) — never stored.
+	Token string `db:"-" json:"token,omitempty"`
+	// Joined display fields, populated by ListInvitationLinks.
+	InvitedByName  string `db:"-" json:"invited_by_name,omitempty"`
+	InvitedByEmail string `db:"-" json:"invited_by_email,omitempty"`
+	UsedByEmail    string `db:"-" json:"used_by_email,omitempty"`
+}
+
 // AuthorizationRequest tracks a user's request to be authorized on the platform.
 type AuthorizationRequest struct {
 	ID         uuid.UUID                  `db:"id"          json:"id"`

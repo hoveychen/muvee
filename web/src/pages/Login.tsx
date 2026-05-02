@@ -13,8 +13,11 @@ export default function LoginPage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([])
 
   const brandName = settings.site_name || 'muvee'
-  const cliPort = new URLSearchParams(window.location.search).get('port')
-  const cliHostname = new URLSearchParams(window.location.search).get('hostname')
+  const params = new URLSearchParams(window.location.search)
+  const cliPort = params.get('port')
+  const cliHostname = params.get('hostname')
+  const inviteToken = params.get('invite_token')
+  const errorCode = params.get('error')
 
   useEffect(() => {
     document.title = `${brandName} — Sign In`
@@ -23,6 +26,15 @@ export default function LoginPage() {
       .then((data: ProviderInfo[]) => setProviders(data))
       .catch(() => {})
   }, [brandName])
+
+  const errorMessage = (() => {
+    switch (errorCode) {
+      case 'not_invited': return t('login.errorNotInvited')
+      case 'domain_not_allowed': return t('login.errorDomainNotAllowed')
+      case 'oauth_failed': return t('login.errorOAuthFailed')
+      default: return errorCode ? t('login.errorGeneric') : ''
+    }
+  })()
 
   return (
     <div className="min-h-screen flex" style={{ background: 'var(--bg-base)' }}>
@@ -110,9 +122,19 @@ export default function LoginPage() {
                 {t('login.cliAuthPrompt')}
               </p>
             )}
+            {errorMessage && (
+              <p className="mb-4 px-3 py-2 rounded" style={{ color: 'var(--danger)', background: 'var(--bg-hover)', border: '1px solid var(--danger)', fontSize: '0.8125rem' }}>
+                {errorMessage}
+              </p>
+            )}
+            {inviteToken && !errorMessage && (
+              <p className="mb-4 px-3 py-2 rounded" style={{ color: 'var(--fg-muted)', background: 'var(--bg-hover)', border: '1px solid var(--accent)', fontSize: '0.8125rem' }}>
+                {t('login.invitePresent')}
+              </p>
+            )}
             <div className="flex flex-col gap-3">
               {providers.map(p => (
-                <ProviderButton key={p.id} provider={p} cliPort={cliPort} cliHostname={cliHostname} />
+                <ProviderButton key={p.id} provider={p} cliPort={cliPort} cliHostname={cliHostname} inviteToken={inviteToken} />
               ))}
             </div>
           </div>
@@ -129,11 +151,13 @@ export default function LoginPage() {
   )
 }
 
-function ProviderButton({ provider, cliPort, cliHostname }: { provider: ProviderInfo; cliPort: string | null; cliHostname: string | null }) {
+function ProviderButton({ provider, cliPort, cliHostname, inviteToken }: { provider: ProviderInfo; cliPort: string | null; cliHostname: string | null; inviteToken: string | null }) {
   const { t } = useTranslation()
+  const inviteQuery = inviteToken ? `&invite_token=${encodeURIComponent(inviteToken)}` : ''
+  const inviteQueryFirst = inviteToken ? `?invite_token=${encodeURIComponent(inviteToken)}` : ''
   const href = cliPort
-    ? `/auth/cli/login?port=${cliPort}&provider=${provider.id}${cliHostname ? `&hostname=${encodeURIComponent(cliHostname)}` : ''}`
-    : `/auth/${provider.id}/login`
+    ? `/auth/cli/login?port=${cliPort}&provider=${provider.id}${cliHostname ? `&hostname=${encodeURIComponent(cliHostname)}` : ''}${inviteQuery}`
+    : `/auth/${provider.id}/login${inviteQueryFirst}`
   return (
     <a
       href={href}

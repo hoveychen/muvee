@@ -150,7 +150,13 @@ func (s *Service) AuthCodeURL(providerName, state string) (string, error) {
 	return p.AuthCodeURL(state), nil
 }
 
-func (s *Service) HandleCallback(ctx context.Context, providerName, code string) (*store.User, string, error) {
+// ErrNotInvited is returned by HandleCallback when access_mode is "invite" and
+// the user is neither on the email white-list nor carrying a valid invitation
+// link token. The frontend matches on this string to render a friendly
+// "contact your administrator" hint instead of a generic 401.
+var ErrNotInvited = fmt.Errorf("not invited; please contact your administrator")
+
+func (s *Service) HandleCallback(ctx context.Context, providerName, code, inviteToken string) (*store.User, string, error) {
 	p, ok := s.providers[providerName]
 	if !ok {
 		return nil, "", fmt.Errorf("unknown provider %q", providerName)
@@ -170,22 +176,105 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code string)
 		}
 	}
 
-	user, err := s.store.UpsertUser(ctx, email, name, avatarURL)
+	mode := s.accessMode(ctx)
+	_, isAdmin := s.adminEmails[email]
+
+	// Pre-flight checks for invite mode: figure out whether this email is
+	// invited (white-list), holds a valid one-time link, or — for already
+	// existing accounts — gets to keep signing in regardless. New accounts
+	// matching none of these are rejected without ever being created.
+	emailInvited := false
+	var consumeLink *store.InvitationLink
+	if mode == store.AccessModeInvite && !isAdmin {
+		invited, err := s.store.IsEmailInvited(ctx, email)
+		if err != nil {
+			return nil, "", fmt.Errorf("check invitation: %w", err)
+		}
+		emailInvited = invited
+		if !emailInvited && inviteToken != "" {
+			link, err := s.store.GetValidInvitationLinkByHash(ctx, hashInviteToken(inviteToken), time.Now())
+			if err != nil {
+				return nil, "", fmt.Errorf("check invite link: %w", err)
+			}
+			consumeLink = link
+		}
+		if !emailInvited && consumeLink == nil {
+			existing, err := s.store.GetUserByEmail(ctx, email)
+			if err != nil {
+				return nil, "", fmt.Errorf("lookup user: %w", err)
+			}
+			if existing == nil {
+				return nil, "", ErrNotInvited
+			}
+		}
+	}
+
+	// In request mode, brand-new non-admin accounts default to authorized=FALSE
+	// so they have to go through the request flow. Other modes default to TRUE
+	// for new accounts (invite mode reaches here only when invited or
+	// link-consumed; open mode is unrestricted). UpsertUser only applies this
+	// on INSERT — existing rows preserve their flag.
+	authorizedOnInsert := true
+	if mode == store.AccessModeRequest && !isAdmin {
+		authorizedOnInsert = false
+	}
+
+	user, _, err := s.store.UpsertUser(ctx, email, name, avatarURL, authorizedOnInsert)
 	if err != nil {
 		return nil, "", fmt.Errorf("upsert user: %w", err)
 	}
+
 	// Auto-promote users listed in ADMIN_EMAILS on every login.
-	if _, isAdmin := s.adminEmails[email]; isAdmin && user.Role != store.UserRoleAdmin {
+	if isAdmin && user.Role != store.UserRoleAdmin {
 		if err := s.store.SetUserRole(ctx, user.ID, store.UserRoleAdmin); err != nil {
 			return nil, "", fmt.Errorf("promote admin: %w", err)
 		}
 		user.Role = store.UserRoleAdmin
 	}
+
+	// In invite mode, an existing-but-unauthorized user being newly invited (or
+	// arriving with a valid link) should be flipped to authorized on this login.
+	if mode == store.AccessModeInvite && !user.Authorized && (emailInvited || consumeLink != nil) {
+		if err := s.store.SetUserAuthorized(ctx, user.ID, true); err != nil {
+			return nil, "", fmt.Errorf("authorize user: %w", err)
+		}
+		user.Authorized = true
+	}
+
+	if consumeLink != nil {
+		// Best-effort: a concurrent login may have already consumed the link.
+		// We've already promoted the user above, so swallow the error.
+		_ = s.store.ConsumeInvitationLink(ctx, consumeLink.ID, user.ID)
+	}
+
 	jwtToken, err := s.signJWT(user)
 	if err != nil {
 		return nil, "", err
 	}
 	return user, jwtToken, nil
+}
+
+// accessMode returns the current AccessMode setting, defaulting to Open when
+// unset or unreadable so a misconfigured DB doesn't lock everyone out.
+func (s *Service) accessMode(ctx context.Context) store.AccessMode {
+	v, err := s.store.GetSetting(ctx, "access_mode")
+	if err != nil || v == "" {
+		return store.AccessModeOpen
+	}
+	switch store.AccessMode(v) {
+	case store.AccessModeOpen, store.AccessModeInvite, store.AccessModeRequest:
+		return store.AccessMode(v)
+	}
+	return store.AccessModeOpen
+}
+
+// HashInviteToken returns the sha256 hex digest of an invitation-link token,
+// used for both writes (storage) and reads (lookups).
+func HashInviteToken(token string) string { return hashInviteToken(token) }
+
+func hashInviteToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Service) checkDomain(email string) error {

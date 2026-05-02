@@ -145,6 +145,14 @@ export const api = {
     listAuthorizationRequests: () => request<import('./types').AuthorizationRequest[]>('/api/admin/authorization/requests'),
     approveAuthorization: (id: string) => request(`/api/admin/authorization/requests/${id}/approve`, { method: 'PUT' }),
     rejectAuthorization: (id: string) => request(`/api/admin/authorization/requests/${id}/reject`, { method: 'PUT' }),
+    listInvitations: () => request<import('./types').Invitation[]>('/api/admin/invitations'),
+    createInvitation: (email: string) =>
+      request<import('./types').Invitation>('/api/admin/invitations', { method: 'POST', body: JSON.stringify({ email }) }),
+    deleteInvitation: (id: string) => request(`/api/admin/invitations/${id}`, { method: 'DELETE' }),
+    listInvitationLinks: () => request<import('./types').InvitationLink[]>('/api/admin/invitation-links'),
+    createInvitationLink: (data: { expires_in_days?: number }) =>
+      request<import('./types').InvitationLink>('/api/admin/invitation-links', { method: 'POST', body: JSON.stringify(data) }),
+    deleteInvitationLink: (id: string) => request(`/api/admin/invitation-links/${id}`, { method: 'DELETE' }),
     health: () => request<import('./types').HealthReport>('/api/admin/health'),
     certs: () => request<import('./types').CertReport>('/api/admin/certs'),
     tunnels: () => request<import('./types').ActiveTunnel[]>('/api/admin/tunnels'),
