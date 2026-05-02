@@ -708,6 +708,48 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
       {!isTunnelType && field(t('projectDetail.config.gitUrl'), 'git_url')}
       {!isTunnelType && field(t('projectDetail.config.gitBranch'), 'git_branch')}
 
+      {!isTunnelType && (
+        <div>
+          <label className="form-label">
+            {t('projectDetail.config.autoDeploy').toUpperCase()}
+          </label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <div
+              onClick={() => onChange({ ...form, auto_deploy_enabled: !form.auto_deploy_enabled })}
+              className="relative rounded-full transition-colors duration-200"
+              style={{
+                width: '36px', height: '20px',
+                background: form.auto_deploy_enabled ? 'var(--accent)' : 'var(--border)',
+                cursor: 'pointer',
+              }}
+            >
+              <div
+                className="absolute top-1 rounded-full transition-transform duration-200"
+                style={{
+                  width: '12px', height: '12px',
+                  background: '#ffffff',
+                  left: form.auto_deploy_enabled ? '18px' : '4px',
+                }}
+              />
+            </div>
+            <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+              {form.auto_deploy_enabled ? t('projectDetail.config.enabled') : t('projectDetail.config.disabled')}
+            </span>
+          </label>
+          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            {t('projectDetail.config.autoDeployHint')}
+          </p>
+          {form.auto_deploy_enabled && (
+            <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)', fontFamily: MONO }}>
+              {t('projectDetail.config.autoDeployLastSha')}:{' '}
+              {form.last_tracked_commit_sha
+                ? form.last_tracked_commit_sha.slice(0, 12)
+                : t('projectDetail.config.autoDeployNever')}
+            </p>
+          )}
+        </div>
+      )}
+
       <div>
         <label className="form-label">
           {t('projectDetail.config.owner').toUpperCase()}

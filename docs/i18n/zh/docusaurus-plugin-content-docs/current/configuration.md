@@ -67,3 +67,16 @@ sidebar_position: 3
 :::info 镜像仓库凭据和 BASE_DOMAIN 自动下发
 Agent 在启动时通过 `GET /api/agent/config` 从控制平面获取 `REGISTRY_ADDR`、`REGISTRY_USER`、`REGISTRY_PASSWORD` 和 `BASE_DOMAIN`。这些配置只需在控制平面上设置一次——无需在各个 Agent 节点上单独配置。
 :::
+
+## 运行时设置（管理员后台）
+
+少数几个开关存放在 `system_settings` 表里，通过管理员后台编辑，
+而不是环境变量。改动无需重启即可生效。
+
+| 键 | 默认值 | 说明 |
+|---|---|---|
+| `auto_deploy_master_enabled` | `true` | 两条自动部署触发路径的全局开关。 |
+| `auto_deploy_poll_interval_seconds` | `60` | 外部仓库的 git 轮询间隔（最小 `10`）。 |
+| `auto_deploy_image_watch_interval_seconds` | `600` | compose 项目的 image-digest 轮询间隔（最小 `60`）。 |
+
+完整行为与项目级开关，详见 [自动部署](./auto-deploy)。

@@ -72,8 +72,21 @@ type Project struct {
 	// docker named volumes survive across redeploys. Set on first deploy and
 	// reused thereafter.
 	PinnedNodeID *uuid.UUID `db:"pinned_node_id"    json:"pinned_node_id,omitempty"`
-	CreatedAt    time.Time  `db:"created_at"           json:"created_at"`
-	UpdatedAt    time.Time  `db:"updated_at"           json:"updated_at"`
+	// AutoDeployEnabled opts the project into automatic redeploy on new commits.
+	AutoDeployEnabled bool `db:"auto_deploy_enabled" json:"auto_deploy_enabled"`
+	// LastTrackedCommitSHA is the SHA we last triggered a deployment for via the
+	// auto-deploy watcher. Compared against the live remote HEAD to decide
+	// whether a fresh deployment is needed. Server-managed: never accepted from
+	// the API write path.
+	LastTrackedCommitSHA string `db:"last_tracked_commit_sha" json:"last_tracked_commit_sha"`
+	// LastTrackedImageDigests is a JSON object mapping the literal image string
+	// from docker-compose.yml (e.g. "redis:7-alpine") to its last observed
+	// digest. Compose-only; server-managed (frozen on API write). Empty object
+	// means "not yet seeded" — the watcher records the current digests on first
+	// observation without triggering a redeploy.
+	LastTrackedImageDigests string    `db:"last_tracked_image_digests" json:"last_tracked_image_digests"`
+	CreatedAt               time.Time `db:"created_at"           json:"created_at"`
+	UpdatedAt               time.Time `db:"updated_at"           json:"updated_at"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 	// Owner display fields, populated by ListProjectsForUser / GetProject via LEFT JOIN users.

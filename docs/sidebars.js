@@ -38,6 +38,7 @@ const sidebars = {
         'agents',
         'traefik',
         'secrets',
+        'auto-deploy',
         'upgrade',
         'muveectl',
         'ai-agent',

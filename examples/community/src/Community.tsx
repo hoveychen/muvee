@@ -18,6 +18,17 @@ function getDashboardUrl(): string {
   return window.MUVEE_DASHBOARD_URL || `${getApiBase()}/projects`
 }
 
+// Branding assets (logo/favicon) come back from the API as paths relative to
+// the muvee API server (e.g. "/api/public/branding/logo-xxx.png"). The
+// community app is hosted on its own origin, so relative paths get resolved
+// against the wrong host and 404. Anchor them to MUVEE_API_BASE.
+function resolveAssetUrl(url: string): string {
+  if (!url) return url
+  if (/^(https?:|data:|blob:)/i.test(url)) return url
+  if (url.startsWith('/')) return `${getApiBase()}${url}`
+  return url
+}
+
 function fetchPublicProjects(): Promise<PublicProject[]> {
   return fetch(`${getApiBase()}/api/public/projects`)
     .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
@@ -134,7 +145,7 @@ function Header({ branding }: { branding: BrandingSettings }) {
       }}>
         {/* Logo */}
         <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
-          <img src={branding.logo_url || `${getApiBase()}/favicon.png`} alt={brandName} style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+          <img src={resolveAssetUrl(branding.logo_url) || `${getApiBase()}/favicon.png`} alt={brandName} style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
           <span style={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.02em', color: 'var(--fg-primary)' }}>
             {brandName}
           </span>
@@ -367,7 +378,7 @@ function Hero({ projectCount, branding }: { projectCount: number; branding: Bran
           color: 'var(--fg-muted)',
           marginBottom: '1.5rem',
         }}>
-          <img src={branding.logo_url || `${getApiBase()}/favicon.png`} alt="" style={{ width: '14px', height: '14px', objectFit: 'contain' }} />
+          <img src={resolveAssetUrl(branding.logo_url) || `${getApiBase()}/favicon.png`} alt="" style={{ width: '14px', height: '14px', objectFit: 'contain' }} />
           {brandName} · {t('community.platformLabel')}
         </div>
 

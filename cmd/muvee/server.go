@@ -124,8 +124,12 @@ func runServer() {
 	})
 	handler := srv.TunnelAwareHandler(mountFrontend(srv.Router()))
 
+	sched.SetImageWatchConfig(gitRepoBasePath, registryAddr, os.Getenv("REGISTRY_USER"), os.Getenv("REGISTRY_PASSWORD"))
+
 	go processBuildCompletions(ctx, st, sched)
 	go processNodeFailovers(ctx, st, sched)
+	sched.StartAutoDeployPoller(ctx)
+	sched.StartImageWatcher(ctx)
 
 	if p := os.Getenv("TRAEFIK_ACCESS_LOG_PATH"); p != "" {
 		go traefiklog.New(st, p, baseDomain).Start(ctx)

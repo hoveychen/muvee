@@ -13,6 +13,10 @@
     "runningCount": "{{count}} 个应用在线",
     "loginRequired": "需要登录",
     "noPreview": "预览不可用",
+    "skillLabel": "Claude 技能",
+    "skillCopy": "复制",
+    "skillCopied": "已复制",
+    "skillDesc": "把这个地址作为 Claude skill 添加到你的 Agent，即可让它把项目部署到这个私有云上。",
     "emptyTitle": "暂无在线应用",
     "emptyDesc": "当有项目部署并运行后，它们将出现在这里",
     "authModal": {
