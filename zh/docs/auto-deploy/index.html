@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-auto-deploy" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.7.0">
+<title data-rh="true">自动部署 | muvee</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://hoveychen.github.io/muvee/zh/docs/auto-deploy"><meta data-rh="true" property="og:locale" content="zh"><meta data-rh="true" property="og:locale:alternate" content="en"><meta data-rh="true" name="docusaurus_locale" content="zh"><meta data-rh="true" name="docsearch:language" content="zh"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="自动部署 | muvee"><meta data-rh="true" name="description" content="muvee 可以在项目源发生变化时自动重新部署。两条独立触发路径"><meta data-rh="true" property="og:description" content="muvee 可以在项目源发生变化时自动重新部署。两条独立触发路径"><link data-rh="true" rel="icon" href="/muvee/zh/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://hoveychen.github.io/muvee/zh/docs/auto-deploy"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/auto-deploy" hreflang="en"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/zh/docs/auto-deploy" hreflang="zh"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/auto-deploy" hreflang="x-default"><link rel="stylesheet" href="/muvee/zh/assets/css/styles.bb726f2a.css">
+<script src="/muvee/zh/assets/js/runtime~main.be002ae6.js" defer="defer"></script>
+<script src="/muvee/zh/assets/js/main.994dacb8.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="跳到主要内容"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">跳到主要内容</a></div><nav aria-label="主导航" class="navbar navbar--fixed-top navbar--dark"><div class="navbar__inner"><div class="navbar__items"><button aria-label="切换导航栏" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/muvee/zh/"><div class="navbar__logo"><img src="/muvee/zh/img/icon.png" alt="muvee Logo" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/muvee/zh/img/icon.png" alt="muvee Logo" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate">muvee</b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/muvee/zh/docs/getting-started">文档</a></div><div class="navbar__items navbar__items--right"><div class="navbar__item dropdown dropdown--hoverable dropdown--right"><a href="#" aria-haspopup="true" aria-expanded="false" role="button" class="navbar__link"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" class="iconLanguage_nlXk"><path fill="currentColor" d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"></path></svg>中文</a><ul class="dropdown__menu"><li><a href="/muvee/docs/auto-deploy" target="_self" rel="noopener noreferrer" class="dropdown__link" lang="en">English</a></li><li><a href="/muvee/zh/docs/auto-deploy" target="_self" rel="noopener noreferrer" class="dropdown__link dropdown__link--active" lang="zh">中文</a></li></ul></div><a href="https://github.com/hoveychen/muvee" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="回到顶部" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="文档侧边栏" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/muvee/zh/docs/getting-started">快速入门</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/muvee/zh/docs/auth/auth-google">Authentication</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/muvee/zh/docs/architecture">架构设计</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/muvee/zh/docs/agents">运维操作</a></div><ul style="display:block;overflow:visible;height:auto" class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/muvee/zh/docs/agents">Agent 节点</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/muvee/zh/docs/traefik">Traefik 路由</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/muvee/zh/docs/secrets">密钥管理</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/muvee/zh/docs/auto-deploy">自动部署</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/muvee/zh/docs/upgrade">版本升级</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/muvee/zh/docs/muveectl">muveectl 命令行工具</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/muvee/zh/docs/ai-agent">AI Agent Integration</a></li></ul></li></ul></nav></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="页面路径"><ul class="breadcrumbs" itemscope="" itemtype="https://schema.org/BreadcrumbList"><li class="breadcrumbs__item"><a aria-label="主页面" class="breadcrumbs__link" href="/muvee/zh/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">运维操作</span><meta itemprop="position" content="1"></li><li itemscope="" itemprop="itemListElement" itemtype="https://schema.org/ListItem" class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link" itemprop="name">自动部署</span><meta itemprop="position" content="2"></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">本页总览</button></div><div class="theme-doc-markdown markdown"><header><h1>自动部署</h1></header>
+<p>muvee 可以在项目源发生变化时自动重新部署。两条独立触发路径
+共同接入 <code>Scheduler.TriggerDeployment</code>：</p>
+<ol>
+<li><strong>Git 触发</strong> — 当跟踪的分支前进时触发。托管仓库通过
+<code>git push</code> 即时触发；外部仓库通过轮询触发。</li>
+<li><strong>Image-digest 触发</strong> — 仅 <code>compose</code> 项目可用。当
+<code>docker-compose.yml</code> 引用的任意镜像在上游发生 digest 变化
+时触发，即使 git 树没有动也会触发（watchtower 风格）。</li>
+</ol>
+<p>两条触发路径都受全局开关控制，并以 goroutine 形式运行在控制
+平面上。</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="在项目上启用">在项目上启用<a href="#在项目上启用" class="hash-link" aria-label="在项目上启用的直接链接" title="在项目上启用的直接链接">​</a></h2>
+<p>进入项目详情页，打开 <strong>自动部署</strong> 开关。该开关对 tunnel
+项目隐藏；对 <code>domain_only</code> 项目会被拒绝（这类项目没有可部署
+的内容）。</p>
+<p>项目首次启用自动部署时：</p>
+<ul>
+<li>Git 触发：<code>last_tracked_commit_sha</code> 初始为空，下一次轮询
+（或下一次 push）就会触发部署以对齐状态。这是预期行为。</li>
+<li>Image-digest 触发（仅 compose）：watcher 的第一次 tick 会
+<em>仅记录</em> 当前 digest，不触发部署。后续 tick 才会比较并在
+digest 移动时触发。</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="全局开关与轮询间隔">全局开关与轮询间隔<a href="#全局开关与轮询间隔" class="hash-link" aria-label="全局开关与轮询间隔的直接链接" title="全局开关与轮询间隔的直接链接">​</a></h2>
+<p>两条触发路径都由 <code>auto_deploy_master_enabled</code> 控制。在管理员
+设置页将其设为 <code>false</code>，可以在不丢失各项目开关状态的情况下
+全局暂停自动部署。</p>
+<table><thead><tr><th>设置项</th><th>默认</th><th>最小值</th><th>说明</th></tr></thead><tbody><tr><td><code>auto_deploy_master_enabled</code></td><td><code>true</code></td><td>—</td><td>顶级开关</td></tr><tr><td><code>auto_deploy_poll_interval_seconds</code></td><td><code>60</code></td><td><code>10</code></td><td>Git 轮询间隔（仅外部仓库）</td></tr><tr><td><code>auto_deploy_image_watch_interval_seconds</code></td><td><code>600</code></td><td><code>60</code></td><td>Image-digest 轮询间隔（仅 compose）</td></tr></tbody></table>
+<p>调低 image-watch 间隔时需谨慎 — Docker Hub 匿名访问的限速是
+每 IP 每 6 小时约 200 次请求。</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="git-触发详解">Git 触发详解<a href="#git-触发详解" class="hash-link" aria-label="Git 触发详解的直接链接" title="Git 触发详解的直接链接">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="托管仓库push-驱动">托管仓库（push 驱动）<a href="#托管仓库push-驱动" class="hash-link" aria-label="托管仓库（push 驱动）的直接链接" title="托管仓库（push 驱动）的直接链接">​</a></h3>
+<p>git smart-HTTP handler 会在 <code>git-receive-pack</code> 成功后调用一个
+post-receive 回调。服务端比较新的 HEAD 与
+<code>last_tracked_commit_sha</code>，发生变化则调用 <code>TriggerDeployment</code>
+并写回新的 SHA。</p>
+<p>这条路径是事件驱动的：每一次 push 都会触发。如果你连续 push
+11 个 commit，就会看到 11 次重新部署尝试。如果重新部署成本较
+高，可以考虑先 squash 再 push。</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="外部仓库轮询">外部仓库（轮询）<a href="#外部仓库轮询" class="hash-link" aria-label="外部仓库（轮询）的直接链接" title="外部仓库（轮询）的直接链接">​</a></h3>
+<p>每隔 <code>auto_deploy_poll_interval_seconds</code>，控制平面会对每个启用
+了自动部署的外部项目执行 <code>git ls-remote</code>，并把返回的 SHA 与
+<code>last_tracked_commit_sha</code> 比较。SSH 与 HTTPS 鉴权方式与构建器
+保持一致：</p>
+<ul>
+<li><strong>HTTPS + 密码型密钥</strong> — 在执行单次 <code>ls-remote</code> 时，把 URL
+改写为 <code>https://&lt;git_username&gt;:&lt;token&gt;@host/...</code>。</li>
+<li><strong>SSH key 密钥</strong> — 写入临时文件并通过
+<code>GIT_SSH_COMMAND=&quot;ssh -i &lt;tempfile&gt; -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null&quot;</code> 注入。</li>
+</ul>
+<p>每个 tick 内的外部轮询是串行的。某个项目的 <code>ls-remote</code> 慢或
+卡住时，会在 30s 处超时，下一个项目继续。</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="image-digest-触发详解">Image-digest 触发详解<a href="#image-digest-触发详解" class="hash-link" aria-label="Image-digest 触发详解的直接链接" title="Image-digest 触发详解的直接链接">​</a></h2>
+<p>Compose 部署不会产生构建出来的镜像 — 它在部署节点上执行
+<code>docker compose pull</code> 拉取声明的镜像。所以即使 git 树没动，
+重新部署也可能是有意义的：当依赖的镜像（<code>redis:7-alpine</code>、
+<code>your-org/api:main</code> 等）在上游有了新 digest 时。</p>
+<p>每隔 <code>auto_deploy_image_watch_interval_seconds</code>，watcher：</p>
+<ol>
+<li>列出所有 <code>auto_deploy_enabled = TRUE</code> 的 compose 项目。</li>
+<li>在跟踪分支末端拉取项目的 <code>compose_file_path</code>：<!-- -->
+<ul>
+<li><strong>托管</strong> — 对磁盘上的裸仓库执行
+<code>git show refs/heads/&lt;branch&gt;:&lt;compose_file_path&gt;</code>。</li>
+<li><strong>外部</strong> — 浅克隆仓库到临时目录，读取文件，再清理临时
+目录。</li>
+</ul>
+</li>
+<li>从 YAML 解析 <code>services.*.image</code> 字符串。包含 <code>${VAR}</code> 或
+<code>$VAR</code> 插值的字符串会被跳过（INFO 级别日志）。compose 转义
+<code>$$</code> 会被当作字面量 <code>$</code> 处理，不视为变量。</li>
+<li>通过 OCI registry HTTP API
+（<code>go-containerregistry/pkg/crane</code>）解析每个镜像的 manifest
+digest。鉴权按 host 选择：<!-- -->
+<ul>
+<li>镜像 host 与 <code>REGISTRY_ADDR</code> 匹配 → 使用
+<code>REGISTRY_USER</code> / <code>REGISTRY_PASSWORD</code> 鉴权。</li>
+<li>其余 → 匿名访问。这适用于 Docker Hub、ghcr.io 公开镜像
+等。其它私有 registry 当前版本不支持（这与 compose 部署
+本身的限制一致）。</li>
+</ul>
+</li>
+<li>与 <code>last_tracked_image_digests</code>（项目行上的 JSON map）比较。
+如果任意镜像的 digest 移动了，调用 <code>TriggerDeployment</code> 并
+写入新的 map。compose 文件里新出现的镜像（即用户新加了一个
+service）只记录、不触发 — 那是 git 触发的责任，因为编辑
+compose 文件总会落成一次 commit。</li>
+</ol>
+<p>每个镜像的 digest 查询超时为 30s。一次失败不会清空之前记录的
+digest，所以瞬时的 registry 抖动不会在下一个 tick 误触发重新
+部署。</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="registry-连通性要求">Registry 连通性要求<a href="#registry-连通性要求" class="hash-link" aria-label="Registry 连通性要求的直接链接" title="Registry 连通性要求的直接链接">​</a></h2>
+<p>image-digest watcher 需要 <strong>控制平面本身</strong> 能访问到 registry。
+这相对原本&quot;控制平面从不直接联系 registry&quot;的约束是一个小的
+放宽 — agent 仍然承担所有 <code>docker push</code> / <code>docker pull</code> 工作，
+但 watcher 现在也会从控制平面发出
+<code>HEAD /v2/&lt;repo&gt;/manifests/&lt;tag&gt;</code> 请求。</p>
+<p>启动时 watcher 会探测 <code>https://&lt;REGISTRY_ADDR&gt;/v2/</code>：</p>
+<ul>
+<li>HTTP <code>200</code> 或 <code>401</code> → registry 可达，watcher 启动。</li>
+<li>其它情况（DNS 失败、连接被拒、超时、5xx）→ watcher 打印
+warning 并干净退出。服务器其余部分不受影响；git 触发依然
+正常工作。</li>
+</ul>
+<p>如果你把控制平面与 registry 部署在控制平面无法访问 registry
+的网络拓扑里，image-digest 触发会被静默禁用。git 触发仍然
+有效。</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="compose-特有行为">Compose 特有行为<a href="#compose-特有行为" class="hash-link" aria-label="Compose 特有行为的直接链接" title="Compose 特有行为的直接链接">​</a></h2>
+<p><code>compose</code> 项目在首次部署时被钉到一个固定的部署节点，以保证
+docker named volume 在多次重新部署间保留。如果该节点离线，
+两条触发路径上的自动部署都会以 <code>refusing to migrate</code> 失败，
+被记录但不会打断其它项目的 tick。请关注项目部署列表里的连续
+失败。</p>
+<p><code>expose_service</code> 与 <code>expose_port</code> 必须在项目上声明，  自动部署
+才能产生有效任务 — 否则 <code>dispatchComposeDeploy</code> 会拒绝。</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="当前-尚未-覆盖的场景">当前 <em>尚未</em> 覆盖的场景<a href="#当前-尚未-覆盖的场景" class="hash-link" aria-label="当前-尚未-覆盖的场景的直接链接" title="当前-尚未-覆盖的场景的直接链接">​</a></h2>
+<ul>
+<li>其它私有 registry（带 PAT 的 ghcr.io、ECR、阿里云 ACR
+等）。image-digest watcher 会回退为匿名访问，对这些 registry
+保护的镜像会失败收场。</li>
+<li>push 触发的项目级限流（一次 50 个 commit 的 push 会触发 50
+次重新部署；轮询路径天然去重）。</li>
+<li>外部仓库的并行轮询（每个 tick 内项目串行检查）。</li>
+</ul>
+<p>这些都不复杂，等具体场景出现时再加即可。</p></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col"><a href="https://github.com/hoveychen/muvee/tree/main/docs/docs/auto-deploy.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>编辑此页</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="pagination-nav docusaurus-mt-lg" aria-label="文件选项卡"><a class="pagination-nav__link pagination-nav__link--prev" href="/muvee/zh/docs/secrets"><div class="pagination-nav__sublabel">上一页</div><div class="pagination-nav__label">密钥管理</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/muvee/zh/docs/upgrade"><div class="pagination-nav__sublabel">下一页</div><div class="pagination-nav__label">版本升级</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#在项目上启用" class="table-of-contents__link toc-highlight">在项目上启用</a></li><li><a href="#全局开关与轮询间隔" class="table-of-contents__link toc-highlight">全局开关与轮询间隔</a></li><li><a href="#git-触发详解" class="table-of-contents__link toc-highlight">Git 触发详解</a><ul><li><a href="#托管仓库push-驱动" class="table-of-contents__link toc-highlight">托管仓库（push 驱动）</a></li><li><a href="#外部仓库轮询" class="table-of-contents__link toc-highlight">外部仓库（轮询）</a></li></ul></li><li><a href="#image-digest-触发详解" class="table-of-contents__link toc-highlight">Image-digest 触发详解</a></li><li><a href="#registry-连通性要求" class="table-of-contents__link toc-highlight">Registry 连通性要求</a></li><li><a href="#compose-特有行为" class="table-of-contents__link toc-highlight">Compose 特有行为</a></li><li><a href="#当前-尚未-覆盖的场景" class="table-of-contents__link toc-highlight">当前 <em>尚未</em> 覆盖的场景</a></li></ul></div></div></div></div></main></div></div></div><footer class="footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="col footer__col"><div class="footer__title">文档</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/muvee/zh/docs/getting-started">快速入门</a></li><li class="footer__item"><a class="footer__link-item" href="/muvee/zh/docs/architecture">架构设计</a></li></ul></div><div class="col footer__col"><div class="footer__title">社区</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/hoveychen/muvee/issues" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Issues<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li><li class="footer__item"><a href="https://github.com/hoveychen/muvee/discussions" target="_blank" rel="noopener noreferrer" class="footer__link-item">讨论区<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 The muvee Authors. Licensed under Apache 2.0.</div></div></div></footer></div>
+</body>
+</html>
