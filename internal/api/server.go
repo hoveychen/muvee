@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"crypto/sha256"
 	"encoding/hex"
@@ -293,6 +294,14 @@ func (s *Server) Router() http.Handler {
 			r.Get("/api/admin/authorization/requests", s.handleListAuthorizationRequests)
 			r.Put("/api/admin/authorization/requests/{id}/approve", s.handleApproveAuthorizationRequest)
 			r.Put("/api/admin/authorization/requests/{id}/reject", s.handleRejectAuthorizationRequest)
+			// Invitations: email white-list (used in invite-only access mode)
+			r.Get("/api/admin/invitations", s.handleListInvitations)
+			r.Post("/api/admin/invitations", s.handleCreateInvitation)
+			r.Delete("/api/admin/invitations/{id}", s.handleDeleteInvitation)
+			// Single-use invitation links (used in invite-only access mode)
+			r.Get("/api/admin/invitation-links", s.handleListInvitationLinks)
+			r.Post("/api/admin/invitation-links", s.handleCreateInvitationLink)
+			r.Delete("/api/admin/invitation-links/{id}", s.handleDeleteInvitationLink)
 		})
 	})
 
@@ -341,6 +350,15 @@ func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge: 300, HttpOnly: true, Path: "/",
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
+	// Optional invitation-link token: stash it in a short-lived cookie so the
+	// callback can authorize a brand-new user under invite-only mode.
+	if t := strings.TrimSpace(r.URL.Query().Get("invite_token")); t != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name: "muvee_invite_token", Value: t,
+			MaxAge: 600, HttpOnly: true, Path: "/",
+			SameSite: http.SameSiteLaxMode, Secure: true,
+		})
+	}
 	s.oauthPending.Store(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
@@ -414,8 +432,26 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	if code == "" {
 		code = r.URL.Query().Get("authCode") // DingTalk uses authCode instead of code
 	}
-	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, code)
+
+	// Pull the optional invitation token stashed by handleProviderLogin and
+	// always clear the cookie so a stale token from an aborted flow can't
+	// leak into a later login.
+	inviteToken := ""
+	if c, err := r.Cookie("muvee_invite_token"); err == nil {
+		inviteToken = c.Value
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "muvee_invite_token", Value: "", MaxAge: -1, Path: "/",
+	})
+
+	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, code, inviteToken)
 	if err != nil {
+		// Surface the not-invited case as a 403 with a known error code so the
+		// frontend can render a friendly hint instead of a generic 401.
+		if errors.Is(err, auth.ErrNotInvited) {
+			http.Redirect(w, r, "/login?error=not_invited", http.StatusFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
@@ -2585,17 +2621,29 @@ func (s *Server) TunnelAwareHandler(inner http.Handler) http.Handler {
 
 // ─── Authorization ──────────────────────────────────────────────────────────
 
+// accessMode reads the current AccessMode from system_settings, defaulting to
+// Open when unset / unreadable so a misconfigured DB does not lock everyone out.
+func (s *Server) accessMode(ctx context.Context) store.AccessMode {
+	v, err := s.store.GetSetting(ctx, "access_mode")
+	if err != nil || v == "" {
+		return store.AccessModeOpen
+	}
+	switch store.AccessMode(v) {
+	case store.AccessModeOpen, store.AccessModeInvite, store.AccessModeRequest:
+		return store.AccessMode(v)
+	}
+	return store.AccessModeOpen
+}
+
 // isUserAuthorized checks whether a user is authorized to perform write operations.
-// Returns true when require_authorization is disabled, or user is admin, or user.authorized is true.
+// Admins always pass. Otherwise the access_mode determines the gate:
+//   - open: everyone authorized.
+//   - invite / request: gated on user.authorized.
 func (s *Server) isUserAuthorized(ctx context.Context, user *store.User) bool {
 	if user.Role == store.UserRoleAdmin {
 		return true
 	}
-	settings, err := s.store.GetAllSettings(ctx)
-	if err != nil {
-		return true // fail open if we can't read settings
-	}
-	if settings["require_authorization"] != "true" {
+	if s.accessMode(ctx) == store.AccessModeOpen {
 		return true
 	}
 	return user.Authorized
@@ -2615,21 +2663,21 @@ func (s *Server) requireAuthorized(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) handleAuthorizationStatus(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
-	settings, _ := s.store.GetAllSettings(r.Context())
-	requireAuth := settings["require_authorization"] == "true"
+	mode := s.accessMode(r.Context())
 
 	type statusResponse struct {
-		RequireAuthorization bool                                `json:"require_authorization"`
-		Authorized           bool                                `json:"authorized"`
-		Request              *store.AuthorizationRequest         `json:"request,omitempty"`
+		AccessMode store.AccessMode            `json:"access_mode"`
+		Authorized bool                        `json:"authorized"`
+		Request    *store.AuthorizationRequest `json:"request,omitempty"`
 	}
 
 	resp := statusResponse{
-		RequireAuthorization: requireAuth,
-		Authorized:           user.Role == store.UserRoleAdmin || !requireAuth || user.Authorized,
+		AccessMode: mode,
+		Authorized: user.Role == store.UserRoleAdmin || mode == store.AccessModeOpen || user.Authorized,
 	}
 
-	if requireAuth && user.Role != store.UserRoleAdmin {
+	// Only the request flow has a per-user pending record to surface.
+	if mode == store.AccessModeRequest && user.Role != store.UserRoleAdmin {
 		req, _ := s.store.GetAuthorizationRequestByUser(r.Context(), user.ID)
 		resp.Request = req
 	}
@@ -2640,6 +2688,10 @@ func (s *Server) handleCreateAuthorizationRequest(w http.ResponseWriter, r *http
 	user := auth.UserFromCtx(r.Context())
 	if user.Role == store.UserRoleAdmin {
 		jsonErr(w, fmt.Errorf("admins are always authorized"), http.StatusBadRequest)
+		return
+	}
+	if s.accessMode(r.Context()) != store.AccessModeRequest {
+		jsonErr(w, fmt.Errorf("requesting access is only available in request mode"), http.StatusBadRequest)
 		return
 	}
 	if user.Authorized {

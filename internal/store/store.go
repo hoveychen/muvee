@@ -46,16 +46,35 @@ func scanUser(scanner interface {
 	return scanner.Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized, &u.CreatedAt, &u.NameOverridden, &u.AvatarOverridden)
 }
 
-func (s *Store) UpsertUser(ctx context.Context, email, name, avatarURL string) (*User, error) {
+// UpsertUser inserts a new user or updates the existing one keyed by email.
+// authorizedOnInsert sets the `authorized` flag for newly created rows; for
+// existing rows the flag is preserved (callers wanting to flip it should use
+// SetUserAuthorized after the upsert). The second return value reports whether
+// the row was newly inserted (true) vs. already present (false).
+func (s *Store) UpsertUser(ctx context.Context, email, name, avatarURL string, authorizedOnInsert bool) (*User, bool, error) {
 	var u User
-	err := scanUser(s.db.QueryRow(ctx, `
-		INSERT INTO users (id, email, name, avatar_url, role, created_at)
-		VALUES ($1, $2, $3, $4, 'member', NOW())
+	var inserted bool
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO users (id, email, name, avatar_url, role, authorized, created_at)
+		VALUES ($1, $2, $3, $4, 'member', $5, NOW())
 		ON CONFLICT (email) DO UPDATE SET
 			name       = CASE WHEN users.name_overridden   THEN users.name       ELSE EXCLUDED.name       END,
 			avatar_url = CASE WHEN users.avatar_overridden THEN users.avatar_url ELSE EXCLUDED.avatar_url END
-		RETURNING `+userColumns,
-		uuid.New(), email, name, avatarURL), &u)
+		RETURNING `+userColumns+`, (xmax = 0) AS inserted`,
+		uuid.New(), email, name, avatarURL, authorizedOnInsert).Scan(
+		&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized,
+		&u.CreatedAt, &u.NameOverridden, &u.AvatarOverridden, &inserted)
+	return &u, inserted, err
+}
+
+// GetUserByEmail returns the user with the given email, or (nil, nil) when
+// no such user exists.
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
+	var u User
+	err := scanUser(s.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE email = $1`, email), &u)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
 	return &u, err
 }
 
@@ -1593,8 +1612,161 @@ func (s *Store) RejectAuthorizationRequest(ctx context.Context, requestID, admin
 }
 
 // ClearPendingAuthorizationRequests deletes all pending requests.
-// Called when the admin disables require_authorization.
+// Called when the admin switches access_mode away from "request".
 func (s *Store) ClearPendingAuthorizationRequests(ctx context.Context) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM authorization_requests WHERE status = 'pending'`)
+	return err
+}
+
+// ─── Invitations (email white-list) ─────────────────────────────────────────
+
+// normalizeEmail returns the lowercased / trimmed form used as the unique key
+// in the invitations table. OAuth providers can return mixed-case emails so we
+// normalize on both write and lookup.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func (s *Store) CreateInvitation(ctx context.Context, email string, invitedBy uuid.UUID) (*Invitation, error) {
+	email = normalizeEmail(email)
+	if email == "" {
+		return nil, fmt.Errorf("email required")
+	}
+	var inv Invitation
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO invitations (id, email, invited_by, created_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (email) DO UPDATE SET invited_by = EXCLUDED.invited_by
+		RETURNING id, email, invited_by, created_at
+	`, uuid.New(), email, invitedBy).Scan(&inv.ID, &inv.Email, &inv.InvitedBy, &inv.CreatedAt)
+	return &inv, err
+}
+
+func (s *Store) IsEmailInvited(ctx context.Context, email string) (bool, error) {
+	email = normalizeEmail(email)
+	if email == "" {
+		return false, nil
+	}
+	var exists bool
+	err := s.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM invitations WHERE email = $1)`, email).Scan(&exists)
+	return exists, err
+}
+
+func (s *Store) ListInvitations(ctx context.Context) ([]*Invitation, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT i.id, i.email, i.invited_by, i.created_at,
+		       COALESCE(u.name, ''), COALESCE(u.email, '')
+		FROM invitations i
+		LEFT JOIN users u ON u.id = i.invited_by
+		ORDER BY i.created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*Invitation, 0)
+	for rows.Next() {
+		var inv Invitation
+		if err := rows.Scan(&inv.ID, &inv.Email, &inv.InvitedBy, &inv.CreatedAt,
+			&inv.InvitedByName, &inv.InvitedByEmail); err != nil {
+			return nil, err
+		}
+		out = append(out, &inv)
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteInvitation(ctx context.Context, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM invitations WHERE id = $1`, id)
+	return err
+}
+
+// ─── Invitation Links (single-use) ──────────────────────────────────────────
+
+// CreateInvitationLink generates a fresh token, stores its sha256 hash, and
+// returns the invitation_link with the raw Token populated (only available
+// here — the token is never recoverable from the DB after this call).
+func (s *Store) CreateInvitationLink(ctx context.Context, invitedBy uuid.UUID, token, tokenHash string, expiresAt *time.Time) (*InvitationLink, error) {
+	var link InvitationLink
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO invitation_links (id, token_hash, invited_by, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		RETURNING id, token_hash, invited_by, expires_at, used_at, used_by, created_at
+	`, uuid.New(), tokenHash, invitedBy, expiresAt).Scan(
+		&link.ID, &link.TokenHash, &link.InvitedBy, &link.ExpiresAt,
+		&link.UsedAt, &link.UsedBy, &link.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	link.Token = token
+	return &link, nil
+}
+
+// GetValidInvitationLinkByHash returns an unused, non-expired link matching the
+// given token hash. Returns (nil, nil) when no such link exists.
+func (s *Store) GetValidInvitationLinkByHash(ctx context.Context, tokenHash string, now time.Time) (*InvitationLink, error) {
+	var link InvitationLink
+	err := s.db.QueryRow(ctx, `
+		SELECT id, token_hash, invited_by, expires_at, used_at, used_by, created_at
+		FROM invitation_links
+		WHERE token_hash = $1
+		  AND used_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > $2)
+	`, tokenHash, now).Scan(
+		&link.ID, &link.TokenHash, &link.InvitedBy, &link.ExpiresAt,
+		&link.UsedAt, &link.UsedBy, &link.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return &link, err
+}
+
+// ConsumeInvitationLink atomically marks the link as used by the given user.
+// Returns ErrNoRows if the link was already consumed in a concurrent request.
+func (s *Store) ConsumeInvitationLink(ctx context.Context, linkID, userID uuid.UUID) error {
+	res, err := s.db.Exec(ctx, `
+		UPDATE invitation_links
+		SET used_at = NOW(), used_by = $1
+		WHERE id = $2 AND used_at IS NULL
+	`, userID, linkID)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("invitation link already consumed")
+	}
+	return nil
+}
+
+func (s *Store) ListInvitationLinks(ctx context.Context) ([]*InvitationLink, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT l.id, l.token_hash, l.invited_by, l.expires_at, l.used_at, l.used_by, l.created_at,
+		       COALESCE(inv.name, ''), COALESCE(inv.email, ''),
+		       COALESCE(used.email, '')
+		FROM invitation_links l
+		LEFT JOIN users inv  ON inv.id  = l.invited_by
+		LEFT JOIN users used ON used.id = l.used_by
+		ORDER BY l.created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*InvitationLink, 0)
+	for rows.Next() {
+		var link InvitationLink
+		if err := rows.Scan(&link.ID, &link.TokenHash, &link.InvitedBy,
+			&link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt,
+			&link.InvitedByName, &link.InvitedByEmail, &link.UsedByEmail); err != nil {
+			return nil, err
+		}
+		out = append(out, &link)
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteInvitationLink(ctx context.Context, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM invitation_links WHERE id = $1`, id)
 	return err
 }

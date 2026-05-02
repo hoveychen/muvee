@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Home, LayoutGrid, Database, KeyRound, Key, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle, Copy, Check, Globe, ShieldAlert, Clock, Loader } from 'lucide-react'
+import { Home, LayoutGrid, Database, KeyRound, Key, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle, Copy, Check, Globe, ShieldAlert, Clock, Loader, Mail, Link2, Trash2, Plus } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
 import { useSettings } from '../lib/settings'
@@ -21,8 +21,10 @@ export default function Layout({ children }: { children?: ReactNode }) {
   const [authzStatus, setAuthzStatus] = useState<AuthorizationStatus | null>(null)
   const [requestingAccess, setRequestingAccess] = useState(false)
 
-  // Whether the user is effectively authorized (admin, or not required, or approved)
-  const isAuthorized = isAdmin || !authzStatus?.require_authorization || authzStatus?.authorized
+  // Whether the user is effectively authorized (admin, open mode, or approved).
+  // authzStatus.authorized is the canonical answer once the API has responded;
+  // before that, optimistically allow rendering to avoid a flash of "no access".
+  const isAuthorized = isAdmin || authzStatus === null || authzStatus.authorized
 
   // Redirect admin to onboarding if not yet completed
   useEffect(() => {
@@ -476,17 +478,38 @@ export function NodesPage() {
 export function UsersPage() {
   const [users, setUsers] = useState<import('../lib/types').User[]>([])
   const [pendingRequests, setPendingRequests] = useState<import('../lib/types').AuthorizationRequest[]>([])
+  const [invitations, setInvitations] = useState<import('../lib/types').Invitation[]>([])
+  const [inviteLinks, setInviteLinks] = useState<import('../lib/types').InvitationLink[]>([])
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteEmailSaving, setInviteEmailSaving] = useState(false)
+  const [linkExpiresDays, setLinkExpiresDays] = useState<string>('7')
+  const [linkSaving, setLinkSaving] = useState(false)
+  const [freshLinkToken, setFreshLinkToken] = useState<{ id: string; token: string } | null>(null)
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null)
   const { user: me } = useAuth()
   const { settings } = useSettings()
   const { t } = useTranslation()
-  const requireAuth = settings.require_authorization === 'true'
+  const accessMode = settings.access_mode || 'open'
+  const isRequestMode = accessMode === 'request'
+  const isInviteMode = accessMode === 'invite'
 
   useEffect(() => { api.users.list().then(setUsers).catch(() => {}) }, [])
   useEffect(() => {
-    if (requireAuth) {
+    if (isRequestMode) {
       api.admin.listAuthorizationRequests().then(setPendingRequests).catch(() => {})
+    } else {
+      setPendingRequests([])
     }
-  }, [requireAuth])
+  }, [isRequestMode])
+  useEffect(() => {
+    if (isInviteMode) {
+      api.admin.listInvitations().then(setInvitations).catch(() => {})
+      api.admin.listInvitationLinks().then(setInviteLinks).catch(() => {})
+    } else {
+      setInvitations([])
+      setInviteLinks([])
+    }
+  }, [isInviteMode])
 
   const toggleRole = async (u: import('../lib/types').User) => {
     const newRole = u.role === 'admin' ? 'member' : 'admin'
@@ -506,6 +529,63 @@ export function UsersPage() {
     setPendingRequests(prev => prev.filter(r => r.id !== reqId))
   }
 
+  const handleAddInvitation = async () => {
+    const email = inviteEmail.trim()
+    if (!email) return
+    setInviteEmailSaving(true)
+    try {
+      const inv = await api.admin.createInvitation(email)
+      setInvitations(prev => [inv, ...prev])
+      setInviteEmail('')
+    } catch {
+      // ignore
+    } finally {
+      setInviteEmailSaving(false)
+    }
+  }
+
+  const handleDeleteInvitation = async (id: string) => {
+    await api.admin.deleteInvitation(id)
+    setInvitations(prev => prev.filter(i => i.id !== id))
+  }
+
+  const handleCreateInviteLink = async () => {
+    setLinkSaving(true)
+    try {
+      const days = parseInt(linkExpiresDays, 10)
+      const payload: { expires_in_days?: number } = {}
+      if (Number.isFinite(days) && days > 0) payload.expires_in_days = days
+      const link = await api.admin.createInvitationLink(payload)
+      setInviteLinks(prev => [link, ...prev])
+      if (link.token) setFreshLinkToken({ id: link.id, token: link.token })
+    } catch {
+      // ignore
+    } finally {
+      setLinkSaving(false)
+    }
+  }
+
+  const handleDeleteInviteLink = async (id: string) => {
+    await api.admin.deleteInvitationLink(id)
+    setInviteLinks(prev => prev.filter(l => l.id !== id))
+    if (freshLinkToken?.id === id) setFreshLinkToken(null)
+  }
+
+  const buildInviteUrl = (token: string) => {
+    const base = window.location.origin
+    return `${base}/login?invite_token=${encodeURIComponent(token)}`
+  }
+
+  const copyInviteUrl = async (id: string, token: string) => {
+    try {
+      await navigator.clipboard.writeText(buildInviteUrl(token))
+      setCopiedLinkId(id)
+      setTimeout(() => setCopiedLinkId(prev => (prev === id ? null : prev)), 2000)
+    } catch {
+      // ignore
+    }
+  }
+
   return (
     <div className="page-enter">
       <div className="page-header">
@@ -513,8 +593,8 @@ export function UsersPage() {
         <p className="page-subtitle">{t('users.sectionLabel')}</p>
       </div>
 
-      {/* Pending authorization requests */}
-      {requireAuth && pendingRequests.length > 0 && (
+      {/* Pending authorization requests (request mode only) */}
+      {isRequestMode && pendingRequests.length > 0 && (
         <div className="card" style={{ marginBottom: '24px' }}>
           <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <AlertCircle size={14} color="var(--warning)" />
@@ -561,11 +641,185 @@ export function UsersPage() {
         </div>
       )}
 
+      {/* Invitations management (invite mode only) */}
+      {isInviteMode && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+          {/* Email white-list */}
+          <div className="card">
+            <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Mail size={14} />
+              {t('users.invitations.emailListTitle')}
+            </div>
+            <div style={{ padding: '16px' }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginBottom: '12px', lineHeight: 1.5 }}>
+                {t('users.invitations.emailListHint')}
+              </p>
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  placeholder={t('users.invitations.emailPlaceholder')}
+                  value={inviteEmail}
+                  onChange={e => setInviteEmail(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleAddInvitation() }}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  onClick={handleAddInvitation}
+                  disabled={inviteEmailSaving || !inviteEmail.trim()}
+                  className="btn-primary"
+                  style={{ padding: '6px 12px', fontSize: '0.8125rem' }}
+                >
+                  {inviteEmailSaving ? <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Plus size={12} />}
+                  {t('users.invitations.addEmail')}
+                </button>
+              </div>
+              {invitations.length === 0 ? (
+                <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', padding: '12px 0', textAlign: 'center' }}>
+                  {t('users.invitations.emailEmpty')}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {invitations.map(inv => (
+                    <div
+                      key={inv.id}
+                      className="flex items-center gap-3"
+                      style={{ padding: '6px 10px', borderRadius: '6px', background: 'var(--bg-base)' }}
+                    >
+                      <span style={{ flex: 1, fontSize: '0.8125rem', color: 'var(--fg-primary)', wordBreak: 'break-all' }}>
+                        {inv.email}
+                      </span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+                        {new Date(inv.created_at).toLocaleDateString()}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteInvitation(inv.id)}
+                        className="btn-secondary"
+                        title={t('users.invitations.delete')}
+                        style={{ padding: '4px 8px', color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Invitation links */}
+          <div className="card">
+            <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Link2 size={14} />
+              {t('users.invitations.linksTitle')}
+            </div>
+            <div style={{ padding: '16px' }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginBottom: '12px', lineHeight: 1.5 }}>
+                {t('users.invitations.linksHint')}
+              </p>
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+                  {t('users.invitations.expiresInDays')}
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  className="form-input"
+                  value={linkExpiresDays}
+                  onChange={e => setLinkExpiresDays(e.target.value)}
+                  style={{ width: '70px' }}
+                />
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={handleCreateInviteLink}
+                  disabled={linkSaving}
+                  className="btn-primary"
+                  style={{ padding: '6px 12px', fontSize: '0.8125rem' }}
+                >
+                  {linkSaving ? <Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Plus size={12} />}
+                  {t('users.invitations.generateLink')}
+                </button>
+              </div>
+              {freshLinkToken && (
+                <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '6px', background: 'var(--bg-base)', border: '1px solid var(--accent)' }}>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--fg-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {t('users.invitations.freshLinkLabel')}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <code style={{ flex: 1, fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-primary)', wordBreak: 'break-all' }}>
+                      {buildInviteUrl(freshLinkToken.token)}
+                    </code>
+                    <button
+                      onClick={() => copyInviteUrl(freshLinkToken.id, freshLinkToken.token)}
+                      className="btn-secondary"
+                      style={{ padding: '4px 8px', fontSize: '0.75rem', flexShrink: 0 }}
+                    >
+                      {copiedLinkId === freshLinkToken.id ? <Check size={12} /> : <Copy size={12} />}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--warning)', marginTop: '6px' }}>
+                    {t('users.invitations.freshLinkWarning')}
+                  </div>
+                </div>
+              )}
+              {inviteLinks.length === 0 ? (
+                <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', padding: '12px 0', textAlign: 'center' }}>
+                  {t('users.invitations.linksEmpty')}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {inviteLinks.map(link => {
+                    const isUsed = !!link.used_at
+                    const isExpired = link.expires_at && new Date(link.expires_at) < new Date()
+                    return (
+                      <div
+                        key={link.id}
+                        className="flex items-center gap-3"
+                        style={{ padding: '6px 10px', borderRadius: '6px', background: 'var(--bg-base)', opacity: isUsed || isExpired ? 0.6 : 1 }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-primary)' }}>
+                              {link.id.slice(0, 8)}
+                            </span>
+                            {isUsed && (
+                              <span className="badge badge-neutral">{t('users.invitations.linkUsed')}</span>
+                            )}
+                            {!isUsed && isExpired && (
+                              <span className="badge badge-warning">{t('users.invitations.linkExpired')}</span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
+                            {isUsed
+                              ? t('users.invitations.usedBy', { email: link.used_by_email || '?', date: new Date(link.used_at!).toLocaleDateString() })
+                              : link.expires_at
+                                ? t('users.invitations.expiresAt', { date: new Date(link.expires_at).toLocaleDateString() })
+                                : t('users.invitations.noExpiry')}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteInviteLink(link.id)}
+                          className="btn-secondary"
+                          title={t('users.invitations.delete')}
+                          style={{ padding: '4px 8px', color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="table-container">
         <table>
           <thead>
             <tr>
-              {[t('users.columns.user'), t('users.columns.email'), t('users.columns.role'), ...(requireAuth ? [t('users.columns.authorized')] : []), t('users.columns.joined'), ''].map(h => (
+              {[t('users.columns.user'), t('users.columns.email'), t('users.columns.role'), ...(isRequestMode ? [t('users.columns.authorized')] : []), t('users.columns.joined'), ''].map(h => (
                 <th key={h}>{h}</th>
               ))}
             </tr>
@@ -587,7 +841,7 @@ export function UsersPage() {
                     {u.role}
                   </span>
                 </td>
-                {requireAuth && (
+                {isRequestMode && (
                   <td>
                     {u.role === 'admin' ? (
                       <span className="badge badge-success">{t('users.authorized')}</span>

@@ -207,12 +207,15 @@ export interface ProjectTraffic {
   referer: string
 }
 
+export type AccessMode = 'open' | 'invite' | 'request'
+
 export interface SystemSettings {
   onboarded: string       // 'true' | 'false'
   site_name: string
   logo_url: string
   favicon_url: string
-  require_authorization: string  // 'true' | 'false'
+  // 'open' (anyone in the org), 'invite' (white-list), 'request' (request-access flow).
+  access_mode: AccessMode | ''
 }
 
 export interface AuthorizationRequest {
@@ -228,9 +231,33 @@ export interface AuthorizationRequest {
 }
 
 export interface AuthorizationStatus {
-  require_authorization: boolean
+  access_mode: AccessMode
   authorized: boolean
   request?: AuthorizationRequest | null
+}
+
+export interface Invitation {
+  id: string
+  email: string
+  invited_by?: string | null
+  invited_by_name?: string
+  invited_by_email?: string
+  created_at: string
+}
+
+export interface InvitationLink {
+  id: string
+  invited_by?: string | null
+  invited_by_name?: string
+  invited_by_email?: string
+  expires_at?: string | null
+  used_at?: string | null
+  used_by?: string | null
+  used_by_email?: string
+  created_at: string
+  // Token is only present in the response from POST /api/admin/invitation-links
+  // (one-time return — never recoverable afterwards).
+  token?: string
 }
 
 export type HealthStatus = 'ok' | 'warning' | 'error'

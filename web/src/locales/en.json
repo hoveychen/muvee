@@ -44,7 +44,12 @@
     "authorizedOnly": "Authorized personnel only",
     "continueWith": "Continue with {{provider}}",
     "accessRestricted": "Access restricted to authorized domains",
-    "cliAuthPrompt": "Select a login method to authenticate muveectl"
+    "cliAuthPrompt": "Select a login method to authenticate muveectl",
+    "invitePresent": "You have been invited. Sign in with the matching account to claim your invitation.",
+    "errorNotInvited": "Your account is not on the invitation list. Please contact an administrator.",
+    "errorDomainNotAllowed": "Your email domain is not permitted on this platform.",
+    "errorOAuthFailed": "Sign-in failed. Please try again.",
+    "errorGeneric": "Sign-in could not be completed."
   },
   "projects": {
     "sectionLabel": "PROJECTS",
@@ -502,7 +507,27 @@
     "unauthorized": "Unauthorized",
     "pendingRequests": "Pending Authorization Requests ({{count}})",
     "approve": "Approve",
-    "reject": "Reject"
+    "reject": "Reject",
+    "invitations": {
+      "emailListTitle": "Invited Emails",
+      "emailListHint": "Only people whose email is on this list (or who use an invitation link) can sign in.",
+      "emailPlaceholder": "user@example.com",
+      "addEmail": "Add",
+      "emailEmpty": "No invitations yet.",
+      "linksTitle": "Invitation Links",
+      "linksHint": "Single-use links — anyone with the URL can sign in once until the link expires or is used.",
+      "expiresInDays": "Expires (days, 0 = never)",
+      "generateLink": "Generate",
+      "linksEmpty": "No links generated.",
+      "freshLinkLabel": "New invitation link — copy now",
+      "freshLinkWarning": "This URL is shown only once. Copy it before leaving this page.",
+      "linkUsed": "Used",
+      "linkExpired": "Expired",
+      "usedBy": "Used by {{email}} on {{date}}",
+      "expiresAt": "Expires {{date}}",
+      "noExpiry": "Never expires",
+      "delete": "Delete"
+    }
   },
   "onboard": {
     "stepLabel": "Step {{current}} of {{total}}",
@@ -590,11 +615,23 @@
       "saving": "Saving...",
       "saved": "Saved!"
     },
-    "authorization": {
-      "title": "Authorization",
-      "description": "Control whether users need admin approval before they can publish services. When disabled, all authenticated users can publish freely.",
-      "requireLabel": "Require authorization for publishing services",
-      "enabledHint": "New users will only be able to browse services until an admin approves their publishing request."
+    "accessMode": {
+      "title": "Access Control",
+      "description": "Choose how new users can join the platform after authenticating with their identity provider.",
+      "modes": {
+        "open": {
+          "label": "Open",
+          "desc": "Anyone with an allowed email domain can sign in and use the platform freely."
+        },
+        "invite": {
+          "label": "Invite-only",
+          "desc": "Only emails on the invitation list, or visitors with a valid invitation link, can sign in. Everyone else is rejected at the OAuth step."
+        },
+        "request": {
+          "label": "Request access",
+          "desc": "Anyone with an allowed domain can sign in and browse, but must wait for admin approval before publishing services."
+        }
+      }
     },
     "health": {
       "title": "System Health",

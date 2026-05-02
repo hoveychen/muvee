@@ -44,7 +44,12 @@
     "authorizedOnly": "仅限授权人员",
     "continueWith": "使用 {{provider}} 继续",
     "accessRestricted": "仅限授权域名访问",
-    "cliAuthPrompt": "选择登录方式以授权 muveectl"
+    "cliAuthPrompt": "选择登录方式以授权 muveectl",
+    "invitePresent": "你已被邀请加入。请使用邀请邮箱对应的账号登录以激活邀请。",
+    "errorNotInvited": "你的账号不在邀请列表中，请联系管理员。",
+    "errorDomainNotAllowed": "你的邮箱域名未被该平台许可。",
+    "errorOAuthFailed": "登录失败，请重试。",
+    "errorGeneric": "登录未能完成。"
   },
   "projects": {
     "sectionLabel": "项目",
@@ -502,7 +507,27 @@
     "unauthorized": "未授权",
     "pendingRequests": "待审批的授权请求 ({{count}})",
     "approve": "批准",
-    "reject": "拒绝"
+    "reject": "拒绝",
+    "invitations": {
+      "emailListTitle": "邀请邮箱",
+      "emailListHint": "只有邮箱在此名单上的用户（或通过邀请链接进入的用户）才可以登录。",
+      "emailPlaceholder": "user@example.com",
+      "addEmail": "添加",
+      "emailEmpty": "尚无邀请。",
+      "linksTitle": "邀请链接",
+      "linksHint": "单次有效链接——拥有 URL 的人可在过期或被使用前登录一次。",
+      "expiresInDays": "过期天数（0 = 永不过期）",
+      "generateLink": "生成",
+      "linksEmpty": "尚未生成链接。",
+      "freshLinkLabel": "新的邀请链接 — 请立即复制",
+      "freshLinkWarning": "此地址只展示一次，离开页面后无法再获取。",
+      "linkUsed": "已使用",
+      "linkExpired": "已过期",
+      "usedBy": "由 {{email}} 于 {{date}} 使用",
+      "expiresAt": "{{date}} 过期",
+      "noExpiry": "永不过期",
+      "delete": "删除"
+    }
   },
   "onboard": {
     "stepLabel": "第 {{current}} 步，共 {{total}} 步",
@@ -590,11 +615,23 @@
       "saving": "保存中...",
       "saved": "已保存！"
     },
-    "authorization": {
-      "title": "用户授权",
-      "description": "控制用户是否需要管理员审批后才能发布服务。关闭后，所有已认证用户均可自由发布。",
-      "requireLabel": "发布服务需要授权",
-      "enabledHint": "新用户登录后只能浏览服务，直到管理员批准其发布权限申请。"
+    "accessMode": {
+      "title": "访问控制",
+      "description": "选择新用户在通过身份提供商登录后如何加入平台。",
+      "modes": {
+        "open": {
+          "label": "开放注册",
+          "desc": "拥有许可邮箱域名的任何人都可以登录并自由使用平台。"
+        },
+        "invite": {
+          "label": "仅限邀请",
+          "desc": "只有邀请名单上的邮箱，或持有有效邀请链接的访客可以登录；其他人在 OAuth 步骤被直接拒绝。"
+        },
+        "request": {
+          "label": "申请访问",
+          "desc": "拥有许可域名的用户可以登录并浏览，但需等待管理员批准后才能发布服务。"
+        }
+      }
     },
     "health": {
       "title": "系统健康",

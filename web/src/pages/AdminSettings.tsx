@@ -3,7 +3,7 @@ import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save, Upload } fr
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useSettings } from '../lib/settings'
-import type { SystemSettings, HealthReport, CertReport, CertStatus } from '../lib/types'
+import type { SystemSettings, HealthReport, CertReport, CertStatus, AccessMode } from '../lib/types'
 
 const MONO = 'var(--font-mono)'
 
@@ -203,7 +203,7 @@ export default function AdminSettingsPage() {
   const [siteName, setSiteName] = useState('')
   const [logoUrl, setLogoUrl] = useState('')
   const [faviconUrl, setFaviconUrl] = useState('')
-  const [requireAuthorization, setRequireAuthorization] = useState(false)
+  const [accessMode, setAccessMode] = useState<AccessMode>('open')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -222,7 +222,7 @@ export default function AdminSettingsPage() {
         setSiteName(s.site_name ?? '')
         setLogoUrl(s.logo_url ?? '')
         setFaviconUrl(s.favicon_url ?? '')
-        setRequireAuthorization(s.require_authorization === 'true')
+        setAccessMode((s.access_mode || 'open') as AccessMode)
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -331,37 +331,48 @@ export default function AdminSettingsPage() {
           </div>
         </section>
 
-        {/* ── Authorization ─────────────────────────────────────────────────── */}
+        {/* ── Access control ────────────────────────────────────────────────── */}
         <section className="card">
-          <div className="card-header">{t('adminSettings.authorization.title')}</div>
+          <div className="card-header">{t('adminSettings.accessMode.title')}</div>
           <div style={{ padding: '20px' }}>
             <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '16px', lineHeight: 1.6 }}>
-              {t('adminSettings.authorization.description')}
+              {t('adminSettings.accessMode.description')}
             </p>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={requireAuthorization}
-                  onChange={e => setRequireAuthorization(e.target.checked)}
-                  style={{ width: '16px', height: '16px', accentColor: 'var(--accent)' }}
-                />
-                <span style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-primary)', fontWeight: 500 }}>
-                  {t('adminSettings.authorization.requireLabel')}
-                </span>
-              </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+              {(['open', 'invite', 'request'] as AccessMode[]).map(mode => (
+                <label
+                  key={mode}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
+                    padding: '10px 12px', borderRadius: '6px',
+                    background: accessMode === mode ? 'var(--bg-base)' : 'transparent',
+                    border: accessMode === mode ? '1px solid var(--accent)' : '1px solid var(--border)',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="access-mode"
+                    checked={accessMode === mode}
+                    onChange={() => setAccessMode(mode)}
+                    style={{ marginTop: '3px', accentColor: 'var(--accent)' }}
+                  />
+                  <div>
+                    <div style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-primary)', fontWeight: 600 }}>
+                      {t(`adminSettings.accessMode.modes.${mode}.label`)}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '2px', lineHeight: 1.5 }}>
+                      {t(`adminSettings.accessMode.modes.${mode}.desc`)}
+                    </div>
+                  </div>
+                </label>
+              ))}
             </div>
-            {requireAuthorization && (
-              <p style={{ fontFamily: MONO, fontSize: '0.67rem', color: 'var(--fg-muted)', marginBottom: '16px', padding: '8px 10px', background: 'var(--bg-base)', borderRadius: '6px' }}>
-                {t('adminSettings.authorization.enabledHint')}
-              </p>
-            )}
             <button
               className="btn-primary"
               onClick={async () => {
                 setAuthSaving(true)
                 try {
-                  await api.admin.updateSettings({ require_authorization: requireAuthorization ? 'true' : 'false' })
+                  await api.admin.updateSettings({ access_mode: accessMode })
                   refetchGlobalSettings()
                   setAuthSaved(true)
                   setTimeout(() => setAuthSaved(false), 2000)
