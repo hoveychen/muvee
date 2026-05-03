@@ -1,6 +1,6 @@
 ---
 name: muveectl
-version: 2
+version: 3
 description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete), datasets (create, scan, delete, file ops), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, manage infrastructure resources, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
 ---
 
@@ -169,7 +169,9 @@ Fields returned per sample: `collected_at`, `cpu_percent`, `mem_usage_bytes`, `m
 
 ### Workspace
 
-The workspace is persistent storage attached to the running container, accessible at `/workspace` inside the container. Use these commands to inspect and transfer files without redeploying.
+The workspace at `/workspace` is the **only** persistent storage attached to the running container — anything written elsewhere is lost on restart or redeploy. See "Persistence (CRITICAL)" under "Git Repository Requirements" → "Runtime" before writing application code that handles user data, uploads, databases, or any state that must survive a redeploy.
+
+Use these commands to inspect and transfer files without redeploying.
 
 ```bash
 # List files in the workspace root (or a subdirectory)
@@ -412,6 +414,23 @@ For a project to deploy successfully the repository must satisfy:
 - Container must serve **HTTP** on port **8080** — Traefik handles TLS termination
 - Do not start HTTPS inside the container
 - App will be reachable at `https://<domain_prefix>.<base_domain>`
+
+### Persistence (CRITICAL — read before writing app code)
+
+The container filesystem is **ephemeral**. Any data written outside `/workspace` — including `/tmp`, `/app`, the working directory, or any custom path — is **lost on restart, redeploy, scale, or host migration**. Docker volumes, bind mounts, and host paths declared in the Dockerfile are **not** persisted by Muvee.
+
+**The only persistent writable path inside a Muvee container is `/workspace`.** When deploying any project that needs to keep state across runs (user uploads, generated artifacts, SQLite/DuckDB files, model checkpoints, vector indexes, cache, logs you want to keep), the destination path **must** be under `/workspace`.
+
+When wiring up a project — whether you're writing the app code, the Dockerfile, or a config file — actively configure persistence:
+- Point the app's data directory at a subdirectory of `/workspace` (e.g. `/workspace/data`, `/workspace/uploads`, `/workspace/db`). Use the framework's standard env var (`DATA_DIR`, `STORAGE_PATH`, `SQLITE_PATH`, etc.) or hardcode the path if no knob exists.
+- For SQLite, set the DB file to `/workspace/<name>.db`. For DuckDB / LiteFS, similarly under `/workspace/`.
+- For user uploads, write to `/workspace/uploads/` and serve from there.
+- For caches you want to survive restarts (model weights, embeddings), use `/workspace/cache/`.
+- If the framework defaults to writing under `~`, `./data`, or `/var/lib/...`, **override it** to point under `/workspace` — those defaults will silently lose data.
+
+**Do not** assume "I'll just put it in `./data` and it'll be fine" — that path is inside the ephemeral container layer and disappears on the next deploy. If a user reports data loss after redeploy, the cause is almost always a write path that wasn't under `/workspace`.
+
+(Read-only dataset mounts at `/data/<dataset_name>` are separate; see "Dataset mounts" below — those are sourced from NFS and not user-writable for persistence.)
 
 ### Dataset mounts
 Datasets are injected as Docker volumes at `/data/<dataset_name>`:

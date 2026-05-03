@@ -381,6 +381,26 @@ func parseSkillVersion(content string) string {
 	return ""
 }
 
+func shouldShowSkillOutdatedNotice(installed, embedded string) bool {
+	if embedded == "" {
+		return false
+	}
+	if installed == "" {
+		return true
+	}
+	inst, instOK := parseSemver(installed)
+	emb, embOK := parseSemver(embedded)
+	if !instOK || !embOK {
+		return installed != embedded
+	}
+	for i := 0; i < 3; i++ {
+		if emb[i] != inst[i] {
+			return emb[i] > inst[i]
+		}
+	}
+	return false
+}
+
 func checkSkillNotice() {
 	installedData, err := os.ReadFile(claudeSkillPath())
 	if err != nil {
@@ -389,8 +409,11 @@ func checkSkillNotice() {
 	}
 	installedVersion := parseSkillVersion(string(installedData))
 	embeddedVersion := parseSkillVersion(embeddedSkill)
-	if embeddedVersion != "" && installedVersion != embeddedVersion {
-		fmt.Fprintln(os.Stderr, "Notice: Claude skill is outdated. Run `muveectl install-claude-skill` to update.")
+	if shouldShowSkillOutdatedNotice(installedVersion, embeddedVersion) {
+		fmt.Fprintln(os.Stderr, "Notice: Claude skill is outdated. Auto-updating...")
+		if err := cmdInstallClaudeSkill(); err != nil {
+			fmt.Fprintf(os.Stderr, "  failed: %v. Run `muveectl install-claude-skill` to update manually.\n", err)
+		}
 	}
 }
 

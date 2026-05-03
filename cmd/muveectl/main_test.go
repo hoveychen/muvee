@@ -75,6 +75,34 @@ func TestResolveCreds(t *testing.T) {
 	}
 }
 
+func TestShouldShowSkillOutdatedNotice(t *testing.T) {
+	cases := []struct {
+		name      string
+		installed string
+		embedded  string
+		wantShow  bool
+	}{
+		{"embedded newer should notify", "1", "2", true},
+		{"embedded older should not notify", "3", "2", false},
+		{"same version should not notify", "2", "2", false},
+		{"semver upgrade beyond 9", "1.0.9", "1.0.10", true},
+		{"semver downgrade beyond 9", "1.0.10", "1.0.9", false},
+		{"semver major bump", "1.99.99", "2.0.0", true},
+		{"empty embedded should not notify", "1", "", false},
+		{"empty installed with embedded should notify", "", "1", true},
+		{"unparseable but equal should not notify", "alpha", "alpha", false},
+		{"unparseable and different should notify", "alpha", "beta", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldShowSkillOutdatedNotice(tc.installed, tc.embedded)
+			if got != tc.wantShow {
+				t.Errorf("shouldShowSkillOutdatedNotice(%q, %q) = %v, want %v", tc.installed, tc.embedded, got, tc.wantShow)
+			}
+		})
+	}
+}
+
 func TestShouldShowUpdateNotice(t *testing.T) {
 	cases := []struct {
 		name          string
