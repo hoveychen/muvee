@@ -192,6 +192,11 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/muvee:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/muvee:latest
+          # Skip the in-image source build — reuse release/muvee_linux_<arch>
+          # binaries already cross-compiled natively above. Avoids ~12min QEMU
+          # `go build` for linux/arm64 in multi-platform builds.
+          build-args: |
+            MUVEE_BUILD_MODE=prebuilt-builder
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

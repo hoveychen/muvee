@@ -5,13 +5,22 @@
 #   make build          # builds web + embeds frontend first
 #   docker build -f Dockerfile.local -t muvee:local .
 #
-# CI fast-path: when internal/muveectlbin/binaries/ already contains all six
-# expected muveectl_<os>_<arch>[.exe].gz files in the build context, the
-# cross-compile step below is skipped. The release workflow pre-builds those
-# natively on the runner, which avoids redoing the work under QEMU when the
-# target image platform is arm64.
+# CI fast-path:
+#   1. When internal/muveectlbin/binaries/ already contains all six expected
+#      muveectl_<os>_<arch>[.exe].gz files in the build context, the muveectl
+#      cross-compile step below is skipped.
+#   2. When MUVEE_BUILD_MODE=prebuilt-builder is passed, the source-builder
+#      stage is never reached — the final image picks up a natively-built
+#      muvee server binary from release/muvee_linux_<arch>. This avoids a
+#      ~12min QEMU `go build` for linux/arm64 in multi-platform release
+#      builds. Default MUVEE_BUILD_MODE=source-builder preserves the
+#      from-source path for local / air-gapped builds.
 
-FROM golang:1.26-alpine AS builder
+# Global ARG — must appear before the first FROM so it's available in the
+# `FROM ${MUVEE_BUILD_MODE}` selector below.
+ARG MUVEE_BUILD_MODE=source-builder
+
+FROM golang:1.26-alpine AS source-builder
 WORKDIR /app
 
 RUN apk add --no-cache git nodejs npm
@@ -70,11 +79,23 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
     -o /muvee ./cmd/muvee
 
+# ── Prebuilt path: copy a natively-built binary from release/ instead of
+#    cross-compiling under QEMU. release.yml populates release/muvee_linux_<arch>
+#    before invoking buildx. Selected by MUVEE_BUILD_MODE=prebuilt-builder.
+FROM alpine:3.21 AS prebuilt-builder
+ARG TARGETARCH
+COPY release/muvee_linux_${TARGETARCH} /muvee
+
+# Pick whichever builder the caller asked for. BuildKit only builds stages
+# reachable from the final image, so the unused stage is skipped entirely
+# (no QEMU go build for arm64 when MUVEE_BUILD_MODE=prebuilt-builder).
+FROM ${MUVEE_BUILD_MODE} AS picked-builder
+
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates rsync git docker-cli docker-cli-buildx
 
-COPY --from=builder /muvee /usr/local/bin/muvee
+COPY --from=picked-builder /muvee /usr/local/bin/muvee
 COPY db/migrations /app/db/migrations
 
 EXPOSE 8080 4181
