@@ -84,6 +84,17 @@ export const api = {
     },
     repoBranches: (id: string) =>
       request<import('./types').RepoBranch[]>(`/api/projects/${id}/repo/branches`),
+
+    // Project access (downstream service ACL — only consulted when access_mode='private').
+    accessUsers: (id: string) =>
+      request<import('./types').ProjectAccessUser[]>(`/api/projects/${id}/access-users`),
+    addAccessUser: (id: string, email: string) =>
+      request<import('./types').ProjectAccessUser[]>(`/api/projects/${id}/access-users`, {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      }),
+    removeAccessUser: (id: string, userId: string) =>
+      request(`/api/projects/${id}/access-users/${userId}`, { method: 'DELETE' }),
   },
 
   datasets: {

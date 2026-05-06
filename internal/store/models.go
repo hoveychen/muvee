@@ -88,9 +88,13 @@ type Project struct {
 	// digest. Compose-only; server-managed (frozen on API write). Empty object
 	// means "not yet seeded" — the watcher records the current digests on first
 	// observation without triggering a redeploy.
-	LastTrackedImageDigests string    `db:"last_tracked_image_digests" json:"last_tracked_image_digests"`
-	CreatedAt               time.Time `db:"created_at"           json:"created_at"`
-	UpdatedAt               time.Time `db:"updated_at"           json:"updated_at"`
+	LastTrackedImageDigests string `db:"last_tracked_image_digests" json:"last_tracked_image_digests"`
+	// AccessMode controls who can reach the deployed downstream service:
+	//   "public"  — any authenticated muvee user (legacy behaviour, default)
+	//   "private" — only project owner, system admins, and users in project_access_users
+	AccessMode string    `db:"access_mode"           json:"access_mode"`
+	CreatedAt  time.Time `db:"created_at"           json:"created_at"`
+	UpdatedAt  time.Time `db:"updated_at"           json:"updated_at"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 	// Owner display fields, populated by ListProjectsForUser / GetProject via LEFT JOIN users.
@@ -127,6 +131,25 @@ type ProjectDataset struct {
 type ProjectMember struct {
 	ProjectID uuid.UUID `db:"project_id"`
 	UserID    uuid.UUID `db:"user_id"`
+}
+
+const (
+	ProjectAccessModePublic  = "public"
+	ProjectAccessModePrivate = "private"
+)
+
+// ProjectAccessUser is an entry in the per-project allow-list consulted by
+// Traefik ForwardAuth /verify when the project's access_mode == "private".
+// Project owners and system admins are always allowed and do not need a row here.
+type ProjectAccessUser struct {
+	ProjectID uuid.UUID  `db:"project_id" json:"project_id"`
+	UserID    uuid.UUID  `db:"user_id"    json:"user_id"`
+	AddedBy   *uuid.UUID `db:"added_by"   json:"added_by,omitempty"`
+	AddedAt   time.Time  `db:"added_at"   json:"added_at"`
+	// User display fields, populated by ListProjectAccessUsers via LEFT JOIN users.
+	Email     string `db:"email"      json:"email"`
+	Name      string `db:"name"       json:"name"`
+	AvatarURL string `db:"avatar_url" json:"avatar_url"`
 }
 
 type DatasetMember struct {
@@ -183,6 +206,7 @@ type RunningDeploymentInfo struct {
 	AuthRequired       bool      `db:"auth_required"`
 	AuthAllowedDomains string    `db:"auth_allowed_domains"`
 	AuthBypassPaths    string    `db:"auth_bypass_paths"`
+	AccessMode         string    `db:"access_mode"`
 	HostIP             string    `db:"host_ip"`
 	HostPort           int       `db:"host_port"`
 }

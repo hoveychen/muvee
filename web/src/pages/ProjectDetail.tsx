@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
 
 const MONO = 'var(--font-mono)'
 
-type Tab = 'deploy' | 'config' | 'auth' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository' | 'traffic'
+type Tab = 'deploy' | 'config' | 'auth' | 'users' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository' | 'traffic'
 
 /* Map deployment status → badge CSS class */
 const statusBadgeClass = (status: string) => {
@@ -226,6 +226,7 @@ export default function ProjectDetail() {
           ['deploy', Rocket, t('projectDetail.tabs.deployments')],
           ['config', Settings, t('projectDetail.tabs.config')],
           ['auth', Shield, t('projectDetail.tabs.auth')],
+          ['users', Users, 'Users'] as const,
           ...(project.git_source === 'hosted' ? [['repository', GitBranch, t('projectDetail.tabs.repository')] as const] : []),
           // Datasets and workspace are not wired up for compose projects: the
           // agent runs `docker compose up` directly without NFS mounts or a
@@ -283,6 +284,19 @@ export default function ProjectDetail() {
             onSave={handleSave}
             saving={saving}
             saveError={saveError}
+          />
+        )}
+        {tab === 'users' && id && (
+          <UsersTab
+            projectId={id}
+            form={editForm}
+            onChange={setEditForm}
+            onSave={handleSave}
+            saving={saving}
+            saveError={saveError}
+            ownerName={project.owner_name || project.owner_email || ''}
+            ownerEmail={project.owner_email || ''}
+            ownerAvatarURL={project.owner_avatar_url || ''}
           />
         )}
         {tab === 'datasets' && (
@@ -1135,6 +1149,213 @@ function AuthTab({ form, onChange, onSave, saving, saveError }: {
           {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
         </button>
       </div>
+    </div>
+  )
+}
+
+function UsersTab({ projectId, form, onChange, onSave, saving, saveError, ownerName, ownerEmail, ownerAvatarURL }: {
+  projectId: string
+  form: Partial<Project>
+  onChange: (f: Partial<Project>) => void
+  onSave: () => void
+  saving: boolean
+  saveError?: string | null
+  ownerName: string
+  ownerEmail: string
+  ownerAvatarURL: string
+}) {
+  const isPrivate = form.access_mode === 'private'
+
+  return (
+    <div className="max-w-lg space-y-5">
+      <div>
+        <label className="form-label">Service access</label>
+        <div className="flex gap-2">
+          {(['public', 'private'] as const).map(mode => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => onChange({ ...form, access_mode: mode })}
+              className="btn-secondary"
+              style={{
+                background: form.access_mode === mode ? 'var(--accent)' : 'var(--bg-elevated)',
+                color: form.access_mode === mode ? '#fff' : 'var(--fg)',
+                borderColor: form.access_mode === mode ? 'var(--accent)' : 'var(--border)',
+                fontSize: '0.875rem',
+                padding: '0.4rem 0.9rem',
+              }}
+            >
+              {mode === 'public' ? 'Public' : 'Private'}
+            </button>
+          ))}
+        </div>
+        <p style={{ fontSize: '0.8125rem', marginTop: '0.5rem', color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          {isPrivate
+            ? 'Only the project owner, system admins, and explicitly invited users can reach the deployed service.'
+            : 'Any authenticated muvee user can reach the deployed service (default).'}
+        </p>
+
+        {saveError && (
+          <p style={{ fontSize: '0.875rem', color: 'var(--danger)', marginTop: '0.5rem' }}>{saveError}</p>
+        )}
+
+        <div className="flex gap-3 pt-2" style={{ marginTop: '0.75rem' }}>
+          <button
+            onClick={onSave}
+            disabled={saving}
+            className="btn-primary"
+            style={saving ? { cursor: 'not-allowed', opacity: 0.7, fontSize: '0.875rem', padding: '0.4rem 0.9rem' } : { fontSize: '0.875rem', padding: '0.4rem 0.9rem' }}
+          >
+            {saving ? 'Saving…' : 'Save access mode'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+        <label className="form-label">Owner (always allowed)</label>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.6rem',
+          padding: '0.5rem 0.6rem',
+          borderRadius: '6px',
+          border: '1px solid var(--border)',
+          background: 'var(--bg-elevated)',
+        }}>
+          {ownerAvatarURL
+            ? <img src={ownerAvatarURL} alt="" style={{ width: 24, height: 24, borderRadius: '50%' }} />
+            : <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--border)' }} />}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>{ownerName || ownerEmail}</div>
+            {ownerEmail && ownerEmail !== ownerName && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>{ownerEmail}</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <ProjectAccessUsersPanel projectId={projectId} disabled={!isPrivate} />
+    </div>
+  )
+}
+
+function ProjectAccessUsersPanel({ projectId, disabled }: { projectId: string; disabled?: boolean }) {
+  const [users, setUsers] = useState<ProjectAccessUser[]>([])
+  const [email, setEmail] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.projects.accessUsers(projectId).then(setUsers).catch(e => setError(e.message))
+  }, [projectId])
+
+  const handleAdd = async () => {
+    const trimmed = email.trim()
+    if (!trimmed) return
+    setBusy(true)
+    setError(null)
+    try {
+      const next = await api.projects.addAccessUser(projectId, trimmed)
+      setUsers(next)
+      setEmail('')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRemove = async (userId: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.projects.removeAccessUser(projectId, userId)
+      setUsers(prev => prev.filter(u => u.user_id !== userId))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+      <label className="form-label">Allowed users</label>
+      <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
+        The project owner and system admins always have access — no need to list them here.
+        Users must have signed in to muvee at least once before they can be added.
+        {disabled && ' This list takes effect only when service access is set to Private.'}
+      </p>
+
+      <div className="flex gap-2" style={{ marginBottom: '0.75rem' }}>
+        <input
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          placeholder="user@example.com"
+          className="form-input"
+          style={{ flex: 1 }}
+          onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
+          disabled={busy}
+        />
+        <button
+          type="button"
+          onClick={handleAdd}
+          disabled={busy || !email.trim()}
+          className="btn-primary"
+          style={{ fontSize: '0.875rem', padding: '0.4rem 0.9rem' }}
+        >
+          Invite
+        </button>
+      </div>
+
+      {error && (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginBottom: '0.5rem' }}>{error}</p>
+      )}
+
+      {users.length === 0 ? (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', fontStyle: 'italic' }}>
+          No additional users yet.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {users.map(u => (
+            <li key={u.user_id} style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0.5rem 0.6rem',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              marginBottom: '0.35rem',
+              background: 'var(--bg-elevated)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+                {u.avatar_url
+                  ? <img src={u.avatar_url} alt="" style={{ width: 24, height: 24, borderRadius: '50%' }} />
+                  : <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--border)' }} />}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {u.name || u.email}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {u.email}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleRemove(u.user_id)}
+                className="btn-secondary"
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
+                disabled={busy}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

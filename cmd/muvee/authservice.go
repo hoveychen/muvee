@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -32,6 +36,9 @@ var (
 	adminEmails    map[string]struct{}
 	cookieDomain   string
 	forwardAuthBase string // e.g. "https://example.com"
+	muveeServerURL string // internal URL for /api/internal/access/check
+	internalKey    string // sha256(JWT_SECRET) — shared with muvee-server
+	internalClient = &http.Client{Timeout: 5 * time.Second}
 )
 
 func runAuthservice() {
@@ -54,6 +61,13 @@ func runAuthservice() {
 		secret = "change-me-in-production"
 	}
 	jwtSecret = []byte(secret)
+	h := sha256.Sum256([]byte(secret))
+	internalKey = hex.EncodeToString(h[:])
+
+	muveeServerURL = strings.TrimRight(os.Getenv("MUVEE_SERVER_URL"), "/")
+	if muveeServerURL == "" {
+		muveeServerURL = "http://muvee-server:8080"
+	}
 
 	adminEmails = make(map[string]struct{})
 	for _, e := range strings.Split(os.Getenv("ADMIN_EMAILS"), ",") {
@@ -125,8 +139,52 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if projectID := r.URL.Query().Get("project_id"); projectID != "" {
+		allowed, err := checkProjectAccess(r.Context(), projectID, claims.Email)
+		if err != nil {
+			log.Printf("authservice: access check (project=%s email=%s): %v", projectID, claims.Email, err)
+			http.Error(w, "access check failed", http.StatusBadGateway)
+			return
+		}
+		if !allowed {
+			http.Error(w, "access denied: not a member of this project", http.StatusForbidden)
+			return
+		}
+	}
 	setUserHeaders(w, claims)
 	w.WriteHeader(http.StatusOK)
+}
+
+// checkProjectAccess asks muvee-server whether the given email is permitted to
+// reach the project's downstream service. Public projects always return true;
+// private projects consult the per-project allow-list. Errors are propagated to
+// the caller so the proxy can fail closed (502) rather than silently allow.
+func checkProjectAccess(ctx context.Context, projectID, email string) (bool, error) {
+	q := url.Values{}
+	q.Set("project_id", projectID)
+	q.Set("email", email)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		muveeServerURL+"/api/internal/access/check?"+q.Encode(), nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("internal access check returned %d", resp.StatusCode)
+	}
+	var body struct {
+		Allowed bool   `json:"allowed"`
+		Mode    string `json:"mode"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false, err
+	}
+	return body.Allowed, nil
 }
 
 // handleVerifyAdmin is the Traefik ForwardAuth endpoint restricted to admin emails.

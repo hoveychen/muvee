@@ -2,11 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"log"
 	"net/http"
@@ -132,6 +133,46 @@ func (s *Server) isDomainOnlyPrefix(prefix string) bool {
 	return s.domainOnlyPrefixes[prefix]
 }
 
+// internalAPIKey returns the deterministic shared key used by muvee-authservice
+// to call this server's /api/internal/* endpoints. Both processes derive it
+// from JWT_SECRET so no extra env var is required.
+func internalAPIKey() string {
+	h := sha256.Sum256([]byte(os.Getenv("JWT_SECRET")))
+	return hex.EncodeToString(h[:])
+}
+
+// handleInternalAccessCheck answers Traefik ForwardAuth's per-project access
+// query. Called only by muvee-authservice on the internal docker network and
+// authenticated via X-Muvee-Internal-Key.
+func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	projectIDStr := r.URL.Query().Get("project_id")
+	email := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("email")))
+	if projectIDStr == "" || email == "" {
+		jsonErr(w, fmt.Errorf("project_id and email are required"), 400)
+		return
+	}
+	projectID, err := uuid.Parse(projectIDStr)
+	if err != nil {
+		jsonErr(w, fmt.Errorf("invalid project_id"), 400)
+		return
+	}
+	allowed, mode, err := s.store.IsProjectAccessAllowedByEmail(r.Context(), email, projectID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"allowed": allowed,
+		"mode":    mode,
+	})
+}
+
 // agentSecretMiddleware rejects requests that do not carry the correct X-Agent-Secret header.
 // When no secret is configured the middleware passes all requests through (dev/test mode).
 func (s *Server) agentSecretMiddleware(next http.Handler) http.Handler {
@@ -176,6 +217,10 @@ func (s *Server) Router() http.Handler {
 
 	// Traefik HTTP provider – no auth, consumed only by Traefik on the internal network
 	r.Get("/api/traefik/config", s.handleTraefikConfig)
+
+	// Internal access-check endpoint called by muvee-authservice during ForwardAuth.
+	// Authenticated via X-Muvee-Internal-Key (derived from JWT_SECRET).
+	r.Get("/api/internal/access/check", s.handleInternalAccessCheck)
 
 	// Public community feed – no auth required
 	r.Get("/api/public/projects", s.handlePublicProjects)
@@ -231,6 +276,9 @@ func (s *Server) Router() http.Handler {
 		r.Put("/api/projects/{id}/datasets", s.requireAuthorized(s.setProjectDatasets))
 		r.Get("/api/projects/{id}/secrets", s.getProjectSecrets)
 		r.Put("/api/projects/{id}/secrets", s.requireAuthorized(s.setProjectSecrets))
+		r.Get("/api/projects/{id}/access-users", s.listProjectAccessUsers)
+		r.Post("/api/projects/{id}/access-users", s.requireAuthorized(s.addProjectAccessUser))
+		r.Delete("/api/projects/{id}/access-users/{userId}", s.requireAuthorized(s.removeProjectAccessUser))
 		r.Post("/api/projects/{id}/deploy", s.requireAuthorized(s.triggerDeploy))
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
 		r.Get("/api/projects/{id}/metrics", s.getProjectMetrics)
@@ -858,6 +906,12 @@ func validateProject(p *store.Project) error {
 	if p.ProjectType == "" {
 		p.ProjectType = store.ProjectTypeDeployment
 	}
+	if p.AccessMode == "" {
+		p.AccessMode = store.ProjectAccessModePublic
+	}
+	if p.AccessMode != store.ProjectAccessModePublic && p.AccessMode != store.ProjectAccessModePrivate {
+		return fmt.Errorf("access_mode must be 'public' or 'private'")
+	}
 	switch p.ProjectType {
 	case store.ProjectTypeDeployment:
 		if p.GitSource == "" {
@@ -1257,6 +1311,98 @@ func (s *Server) changeProjectOwner(w http.ResponseWriter, r *http.Request) {
 		updated.GitPushURL = s.hostedGitPushURL(updated.ID)
 	}
 	jsonOK(w, updated)
+}
+
+// listProjectAccessUsers returns the explicit allow-list for a private project's
+// downstream service. Available to anyone who can already see the project (admin
+// or project_members row) so members can see who else is allowed in.
+func (s *Server) listProjectAccessUsers(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !ok {
+		jsonErr(w, nil, 404)
+		return
+	}
+	users, err := s.store.ListProjectAccessUsers(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, users)
+}
+
+// addProjectAccessUser grants a user access to a project's downstream service
+// by email lookup. Restricted to project owner or system admin. Body: {email}.
+func (s *Server) addProjectAccessUser(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	user := auth.UserFromCtx(r.Context())
+	proj, err := s.store.GetProject(r.Context(), id)
+	if err != nil || proj == nil {
+		jsonErr(w, err, 404)
+		return
+	}
+	if user.Role != store.UserRoleAdmin && proj.OwnerID != user.ID {
+		jsonErr(w, fmt.Errorf("only the project owner or a system admin can manage access users"), 403)
+		return
+	}
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
+	if body.Email == "" {
+		jsonErr(w, fmt.Errorf("email is required"), 400)
+		return
+	}
+	target, err := s.store.GetUserByEmail(r.Context(), body.Email)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if target == nil {
+		jsonErr(w, fmt.Errorf("no muvee user with email %q (they need to sign in once before being added)", body.Email), 404)
+		return
+	}
+	if target.ID == proj.OwnerID {
+		jsonErr(w, fmt.Errorf("project owner already has access — no need to add"), 400)
+		return
+	}
+	if err := s.store.AddProjectAccessUser(r.Context(), id, target.ID, &user.ID); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	users, err := s.store.ListProjectAccessUsers(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, users)
+}
+
+// removeProjectAccessUser revokes a user's access to a project's downstream
+// service. Restricted to project owner or system admin.
+func (s *Server) removeProjectAccessUser(w http.ResponseWriter, r *http.Request) {
+	id := mustParseUUID(chi.URLParam(r, "id"))
+	userID := mustParseUUID(chi.URLParam(r, "userId"))
+	caller := auth.UserFromCtx(r.Context())
+	proj, err := s.store.GetProject(r.Context(), id)
+	if err != nil || proj == nil {
+		jsonErr(w, err, 404)
+		return
+	}
+	if caller.Role != store.UserRoleAdmin && proj.OwnerID != caller.ID {
+		jsonErr(w, fmt.Errorf("only the project owner or a system admin can manage access users"), 403)
+		return
+	}
+	if err := s.store.RemoveProjectAccessUser(r.Context(), id, userID); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
@@ -2422,13 +2568,17 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			},
 		}
 
-		// Per-project ForwardAuth middleware (if auth is required)
-		if dep.AuthRequired {
+		// Per-project ForwardAuth middleware. Required when:
+		//   - dep.AuthRequired is set (legacy "any logged-in user" gate), OR
+		//   - access_mode == private (per-project allow-list), so authservice
+		//     can call back into /api/internal/access/check.
+		needsForwardAuth := dep.AuthRequired || dep.AccessMode == store.ProjectAccessModePrivate
+		if needsForwardAuth {
 			if cfg.HTTP.Middlewares == nil {
 				cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
 			}
 			mwName := name + "-auth"
-			verifyURL := fmt.Sprintf("%s/verify?project=%s", s.authServiceURL, dep.ProjectID)
+			verifyURL := fmt.Sprintf("%s/verify?project_id=%s", s.authServiceURL, dep.ProjectID)
 			if dep.AuthAllowedDomains != "" {
 				verifyURL += "&domains=" + dep.AuthAllowedDomains
 			}

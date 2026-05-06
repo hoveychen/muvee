@@ -51,8 +51,22 @@ export interface Project {
   // image-digest watcher uses to detect upstream image updates for compose
   // projects. Server-managed, read-only.
   last_tracked_image_digests: string
+  // access_mode controls who can reach the deployed downstream service:
+  //   'public'  — any authenticated muvee user (default, legacy behaviour)
+  //   'private' — only project owner, system admins, and explicitly allowed users
+  access_mode: 'public' | 'private'
   created_at: string
   updated_at: string
+}
+
+export interface ProjectAccessUser {
+  project_id: string
+  user_id: string
+  added_by?: string
+  added_at: string
+  email: string
+  name: string
+  avatar_url: string
 }
 
 export interface RepoTreeEntry {
