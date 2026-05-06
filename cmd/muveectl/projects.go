@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -29,6 +32,7 @@ func init() {
 	projectsCmd.AddCommand(projectsLogsCmd)
 	projectsCmd.AddCommand(projectsMetricsCmd)
 	projectsCmd.AddCommand(projectsPortForwardCmd)
+	projectsCmd.AddCommand(projectsCurlCmd)
 
 	// projects create flags
 	addProjectFlags(projectsCreateCmd)
@@ -45,6 +49,13 @@ func init() {
 
 	// projects port-forward flags
 	projectsPortForwardCmd.Flags().String("port", "0", "Local port (0 = auto-pick)")
+
+	// projects curl flags
+	projectsCurlCmd.Flags().StringP("method", "X", "GET", "HTTP method")
+	projectsCurlCmd.Flags().StringP("data", "d", "", "Request body (string)")
+	projectsCurlCmd.Flags().Bool("data-stdin", false, "Read request body from stdin (overrides --data)")
+	projectsCurlCmd.Flags().StringArrayP("header", "H", nil, "Extra header 'Name: Value' (repeatable)")
+	projectsCurlCmd.Flags().BoolP("include", "i", false, "Print response status line + headers before the body")
 }
 
 func addProjectFlags(cmd *cobra.Command) {
@@ -547,6 +558,90 @@ var projectsPortForwardCmd = &cobra.Command{
 		})
 
 		return http.Serve(ln, handler)
+	},
+}
+
+// ─── Curl ────────────────────────────────────────────────────────────────────
+
+var projectsCurlCmd = &cobra.Command{
+	Use:   "curl ID [PATH]",
+	Short: "Send a single HTTP request to the project's running container as yourself",
+	Long: `Sends a single HTTP request to the project's running deployment via the
+authenticated proxy endpoint, using your CLI identity. Bypasses Traefik
+ForwardAuth — auth-required and access_mode=private projects work as long
+as you are an owner / member / admin of the project.
+
+The request goes to <server>/api/projects/<id>/proxy<path>. The container
+sees X-Forwarded-User: <your email> just like it would through Traefik.
+
+Examples:
+  muveectl projects curl <id> /healthz
+  muveectl projects curl <id> /api/users -X POST -H 'Content-Type: application/json' -d '{"name":"x"}'
+  cat payload.json | muveectl projects curl <id> /api/upload -X POST --data-stdin -i`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := requireAuth(); err != nil {
+			return err
+		}
+		projectID := args[0]
+		path := "/"
+		if len(args) == 2 {
+			path = args[1]
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path
+			}
+		}
+
+		method, _ := cmd.Flags().GetString("method")
+		data, _ := cmd.Flags().GetString("data")
+		headers, _ := cmd.Flags().GetStringArray("header")
+		include, _ := cmd.Flags().GetBool("include")
+		dataStdin, _ := cmd.Flags().GetBool("data-stdin")
+
+		var body io.Reader
+		switch {
+		case dataStdin:
+			buf, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return fmt.Errorf("read stdin: %w", err)
+			}
+			body = bytes.NewReader(buf)
+		case data != "":
+			body = strings.NewReader(data)
+		}
+
+		targetURL := cl.server + "/api/projects/" + projectID + "/proxy" + path
+		req, err := http.NewRequest(strings.ToUpper(method), targetURL, body)
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
+		for _, h := range headers {
+			parts := strings.SplitN(h, ":", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("bad header %q (expected 'Name: Value')", h)
+			}
+			req.Header.Add(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+		}
+		req.Header.Set("Authorization", "Bearer "+cl.token)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if include {
+			fmt.Fprintf(os.Stdout, "%s %s\n", resp.Proto, resp.Status)
+			resp.Header.Write(os.Stdout)
+			fmt.Fprintln(os.Stdout)
+		}
+		if _, err := io.Copy(os.Stdout, resp.Body); err != nil {
+			return fmt.Errorf("read response: %w", err)
+		}
+		if resp.StatusCode >= 400 {
+			os.Exit(1)
+		}
+		return nil
 	},
 }
 

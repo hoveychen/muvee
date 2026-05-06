@@ -1,7 +1,7 @@
 ---
 name: muveectl
-version: 4
-description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete), datasets (create, scan, delete, file ops), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, manage infrastructure resources, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
+version: 5
+description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, port-forward, curl), datasets (create, scan, delete, file ops), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, hit auth-protected services from the terminal, manage infrastructure resources, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
 ---
 
 # muveectl – Muvee CLI
@@ -104,6 +104,8 @@ muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 muveectl projects metrics PROJECT_ID [--limit N]
 muveectl projects port-forward PROJECT_ID [--port PORT]
+muveectl projects curl PROJECT_ID [PATH] [-X METHOD] [-d BODY] [--data-stdin] \
+  [-H 'Name: Value' ...] [-i]
 muveectl projects delete PROJECT_ID
 ```
 
@@ -211,9 +213,51 @@ muveectl projects workspace push PROJECT_ID local_file.bin --remote-path uploads
 muveectl projects workspace rm PROJECT_ID remote/path/file.txt
 ```
 
-## Local Port Forwarding
+## Reaching Auth-Protected Projects from the CLI
 
-Forward a project's running container to a local port for development. Authentication is automatically handled using your CLI identity — the container receives your email in the `X-Forwarded-User` header, just like in production.
+Projects with `--auth-required` (or `access_mode=private`) are gated by Traefik ForwardAuth in the browser, but `muveectl` ships two ways to bypass that gate using your CLI identity. Both rely on the server-side proxy at `/api/projects/{id}/proxy/*`, which:
+
+- Authenticates the request with your CLI Bearer token.
+- Authorizes against project membership (owner / member / admin) — the per-project `project_access_users` ACL is **not** consulted here.
+- Connects directly to the deployment's host:port, fully bypassing Traefik / forward-auth.
+- Injects `X-Forwarded-User: <your email>` into the request before it hits the container, so the container sees the same identity it would through the browser.
+
+Pick the form that fits the use case.
+
+### `projects curl` — one-off requests
+
+Best for scripts, health checks, quick API pokes. Single request, no local listener.
+
+```bash
+# GET the homepage
+muveectl projects curl PROJECT_ID /
+
+# Show response status + headers, then body
+muveectl projects curl PROJECT_ID /api/me -i
+
+# POST JSON
+muveectl projects curl PROJECT_ID /api/users \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"alice"}'
+
+# Stream a file as the request body
+cat payload.bin | muveectl projects curl PROJECT_ID /api/upload \
+  -X POST --data-stdin -i
+```
+
+Flags:
+- `-X, --method` — HTTP method (default `GET`).
+- `-d, --data` — inline string body.
+- `--data-stdin` — read body from stdin (overrides `-d`).
+- `-H, --header` — extra header in `Name: Value` form; repeatable.
+- `-i, --include` — print response status line + headers before the body.
+
+Exit code is `1` on any HTTP `>= 400` so shell scripts can check `$?`.
+
+### `projects port-forward` — sustained sessions
+
+Best for development — opens a local TCP listener that proxies every request through the same authenticated path. Reuse from a browser, a frontend dev server, or repeated curls.
 
 ```bash
 # Auto-pick a free local port
@@ -223,13 +267,13 @@ muveectl projects port-forward PROJECT_ID
 muveectl projects port-forward PROJECT_ID --port 3000
 ```
 
-Then call the project's API locally:
+Then talk to it as if it were running locally:
 
 ```bash
 curl http://127.0.0.1:3000/api/some-endpoint
 ```
 
-This is useful for local development when your code needs to call APIs exposed by a deployed project, without dealing with OAuth login flows or TLS certificates.
+Useful when your code needs to call APIs exposed by a deployed project without dealing with OAuth login flows or TLS certificates.
 
 ## Datasets
 
@@ -501,5 +545,6 @@ The tunnel stays open until you press Ctrl+C. All HTTP traffic to the generated 
 2. Deploy a project: `muveectl projects deploy PROJECT_ID`
 3. Check deployment status: `muveectl projects deployments PROJECT_ID`
 4. Forward to local port: `muveectl projects port-forward PROJECT_ID --port 3000`
-5. Publish a local dev server: `muveectl tunnel 8080`
-6. Use a project-bound tunnel: `muveectl tunnel 8080 --project my-api`
+5. One-off auth-protected request: `muveectl projects curl PROJECT_ID /api/health`
+6. Publish a local dev server: `muveectl tunnel 8080`
+7. Use a project-bound tunnel: `muveectl tunnel 8080 --project my-api`
