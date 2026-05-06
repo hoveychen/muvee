@@ -138,6 +138,7 @@ services:
       - "traefik.http.routers.muvee.tls.certresolver=letsencrypt"
       - "traefik.http.routers.muvee.tls.domains[0].main=${BASE_DOMAIN}"
       - "traefik.http.services.muvee.loadbalancer.server.port=8080"
+      - "com.centurylinklabs.watchtower.enable=true"
 
   # ── Traefik ForwardAuth sidecar ────────────────────────────────────────────
   muvee-authservice:
@@ -173,6 +174,7 @@ services:
       - "traefik.http.routers.muvee-authservice.tls.certresolver=letsencrypt"
       - "traefik.http.routers.muvee-authservice.tls.domains[0].main=${BASE_DOMAIN}"
       - "traefik.http.services.muvee-authservice.loadbalancer.server.port=4181"
+      - "com.centurylinklabs.watchtower.enable=true"
 
   traefik:
     image: traefik:v3.6.1
@@ -223,6 +225,8 @@ services:
         condition: service_healthy
     networks:
       - muvee-net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   # ── Deploy agent — runs application containers and registers them with Traefik
   muvee-agent-deploy:
@@ -251,6 +255,25 @@ services:
     depends_on:
       muvee-server:
         condition: service_healthy
+    networks:
+      - muvee-net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ── Watchtower — auto-pulls new ghcr.io/hoveychen/muvee:latest and restarts ─
+  # Only watches containers with `com.centurylinklabs.watchtower.enable=true`
+  # (the four muvee services above). Postgres, registry, and Traefik are left
+  # alone because they pin specific versions and need manual upgrade review.
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_POLL_INTERVAL: "60"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - muvee-net
 
