@@ -2098,21 +2098,39 @@ func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// containerStatusReport is one entry in the batch posted by deploy agents to
+// /api/agent/container-statuses. host_port is 0 when the agent is older and
+// does not report port — in which case the persisted deployment row is left
+// alone.
+type containerStatusReport struct {
+	DomainPrefix string `json:"domain_prefix"`
+	RestartCount int    `json:"restart_count"`
+	OOMKilled    bool   `json:"oom_killed"`
+	HostPort     int    `json:"host_port"`
+}
+
+// shouldRefreshHostPort decides whether a status report carries a fresh
+// host_port that should overwrite the persisted deployment.host_port. 0 means
+// the agent did not include the field (older agent) — we then leave the row
+// alone rather than zero it out.
+func shouldRefreshHostPort(r containerStatusReport) bool {
+	return r.HostPort > 0
+}
+
 // handleContainerStatuses receives a batch of container runtime statuses from deploy agents
-// and updates the restart_count / oom_killed fields on the currently running deployment
-// for each reported container (identified by domain_prefix).
+// and updates the restart_count / oom_killed / host_port fields on the currently running
+// deployment for each reported container (identified by domain_prefix).
 func (s *Server) handleContainerStatuses(w http.ResponseWriter, r *http.Request) {
-	var statuses []struct {
-		DomainPrefix string `json:"domain_prefix"`
-		RestartCount int    `json:"restart_count"`
-		OOMKilled    bool   `json:"oom_killed"`
-	}
+	var statuses []containerStatusReport
 	if err := json.NewDecoder(r.Body).Decode(&statuses); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
 	for _, s2 := range statuses {
 		_ = s.store.UpdateDeploymentRuntimeStatus(r.Context(), s2.DomainPrefix, s2.RestartCount, s2.OOMKilled)
+		if shouldRefreshHostPort(s2) {
+			_ = s.store.UpdateDeploymentHostPortByDomainPrefix(r.Context(), s2.DomainPrefix, s2.HostPort)
+		}
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
 }

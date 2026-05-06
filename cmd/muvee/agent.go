@@ -494,10 +494,8 @@ func runContainerStatusReporter(ctx context.Context, baseURL, secret string) {
 }
 
 func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
-	out, err := exec.CommandContext(ctx, "docker", "ps",
-		"--filter", "name=muvee-",
-		"--format", "{{.Names}}").Output()
-	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+	names, err := listMuveeContainerNames(ctx)
+	if err != nil || len(names) == 0 {
 		return
 	}
 
@@ -505,34 +503,29 @@ func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 		DomainPrefix string `json:"domain_prefix"`
 		RestartCount int    `json:"restart_count"`
 		OOMKilled    bool   `json:"oom_killed"`
+		HostPort     int    `json:"host_port,omitempty"`
 	}
 	var statuses []containerStatus
 
-	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		name = strings.TrimSpace(name)
-		if !strings.HasPrefix(name, "muvee-") {
-			continue
-		}
-		domainPrefix := strings.TrimPrefix(name, "muvee-")
-
+	for _, name := range names {
 		inspectOut, err := exec.CommandContext(ctx, "docker", "inspect",
-			"--format", `{"restart_count":{{.RestartCount}},"oom_killed":{{.State.OOMKilled}}}`,
-			name).Output()
+			"--format", "{{json .}}", name).Output()
 		if err != nil {
 			continue
 		}
-		var st struct {
-			RestartCount int  `json:"restart_count"`
-			OOMKilled    bool `json:"oom_killed"`
-		}
-		if err := json.Unmarshal(bytes.TrimSpace(inspectOut), &st); err != nil {
+		st, ok, err := parseMuveeContainerInspect(bytes.TrimSpace(inspectOut))
+		if err != nil {
 			log.Printf("Failed to parse inspect output for %s: %v", name, err)
 			continue
 		}
+		if !ok {
+			continue
+		}
 		statuses = append(statuses, containerStatus{
-			DomainPrefix: domainPrefix,
+			DomainPrefix: st.DomainPrefix,
 			RestartCount: st.RestartCount,
 			OOMKilled:    st.OOMKilled,
+			HostPort:     st.HostPort,
 		})
 	}
 
@@ -544,6 +537,53 @@ func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 	if resp != nil {
 		resp.Body.Close()
 	}
+}
+
+// listMuveeContainerNames returns the names of all running containers tagged
+// with `muvee.domain_prefix` — both single-container and compose-managed
+// deployments. Returns nil with no error when no muvee containers are running.
+func listMuveeContainerNames(ctx context.Context) ([]string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "ps",
+		"--filter", "label=muvee.domain_prefix",
+		"--format", "{{.Names}}").Output()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// listMuveeContainerNameToPrefix returns a name → domain_prefix map for every
+// running muvee container. The metrics reporter uses it to translate the
+// container names emitted by `docker stats` into deployment identities the
+// control plane recognizes (compose service containers do not have names like
+// `muvee-<prefix>` so prefix-stripping does not work).
+func listMuveeContainerNameToPrefix(ctx context.Context) (map[string]string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "ps",
+		"--filter", "label=muvee.domain_prefix",
+		"--format", "{{.Names}}\t{{.Label \"muvee.domain_prefix\"}}").Output()
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			continue
+		}
+		m[parts[0]] = parts[1]
+	}
+	return m, nil
 }
 
 // ─── Container Metrics Reporter ───────────────────────────────────────────────
@@ -559,25 +599,17 @@ type containerMetricReport struct {
 	BlockWriteBytes int64   `json:"block_write_bytes"`
 }
 
-// reportContainerMetrics collects resource stats for all muvee-* containers via
+// reportContainerMetrics collects resource stats for every muvee-managed
+// container (identified by the muvee.domain_prefix label) via
 // `docker stats --no-stream` and ships them to the control plane.
 func reportContainerMetrics(ctx context.Context, baseURL, secret string) {
-	// 1. Enumerate running muvee containers.
-	psOut, err := exec.CommandContext(ctx, "docker", "ps",
-		"--filter", "name=muvee-",
-		"--format", "{{.Names}}").Output()
-	if err != nil || len(bytes.TrimSpace(psOut)) == 0 {
+	nameToPrefix, err := listMuveeContainerNameToPrefix(ctx)
+	if err != nil || len(nameToPrefix) == 0 {
 		return
 	}
-	var muveeNames []string
-	for _, name := range strings.Split(strings.TrimSpace(string(psOut)), "\n") {
-		name = strings.TrimSpace(name)
-		if strings.HasPrefix(name, "muvee-") {
-			muveeNames = append(muveeNames, name)
-		}
-	}
-	if len(muveeNames) == 0 {
-		return
+	muveeNames := make([]string, 0, len(nameToPrefix))
+	for name := range nameToPrefix {
+		muveeNames = append(muveeNames, name)
 	}
 
 	// 2. Collect stats (one-shot, no streaming).
@@ -610,10 +642,10 @@ func reportContainerMetrics(ctx context.Context, baseURL, secret string) {
 			log.Printf("docker stats parse error: %v (line: %s)", err, line)
 			continue
 		}
-		if !strings.HasPrefix(raw.Name, "muvee-") {
+		domainPrefix, ok := nameToPrefix[raw.Name]
+		if !ok || domainPrefix == "" {
 			continue
 		}
-		domainPrefix := strings.TrimPrefix(raw.Name, "muvee-")
 		memUsage, memLimit := parseDockerIOPair(raw.Mem)
 		netRx, netTx := parseDockerIOPair(raw.Net)
 		blockRead, blockWrite := parseDockerIOPair(raw.Block)

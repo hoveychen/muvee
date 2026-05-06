@@ -107,11 +107,15 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 
 	// Build docker run command. Port 0 on the host lets Docker pick a free port.
 	// The actual assigned port is retrieved via `docker port` after startup.
+	// muvee.* labels let the agent's status reporter group containers and look
+	// up the right host-side port mapping after a docker restart reassigns it.
 	dockerArgs := []string{
 		"run", "-d",
 		"--name", oldContainer,
 		"--restart", "unless-stopped",
 		"-p", fmt.Sprintf("0:%d", containerPort),
+		"--label", "muvee.domain_prefix=" + cfg.DomainPrefix,
+		"--label", "muvee.expose_port=" + strconv.Itoa(containerPort),
 	}
 	if cfg.MemoryLimit != "" {
 		dockerArgs = append(dockerArgs, "--memory", cfg.MemoryLimit)

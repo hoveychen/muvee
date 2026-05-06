@@ -786,6 +786,25 @@ func (s *Store) GetRunningDeploymentsByNode(ctx context.Context, nodeID uuid.UUI
 	return deps, nil
 }
 
+// UpdateDeploymentHostPortByDomainPrefix overwrites the host_port column on the
+// currently running deployment of the project identified by domain_prefix when
+// the reported port differs from the persisted value. Used by the agent's
+// periodic container-status heartbeat to recover from random host port changes
+// after a docker restart.
+func (s *Store) UpdateDeploymentHostPortByDomainPrefix(ctx context.Context, domainPrefix string, hostPort int) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE deployments d
+		SET host_port = $1,
+		    updated_at = NOW()
+		FROM projects p
+		WHERE d.project_id = p.id
+		  AND p.domain_prefix = $2
+		  AND d.status = 'running'
+		  AND d.host_port IS DISTINCT FROM $1
+	`, hostPort, domainPrefix)
+	return err
+}
+
 // UpdateDeploymentRuntimeStatus updates the restart count and OOM-killed flag for the
 // currently running deployment of a project identified by domain prefix.
 // restart_count is updated to the maximum of the stored and reported value (monotonically increasing).

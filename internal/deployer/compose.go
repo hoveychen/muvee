@@ -139,9 +139,20 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	}
 
 	// Override file: publish the exposed service's container port to a random
-	// host port. Compose merges this on top of the user's compose file.
+	// host port and stamp muvee.* labels on the expose-service container so the
+	// agent can find it again after a restart reassigns the host port. Compose
+	// merges this on top of the user's compose file.
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
-	override := fmt.Sprintf("services:\n  %s:\n    ports:\n      - \"0:%d\"\n", cfg.ExposeService, cfg.ExposePort)
+	override := fmt.Sprintf(
+		"services:\n"+
+			"  %s:\n"+
+			"    ports:\n"+
+			"      - \"0:%d\"\n"+
+			"    labels:\n"+
+			"      muvee.domain_prefix: \"%s\"\n"+
+			"      muvee.expose_port: \"%d\"\n",
+		cfg.ExposeService, cfg.ExposePort, cfg.DomainPrefix, cfg.ExposePort,
+	)
 	if err := os.WriteFile(overridePath, []byte(override), 0644); err != nil {
 		return 0, fmt.Errorf("write override file: %w", err)
 	}
