@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -208,9 +209,10 @@ func (s *Scheduler) TriggerDeployment(ctx context.Context, projectID uuid.UUID, 
 	if err != nil {
 		return nil, fmt.Errorf("create deployment: %w", err)
 	}
-	// Compose projects skip the build phase: images are pulled by `docker
-	// compose up` directly on the pinned deploy node.
-	if project.ProjectType == store.ProjectTypeCompose {
+	// Compose and image projects skip the build phase: images are pulled by
+	// `docker compose up` directly on the pinned deploy node. Image projects
+	// reuse the same code path with a synthesised inline compose YAML.
+	if project.ProjectType == store.ProjectTypeCompose || project.ProjectType == store.ProjectTypeImage {
 		if err := s.DispatchDeploy(ctx, deployment, project, ""); err != nil {
 			return nil, fmt.Errorf("dispatch deploy: %w", err)
 		}
@@ -229,6 +231,9 @@ func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deploym
 	}
 	if project.ProjectType == store.ProjectTypeCompose {
 		return fmt.Errorf("cannot dispatch build for compose project (compose deploys must use image: only)")
+	}
+	if project.ProjectType == store.ProjectTypeImage {
+		return fmt.Errorf("cannot dispatch build for image project (pulls a pre-built image)")
 	}
 	builderNode, err := s.PickBuilderNode(ctx)
 	if err != nil {
@@ -303,6 +308,9 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 	}
 	if project.ProjectType == store.ProjectTypeCompose {
 		return s.dispatchComposeDeploy(ctx, deployment, project)
+	}
+	if project.ProjectType == store.ProjectTypeImage {
+		return s.dispatchImageDeploy(ctx, deployment, project)
 	}
 	pds, err := s.store.GetProjectDatasets(ctx, project.ID)
 	if err != nil {
@@ -439,6 +447,81 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 	}
 	_, err = s.store.CreateTask(ctx, task)
 	return err
+}
+
+// dispatchImageDeploy schedules a deploy for an image-only project. It reuses
+// the compose deployer on the agent side by synthesising a tiny inline
+// docker-compose.yml from the project's image_ref + container_port — no git
+// repo is involved. The agent receives `inline_compose_yaml` in its payload
+// and skips the clone step.
+func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
+	if project.ImageRef == "" {
+		return fmt.Errorf("image project has no image_ref")
+	}
+	if project.ContainerPort <= 0 {
+		return fmt.Errorf("image project has no container_port")
+	}
+
+	deployNode, err := s.pickOrReusePinnedNode(ctx, project)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetDeploymentNode(ctx, deployment.ID, deployNode.ID); err != nil {
+		return err
+	}
+
+	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
+	envVars := make(map[string]string)
+	for _, sec := range secrets {
+		if sec.EnvVarName != "" {
+			envVars[sec.EnvVarName] = sec.PlainValue
+		}
+	}
+
+	inlineCompose := buildInlineComposeYAML(project.ImageRef, project.ContainerPort, project.VolumeMountPath)
+
+	payload := map[string]interface{}{
+		"mode":                "compose",
+		"deployment_id":       deployment.ID.String(),
+		"project_id":          project.ID.String(),
+		"domain_prefix":       project.DomainPrefix,
+		"inline_compose_yaml": inlineCompose,
+		"expose_service":      "app",
+		"expose_port":         project.ContainerPort,
+		"env_vars":            envVars,
+	}
+
+	task := &store.Task{
+		Type:         store.TaskTypeDeploy,
+		NodeID:       &deployNode.ID,
+		DeploymentID: deployment.ID,
+		Payload:      payload,
+	}
+	_, err = s.store.CreateTask(ctx, task)
+	return err
+}
+
+// buildInlineComposeYAML returns a minimal docker-compose.yml for an image-only
+// project: a single service named "app" bound to the given image and port,
+// with an optional named volume mounted at volumeMountPath. The volume is
+// named after the service so it survives across redeploys (compose binds it
+// to the project's pinned deploy node).
+func buildInlineComposeYAML(imageRef string, containerPort int, volumeMountPath string) string {
+	var sb strings.Builder
+	sb.WriteString("services:\n")
+	sb.WriteString("  app:\n")
+	sb.WriteString(fmt.Sprintf("    image: %s\n", imageRef))
+	sb.WriteString("    restart: unless-stopped\n")
+	if volumeMountPath != "" {
+		sb.WriteString("    volumes:\n")
+		sb.WriteString(fmt.Sprintf("      - app-data:%s\n", volumeMountPath))
+	}
+	if volumeMountPath != "" {
+		sb.WriteString("volumes:\n")
+		sb.WriteString("  app-data:\n")
+	}
+	_ = containerPort // ports are handled by the deployer's Traefik label injection
+	return sb.String()
 }
 
 // pickOrReusePinnedNode returns the project's pinned deploy node, picking and

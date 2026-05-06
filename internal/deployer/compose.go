@@ -38,6 +38,11 @@ type ComposeConfig struct {
 	// EnvVars are written to a project-level .env file consumed by compose,
 	// so they reach all services via standard ${VAR} interpolation.
 	EnvVars map[string]string
+	// InlineComposeYAML, when non-empty, is written directly into the work
+	// directory as docker-compose.yml and the git clone step is skipped. Used
+	// by image-only projects whose compose file is synthesised by the
+	// scheduler from project.image_ref.
+	InlineComposeYAML string
 	// WorkBaseDir is the deploy-node directory under which per-project clones
 	// are kept. Defaults to /var/lib/muvee/compose.
 	WorkBaseDir string
@@ -69,8 +74,8 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	if cfg.DomainPrefix == "" {
 		return 0, fmt.Errorf("compose deploy: domain prefix is required")
 	}
-	if cfg.GitURL == "" {
-		return 0, fmt.Errorf("compose deploy: git url is required")
+	if cfg.GitURL == "" && cfg.InlineComposeYAML == "" {
+		return 0, fmt.Errorf("compose deploy: either git_url or inline_compose_yaml is required")
 	}
 	if cfg.ExposeService == "" || cfg.ExposePort == 0 {
 		return 0, fmt.Errorf("compose deploy: expose_service and expose_port are required")
@@ -89,8 +94,23 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	}
 	workDir := filepath.Join(workBase, cfg.ProjectID)
 
-	if err := cloneCompose(ctx, cfg, workDir, logFn); err != nil {
-		return 0, fmt.Errorf("clone: %w", err)
+	if cfg.InlineComposeYAML != "" {
+		// Image-only project: write the synthesised compose file straight to
+		// the work dir, skip the git clone entirely.
+		if err := os.RemoveAll(workDir); err != nil {
+			return 0, fmt.Errorf("clean work dir: %w", err)
+		}
+		if err := os.MkdirAll(workDir, 0755); err != nil {
+			return 0, fmt.Errorf("create work dir: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, composeFilePath), []byte(cfg.InlineComposeYAML), 0644); err != nil {
+			return 0, fmt.Errorf("write inline compose: %w", err)
+		}
+		logFn("Using inline compose file (image-only project, no git clone)")
+	} else {
+		if err := cloneCompose(ctx, cfg, workDir, logFn); err != nil {
+			return 0, fmt.Errorf("clone: %w", err)
+		}
 	}
 
 	composePath := filepath.Join(workDir, composeFilePath)

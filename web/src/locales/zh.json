@@ -99,6 +99,7 @@
     "composeHint": "Docker Compose 项目 — 对外暴露 {{service}}:{{port}}（{{pinned}}）",
     "composePinned": "已固定到部署节点 — 卷数据可在重新部署时保留",
     "composeUnpinned": "尚未固定 — 首次部署时会固定到一个节点",
+    "imageHint": "现成镜像：{{ref}}（端口 {{port}}）",
     "pushUrl": "GIT 推送地址",
     "pushUrlHint": "使用任意用户名和您的 API 令牌作为密码。",
     "pushUrlGenerateToken": "生成令牌",
@@ -141,6 +142,10 @@
       "exposeServiceHint": "需要通过 muvee 路由对外暴露的 compose 服务名。",
       "exposePort": "对外暴露的端口",
       "exposePortHint": "对应服务在容器内监听的端口（1–65535）。",
+      "imageRef": "镜像地址",
+      "imageRefHint": "OCI 镜像引用（例如 ghcr.io/owner/repo:tag、docker.io/redis:7-alpine）。",
+      "containerPort": "容器端口",
+      "containerPortHint": "镜像在容器内监听的端口（1–65535）。",
       "pinnedNode": "已固定的部署节点",
       "pinnedNodeNone": "（尚未固定，首次部署时确定）",
       "pinnedNodeHint": "Compose 项目会固定在单一部署节点上，以保留 docker 本地卷数据。此项不可编辑——如需迁移，请删除项目并重新创建。",
@@ -327,12 +332,18 @@
       "exposeService": "对外暴露的服务",
       "exposeServiceHint": "需要通过 muvee 路由对外暴露的 compose 服务名。",
       "exposePort": "对外暴露的端口",
-      "exposePortHint": "对应服务在容器内监听的端口（例如 80、8080）。"
+      "exposePortHint": "对应服务在容器内监听的端口（例如 80、8080）。",
+      "imageRef": "镜像地址",
+      "imageRefHint": "OCI 镜像引用（例如 ghcr.io/owner/repo:tag、docker.io/redis:7-alpine）。",
+      "containerPort": "容器端口",
+      "containerPortHint": "镜像在容器内监听的端口，默认 8080。"
     },
     "projectType": {
       "deployment": "容器部署",
       "compose": "Docker Compose",
       "composeHint": "通过 docker-compose 文件部署多容器应用。镜像必须是预先构建好的（不支持 build: 指令）。会固定到单一部署节点以保留卷数据。",
+      "image": "现成镜像",
+      "imageHint": "直接绑定一个 OCI 镜像（Docker Hub、GHCR 等），不需要 git 仓库或构建。开启 auto-deploy 后，镜像 digest 一变就会自动重新部署。",
       "tunnel": "隧道（仅域名）",
       "tunnelHint": "预留一个域名前缀用于隧道访问。无需 Git 仓库或容器，流量通过 muveectl tunnel 从本地转发。"
     },

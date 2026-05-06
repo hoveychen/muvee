@@ -63,6 +63,10 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("compose-file", "", "Compose file path relative to repo root (default: docker-compose.yml)")
 	cmd.Flags().String("expose-service", "", "Compose service name to expose via the muvee router")
 	cmd.Flags().Int("expose-port", 0, "Container port on the exposed service to publish")
+	cmd.Flags().String("image-ref", "", "OCI image reference (e.g. ghcr.io/foo/bar:latest); presence selects the image-only project type")
+	cmd.Flags().Int("container-port", 0, "Container port to publish (image-only project type; default 8080)")
+	cmd.Flags().String("memory-limit", "", "Container memory limit (e.g. 4g, 512m)")
+	cmd.Flags().String("volume-mount-path", "", "Container path for the persistent named volume (compose/image projects)")
 	cmd.Flags().String("description", "", "Project description")
 	cmd.Flags().String("icon", "", "Project icon (inline SVG or URL)")
 	cmd.Flags().String("tags", "", "Comma-separated project tags")
@@ -130,6 +134,22 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		v, _ := cmd.Flags().GetInt("expose-port")
 		p["expose_port"] = v
 	}
+	if cmd.Flags().Changed("image-ref") {
+		v, _ := cmd.Flags().GetString("image-ref")
+		p["image_ref"] = v
+	}
+	if cmd.Flags().Changed("container-port") {
+		v, _ := cmd.Flags().GetInt("container-port")
+		p["container_port"] = v
+	}
+	if cmd.Flags().Changed("memory-limit") {
+		v, _ := cmd.Flags().GetString("memory-limit")
+		p["memory_limit"] = v
+	}
+	if cmd.Flags().Changed("volume-mount-path") {
+		v, _ := cmd.Flags().GetString("volume-mount-path")
+		p["volume_mount_path"] = v
+	}
 	if cmd.Flags().Changed("description") {
 		v, _ := cmd.Flags().GetString("description")
 		p["description"] = v
@@ -183,11 +203,20 @@ var projectsCreateCmd = &cobra.Command{
 		p := collectProjectFlags(cmd)
 		domainOnly, _ := cmd.Flags().GetBool("domain-only")
 		composeMode, _ := cmd.Flags().GetBool("compose")
+		imageMode := cmd.Flags().Changed("image-ref")
 		isHosted, _ := cmd.Flags().GetString("git-source")
 		if domainOnly && composeMode {
 			return fmt.Errorf("--domain-only and --compose are mutually exclusive")
 		}
-		if composeMode {
+		if imageMode && (domainOnly || composeMode) {
+			return fmt.Errorf("--image-ref is mutually exclusive with --domain-only / --compose")
+		}
+		if imageMode {
+			if cmd.Flags().Changed("git-url") || cmd.Flags().Changed("git-source") {
+				return fmt.Errorf("--git-url and --git-source are not allowed with --image-ref")
+			}
+			p["project_type"] = "image"
+		} else if composeMode {
 			if !cmd.Flags().Changed("git-url") {
 				return fmt.Errorf("--git-url is required for compose projects")
 			}
@@ -208,7 +237,7 @@ var projectsCreateCmd = &cobra.Command{
 				return fmt.Errorf("--git-url and --git-source are not allowed with --domain-only")
 			}
 		} else if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
-			return fmt.Errorf("--git-url is required (or use --git-source hosted, --domain-only, or --compose)")
+			return fmt.Errorf("--git-url is required (or use --git-source hosted, --domain-only, --compose, or --image-ref)")
 		}
 		result, err := cl.do("POST", "/api/projects", p)
 		if err != nil {

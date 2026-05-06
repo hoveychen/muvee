@@ -934,8 +934,34 @@ func validateProject(p *store.Project) error {
 			return nil
 		}
 		return validateDomainPrefix(p.DomainPrefix)
+	case store.ProjectTypeImage:
+		// Image projects bind a pre-built OCI image directly — no git, no
+		// dockerfile, no compose file. The deploy path synthesises a tiny
+		// inline compose YAML on the fly so it can reuse the compose runtime.
+		if strings.TrimSpace(p.ImageRef) == "" {
+			return fmt.Errorf("image_ref is required for image projects")
+		}
+		if p.ContainerPort <= 0 || p.ContainerPort > 65535 {
+			return fmt.Errorf("container_port must be between 1 and 65535")
+		}
+		// Git/build/compose fields don't apply.
+		p.GitURL = ""
+		p.GitBranch = ""
+		p.GitSource = ""
+		p.DockerfilePath = ""
+		p.ComposeFilePath = ""
+		p.ExposeService = ""
+		p.ExposePort = 0
+		if p.DomainPrefix == "" {
+			if err := validateDomainPrefix(p.Name); err != nil {
+				return fmt.Errorf("domain_prefix is required because project name %q cannot be used as a subdomain: %w", p.Name, err)
+			}
+			p.DomainPrefix = p.Name
+			return nil
+		}
+		return validateDomainPrefix(p.DomainPrefix)
 	default:
-		return fmt.Errorf("project_type must be 'deployment', 'domain_only', or 'compose'")
+		return fmt.Errorf("project_type must be 'deployment', 'domain_only', 'compose', or 'image'")
 	}
 }
 
@@ -1242,7 +1268,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	// deleting the project. Tied to the latest deployment so the task survives
 	// the cascade, since tasks.deployment_id is ON DELETE CASCADE; if no
 	// deployment ever ran we skip the dispatch and leave the stack untouched.
-	if proj != nil && proj.ProjectType == store.ProjectTypeCompose && proj.PinnedNodeID != nil {
+	if proj != nil && (proj.ProjectType == store.ProjectTypeCompose || proj.ProjectType == store.ProjectTypeImage) && proj.PinnedNodeID != nil {
 		if deployments, err := s.store.ListDeployments(r.Context(), proj.ID); err == nil && len(deployments) > 0 {
 			_ = s.sched.DispatchComposeCleanup(r.Context(), proj, deployments[0].ID)
 		}

@@ -13,7 +13,7 @@ export interface User {
 export interface Project {
   id: string
   name: string
-  project_type: 'deployment' | 'domain_only' | 'compose'
+  project_type: 'deployment' | 'domain_only' | 'compose' | 'image'
   git_url: string
   git_branch: string
   git_source: 'external' | 'hosted'
@@ -37,6 +37,11 @@ export interface Project {
   expose_service?: string
   expose_port?: number
   pinned_node_id?: string | null
+  // container_port is required by all deploying project types; for 'image'
+  // projects it's the port published by the pre-built image.
+  container_port?: number
+  // Image-specific field (only meaningful when project_type === 'image').
+  image_ref?: string
   // Auto-deploy: when true, the server triggers a fresh deployment whenever
   // the tracked branch advances (push for hosted repos, poll for external).
   auto_deploy_enabled: boolean

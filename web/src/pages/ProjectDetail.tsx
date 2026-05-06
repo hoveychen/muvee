@@ -136,6 +136,7 @@ export default function ProjectDetail() {
 
   const isTunnel = project.project_type === 'domain_only'
   const isCompose = project.project_type === 'compose'
+  const isImage = project.project_type === 'image'
   const latestDeploy = deployments[0]
   const color = isTunnel ? 'var(--accent)' : statusColor(latestDeploy?.status ?? 'pending')
 
@@ -201,6 +202,14 @@ export default function ProjectDetail() {
               service: project.expose_service ?? '',
               port: project.expose_port ?? 0,
               pinned: project.pinned_node_id ? t('projectDetail.composePinned') : t('projectDetail.composeUnpinned'),
+            })}
+          </div>
+        )}
+        {isImage && (
+          <div style={{ marginTop: '0.5rem', marginLeft: '1.75rem', fontSize: '0.8125rem', color: 'var(--fg-muted)', fontFamily: MONO, background: 'var(--bg-hover)', padding: '0.5rem 0.75rem', borderRadius: '6px', display: 'inline-block' }}>
+            {t('projectDetail.imageHint', {
+              ref: project.image_ref ?? '',
+              port: project.container_port ?? 0,
             })}
           </div>
         )}
@@ -700,13 +709,32 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
   const nameIsValidPrefix = isValidDomainPrefix(form.name ?? '')
   const domainPrefixRequired = !nameIsValidPrefix
   const isCompose = form.project_type === 'compose'
+  const isImage = form.project_type === 'image'
   const isTunnelType = form.project_type === 'domain_only'
 
   return (
     <div className="max-w-lg space-y-5">
       {field(t('projectDetail.config.projectName'), 'name')}
-      {!isTunnelType && field(t('projectDetail.config.gitUrl'), 'git_url')}
-      {!isTunnelType && field(t('projectDetail.config.gitBranch'), 'git_branch')}
+      {!isTunnelType && !isImage && field(t('projectDetail.config.gitUrl'), 'git_url')}
+      {!isTunnelType && !isImage && field(t('projectDetail.config.gitBranch'), 'git_branch')}
+      {isImage && field(t('projectDetail.config.imageRef'), 'image_ref', t('projectDetail.config.imageRefHint'))}
+      {isImage && (
+        <div>
+          <label className="form-label">{t('projectDetail.config.containerPort').toUpperCase()}</label>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={form.container_port ?? ''}
+            onChange={e => onChange({ ...form, container_port: e.target.value === '' ? undefined : Number(e.target.value) })}
+            className="form-input w-full"
+            style={{ fontFamily: MONO }}
+          />
+          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            {t('projectDetail.config.containerPortHint')}
+          </p>
+        </div>
+      )}
 
       {!isTunnelType && (
         <div>
@@ -826,8 +854,9 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
         </p>
       </div>
 
-      {/* Build / runtime fields — deployment only. Compose uses image: directives, no Dockerfile or per-container memory. */}
-      {!isCompose && !isTunnelType && field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
+      {/* Build / runtime fields — deployment only. Compose uses image: directives, no Dockerfile. */}
+      {!isCompose && !isImage && !isTunnelType && field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
+      {/* Memory + volume mount path: shared by deployment and image projects. */}
       {!isCompose && !isTunnelType && field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
       {!isCompose && !isTunnelType && field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
 

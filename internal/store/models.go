@@ -39,6 +39,7 @@ const (
 	ProjectTypeDeployment ProjectType = "deployment"
 	ProjectTypeDomainOnly ProjectType = "domain_only"
 	ProjectTypeCompose    ProjectType = "compose"
+	ProjectTypeImage      ProjectType = "image"
 )
 
 type Project struct {
@@ -72,6 +73,9 @@ type Project struct {
 	// docker named volumes survive across redeploys. Set on first deploy and
 	// reused thereafter.
 	PinnedNodeID *uuid.UUID `db:"pinned_node_id"    json:"pinned_node_id,omitempty"`
+	// ImageRef is the OCI image reference for ProjectType == "image" projects
+	// (e.g. "ghcr.io/foo/bar:latest"). Empty for all other project types.
+	ImageRef string `db:"image_ref"         json:"image_ref"`
 	// AutoDeployEnabled opts the project into automatic redeploy on new commits.
 	AutoDeployEnabled bool `db:"auto_deploy_enabled" json:"auto_deploy_enabled"`
 	// LastTrackedCommitSHA is the SHA we last triggered a deployment for via the

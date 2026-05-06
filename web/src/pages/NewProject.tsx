@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key, Layers } from 'lucide-react'
+import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key, Layers, Package } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Project, Secret } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
@@ -283,7 +283,7 @@ function PrivateRepoSection({
 // ─── Main NewProject component ────────────────────────────────────────────────
 
 export default function NewProject() {
-  const [projectType, setProjectType] = useState<'deployment' | 'domain_only' | 'compose'>('deployment')
+  const [projectType, setProjectType] = useState<'deployment' | 'domain_only' | 'compose' | 'image'>('deployment')
   const [form, setForm] = useState<Partial<Project>>({
     git_source: 'external',
     git_branch: 'main',
@@ -353,6 +353,22 @@ export default function NewProject() {
           tags: form.tags,
           project_type: 'compose',
         }
+      } else if (projectType === 'image') {
+        payload = {
+          name: form.name,
+          domain_prefix: form.domain_prefix,
+          image_ref: form.image_ref,
+          container_port: form.container_port || 8080,
+          memory_limit: form.memory_limit,
+          volume_mount_path: form.volume_mount_path,
+          auth_required: form.auth_required,
+          auth_allowed_domains: form.auth_allowed_domains,
+          auth_bypass_paths: form.auth_bypass_paths,
+          description: form.description,
+          icon: form.icon,
+          tags: form.tags,
+          project_type: 'image',
+        }
       } else {
         payload = { ...form, project_type: 'deployment' }
       }
@@ -365,6 +381,11 @@ export default function NewProject() {
       }
       // compose projects also skip credential setup for now and navigate.
       if (projectType === 'compose') {
+        navigate(`/projects/${project.id}`)
+        return
+      }
+      // image projects bind a pre-built image — no credentials needed.
+      if (projectType === 'image') {
         navigate(`/projects/${project.id}`)
         return
       }
@@ -589,6 +610,7 @@ export default function NewProject() {
               {([
                 { id: 'deployment' as const, icon: Globe, label: t('newProject.projectType.deployment') },
                 { id: 'compose' as const, icon: Layers, label: t('newProject.projectType.compose') },
+                { id: 'image' as const, icon: Package, label: t('newProject.projectType.image') },
                 { id: 'domain_only' as const, icon: Radio, label: t('newProject.projectType.tunnel') },
               ]).map(opt => (
                 <button
@@ -617,6 +639,11 @@ export default function NewProject() {
             {projectType === 'compose' && (
               <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
                 {t('newProject.projectType.composeHint')}
+              </p>
+            )}
+            {projectType === 'image' && (
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.projectType.imageHint')}
               </p>
             )}
           </div>
@@ -702,6 +729,40 @@ export default function NewProject() {
                 className="form-input"
               />
             </div>
+          )}
+
+          {/* Image-specific fields */}
+          {projectType === 'image' && (
+            <>
+              <div>
+                {fieldLabel(t('newProject.fields.imageRef'))}
+                <input
+                  value={form.image_ref ?? ''}
+                  onChange={e => setForm({ ...form, image_ref: e.target.value })}
+                  required
+                  placeholder="ghcr.io/owner/repo:latest"
+                  className="form-input"
+                />
+                <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                  {t('newProject.fields.imageRefHint')}
+                </p>
+              </div>
+              <div>
+                {fieldLabel(t('newProject.fields.containerPort'), false)}
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={form.container_port ?? ''}
+                  onChange={e => setForm({ ...form, container_port: e.target.value === '' ? undefined : Number(e.target.value) })}
+                  placeholder="8080"
+                  className="form-input"
+                />
+                <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                  {t('newProject.fields.containerPortHint')}
+                </p>
+              </div>
+            </>
           )}
 
           {/* Compose-specific fields */}
@@ -827,8 +888,8 @@ export default function NewProject() {
           </div>
           )}
 
-          {/* Memory limit — deployment only */}
-          {projectType === 'deployment' && (
+          {/* Memory limit — deployment / image */}
+          {(projectType === 'deployment' || projectType === 'image') && (
           <div>
             {fieldLabel(t('newProject.fields.memoryLimit'), false)}
             <input
@@ -843,8 +904,8 @@ export default function NewProject() {
           </div>
           )}
 
-          {/* Persistent storage path — deployment only */}
-          {projectType === 'deployment' && (
+          {/* Persistent storage path — deployment / image */}
+          {(projectType === 'deployment' || projectType === 'image') && (
           <div>
             {fieldLabel(t('newProject.fields.volumeMountPath'), false)}
             <input

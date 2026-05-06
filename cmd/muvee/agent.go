@@ -386,18 +386,19 @@ func runComposeDeploy(ctx context.Context, task *store.Task, logFn func(string))
 		}
 	}
 	cfg := deployer.ComposeConfig{
-		DeploymentID:    str(p, "deployment_id"),
-		ProjectID:       str(p, "project_id"),
-		DomainPrefix:    str(p, "domain_prefix"),
-		GitURL:          str(p, "git_url"),
-		GitBranch:       str(p, "git_branch"),
-		GitSSHKey:       str(p, "git_ssh_key"),
-		GitUsername:     str(p, "git_username"),
-		GitToken:        str(p, "git_token"),
-		ComposeFilePath: str(p, "compose_file_path"),
-		ExposeService:   str(p, "expose_service"),
-		ExposePort:      intVal(p, "expose_port"),
-		EnvVars:         envVars,
+		DeploymentID:      str(p, "deployment_id"),
+		ProjectID:         str(p, "project_id"),
+		DomainPrefix:      str(p, "domain_prefix"),
+		GitURL:            str(p, "git_url"),
+		GitBranch:         str(p, "git_branch"),
+		GitSSHKey:         str(p, "git_ssh_key"),
+		GitUsername:       str(p, "git_username"),
+		GitToken:          str(p, "git_token"),
+		ComposeFilePath:   str(p, "compose_file_path"),
+		InlineComposeYAML: str(p, "inline_compose_yaml"),
+		ExposeService:     str(p, "expose_service"),
+		ExposePort:        intVal(p, "expose_port"),
+		EnvVars:           envVars,
 	}
 	return deployer.DeployCompose(ctx, cfg, logFn)
 }

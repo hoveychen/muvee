@@ -114,13 +114,60 @@ func (s *Scheduler) tickImageWatch(ctx context.Context) {
 		return
 	}
 	for _, p := range projects {
-		if p.ProjectType != store.ProjectTypeCompose {
-			continue
-		}
-		if err := s.checkComposeImages(ctx, p); err != nil {
-			log.Printf("image watch: project %q (%s): %v", p.Name, p.ID, err)
+		switch p.ProjectType {
+		case store.ProjectTypeCompose:
+			if err := s.checkComposeImages(ctx, p); err != nil {
+				log.Printf("image watch: project %q (%s): %v", p.Name, p.ID, err)
+			}
+		case store.ProjectTypeImage:
+			if err := s.checkSingleImage(ctx, p); err != nil {
+				log.Printf("image watch: project %q (%s): %v", p.Name, p.ID, err)
+			}
 		}
 	}
+}
+
+// checkSingleImage is the image-only equivalent of checkComposeImages: it
+// watches the digest of the project's single ImageRef field directly, no
+// compose file involved.
+func (s *Scheduler) checkSingleImage(ctx context.Context, p *store.Project) error {
+	if p.ImageRef == "" {
+		return nil
+	}
+	if containsInterpolation(p.ImageRef) {
+		log.Printf("image watch: project %q skipped image %q (contains variable interpolation)", p.Name, p.ImageRef)
+		return nil
+	}
+
+	prior := map[string]string{}
+	if p.LastTrackedImageDigests != "" {
+		_ = json.Unmarshal([]byte(p.LastTrackedImageDigests), &prior)
+	}
+
+	digest, err := s.fetchImageDigest(ctx, p.ImageRef)
+	if err != nil {
+		return fmt.Errorf("digest %q: %w", p.ImageRef, err)
+	}
+	current := map[string]string{p.ImageRef: digest}
+
+	if len(prior) == 0 {
+		return s.persistDigests(ctx, p.ID, current)
+	}
+
+	if prev, ok := prior[p.ImageRef]; ok && prev == digest {
+		// Same image, same digest — nothing to do. If the image_ref itself
+		// changed since last tick, fall through to the trigger path so the
+		// new tag deploys immediately.
+		if sameKeys(prior, current) {
+			return nil
+		}
+	}
+
+	log.Printf("image watch: project %q image digest changed; triggering redeploy", p.Name)
+	if _, err := s.TriggerDeployment(ctx, p.ID, "auto-image"); err != nil {
+		return fmt.Errorf("trigger: %w", err)
+	}
+	return s.persistDigests(ctx, p.ID, current)
 }
 
 func (s *Scheduler) checkComposeImages(ctx context.Context, p *store.Project) error {
