@@ -2498,6 +2498,27 @@ func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName, host string, tls
 	}
 }
 
+// embedBridgeMiddlewareRef is the file-provider middleware reference declared
+// in traefik/dynamic.yml. Appended to every user-facing project router so any
+// HTML page served by a muvee-deployed project gets the embed-bridge SDK
+// auto-injected (see traefik/plugins-local/.../embed-bridge and the
+// docs/embed-bridge.md page). Bypass / device-flow / authservice routers are
+// intentionally excluded — those serve OAuth callbacks, not HTML the user
+// would iframe.
+const embedBridgeMiddlewareRef = "embed-bridge@file"
+
+// attachEmbedBridge appends embedBridgeMiddlewareRef to the router's
+// Middlewares slice unless it's already present. The slice may be nil when
+// no auth middleware ran (public project), in which case we initialise it.
+func attachEmbedBridge(router *traefikRouter) {
+	for _, m := range router.Middlewares {
+		if m == embedBridgeMiddlewareRef {
+			return
+		}
+	}
+	router.Middlewares = append(router.Middlewares, embedBridgeMiddlewareRef)
+}
+
 // addBypassRouters creates higher-priority Traefik routers that skip ForwardAuth
 // for the given newline-separated bypass paths.
 func addBypassRouters(cfg *traefikDynamicConfig, routerName, host string, tls *traefikTLS, bypassPaths string) {
@@ -2600,6 +2621,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
 		}
 
+		attachEmbedBridge(&httpsRouter)
 		cfg.HTTP.Routers[name] = httpsRouter
 		cfg.HTTP.Services[name] = traefikService{
 			LoadBalancer: traefikLB{
@@ -2661,6 +2683,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				addDeviceFlowRouter(&cfg, name, host, router.TLS)
 			}
 
+			attachEmbedBridge(&router)
 			cfg.HTTP.Routers[name] = router
 			cfg.HTTP.Services[name] = traefikService{
 				LoadBalancer: traefikLB{
@@ -2724,6 +2747,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				addDeviceFlowRouter(&cfg, name, host, domainRouter.TLS)
 			}
 
+			attachEmbedBridge(&domainRouter)
 			cfg.HTTP.Routers[name] = domainRouter
 			cfg.HTTP.Services[name] = traefikService{
 				LoadBalancer: traefikLB{

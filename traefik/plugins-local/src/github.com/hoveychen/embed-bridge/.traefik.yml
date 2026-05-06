@@ -1,0 +1,15 @@
+displayName: Embed Bridge
+type: middleware
+
+import: github.com/hoveychen/embed-bridge
+
+summary: |
+  Auto-injects the muvee embed-bridge SDK into HTML responses so any
+  muvee-deployed project surfaces its real <title> + URL to a host page
+  that iframes it (e.g. agent-workspace `/embed` page). Also intercepts
+  GET /_embed-bridge.js to serve the SDK script body directly so the
+  injected <script src="/_embed-bridge.js"> tag resolves regardless of
+  whether the underlying project's webserver knows about that path.
+
+testData:
+  scriptPath: /_embed-bridge.js

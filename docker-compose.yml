@@ -191,6 +191,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      # embed-bridge local plugin: traefik loads .go sources from this tree
+      # at startup via yaegi (declared under `experimental.localPlugins` in
+      # traefik.yml). Mount read-only — the plugin self-contained.
+      - ./traefik/plugins-local:/plugins-local:ro
       - letsencrypt_data:/letsencrypt
       - traefik_logs:/var/log/traefik
     environment:

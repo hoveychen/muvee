@@ -49,6 +49,15 @@ providers:
     pollInterval: "5s"
     pollTimeout: "3s"
 
+# Local plugins — Go source under /plugins-local/src/<modulePath>. The
+# embed-bridge plugin auto-injects the embed-bridge SDK into HTML responses
+# so any muvee-deployed project's pages work as iframe targets without
+# project-side changes (see docs/embed-bridge.md, plugins-local/src/github.com/hoveychen/embed-bridge).
+experimental:
+  localPlugins:
+    embed-bridge:
+      moduleName: github.com/hoveychen/embed-bridge
+
 log:
   level: DEBUG
 

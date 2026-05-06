@@ -26,3 +26,12 @@ http:
           - "X-Forwarded-User-Avatar"
           - "X-Forwarded-User-Provider"
         trustForwardHeader: true
+
+    # embed-bridge: traefik local plugin that auto-injects the embed-bridge
+    # SDK into HTML responses + serves /_embed-bridge.js. Project routers
+    # opt in via the muvee-server traefik HTTP provider (server.go appends
+    # `embed-bridge@file` to each project router's middleware chain).
+    embed-bridge:
+      plugin:
+        embed-bridge:
+          scriptPath: /_embed-bridge.js
