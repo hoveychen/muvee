@@ -19,3 +19,18 @@ services:
       NODE_NAME: ${NODE_NAME:-muvee-agent-builder}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ── Watchtower — auto-pulls new ghcr.io/hoveychen/muvee:latest and restarts ─
+  # Only watches containers labeled `com.centurylinklabs.watchtower.enable=true`.
+  watchtower:
+    image: nickfedor/watchtower:latest
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_POLL_INTERVAL: "60"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

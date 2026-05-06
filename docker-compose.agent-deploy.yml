@@ -28,6 +28,21 @@ services:
       # - ${VOLUME_NFS_BASE_PATH}:${VOLUME_NFS_BASE_PATH}:rw
       # Dataset NFS base (optional): uncomment if DATASET_NFS_BASE_PATH is set on control plane.
       # - ${DATASET_NFS_BASE_PATH}:${DATASET_NFS_BASE_PATH}:ro
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ── Watchtower — auto-pulls new ghcr.io/hoveychen/muvee:latest and restarts ─
+  # Only watches containers labeled `com.centurylinklabs.watchtower.enable=true`.
+  watchtower:
+    image: nickfedor/watchtower:latest
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_POLL_INTERVAL: "60"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   agent_data:
