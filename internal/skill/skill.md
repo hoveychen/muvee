@@ -1,6 +1,6 @@
 ---
 name: muveectl
-version: 3
+version: 4
 description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete), datasets (create, scan, delete, file ops), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, manage infrastructure resources, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
 ---
 
@@ -67,6 +67,14 @@ muveectl projects create --name NAME --git-source hosted \
   [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 muveectl projects create --name NAME --domain-only --domain PREFIX \
   [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
+muveectl projects create --name NAME --compose --git-url URL \
+  --expose-service SERVICE --expose-port PORT \
+  [--branch BRANCH] [--compose-file PATH] [--domain PREFIX] \
+  [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
+muveectl projects create --name NAME --image-ref REF \
+  [--container-port PORT] [--memory-limit LIMIT] [--volume-mount-path PATH] \
+  [--domain PREFIX] [--auth-required] [--auth-domains example.com] \
+  [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 # --domain-only: reserves a tunnel domain prefix without a git repo or deployment.
 #   Use with `muveectl tunnel <port> --project NAME` to route traffic to a local process.
 #   The domain reservation persists even when no tunnel is connected (visitors see an offline page).
@@ -76,6 +84,19 @@ muveectl projects create --name NAME --domain-only --domain PREFIX \
 #   default: "Dockerfile"  (repo root Dockerfile)
 #   example: "web/Dockerfile" for a subdirectory
 #   WRONG: "." or "web/" — must be a file path, not a directory
+# --compose: deploys a docker-compose project (image: directives only, no `build:`)
+#   Requires an external git repo (--git-source hosted is not supported).
+#   Every service must reference a pre-built image; the agent runs `docker compose pull && up -d`.
+#   --compose-file PATH (default docker-compose.yml) is the path *inside the repo*.
+#   --expose-service / --expose-port pick which container port the muvee router publishes.
+#   Compose projects are pinned to one deploy node so named volumes survive redeploys.
+# --image-ref REF: deploys a single pre-built OCI image directly — no git repo, no build.
+#   Examples: `ghcr.io/owner/repo:latest`, `docker.io/redis:7-alpine`, `myreg.example.com/svc:v1.2`.
+#   Presence of --image-ref implicitly sets the project type to "image".
+#   --container-port (default 8080) is the port the image listens on.
+#   --volume-mount-path mounts a docker named volume at the given container path (persists across redeploys).
+#   Auto-deploy watches the image digest and triggers a redeploy whenever the upstream tag is repushed.
+#   Mutually exclusive with --git-url, --git-source, --compose, --domain-only.
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
   [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
@@ -431,6 +452,10 @@ When wiring up a project — whether you're writing the app code, the Dockerfile
 **Do not** assume "I'll just put it in `./data` and it'll be fine" — that path is inside the ephemeral container layer and disappears on the next deploy. If a user reports data loss after redeploy, the cause is almost always a write path that wasn't under `/workspace`.
 
 (Read-only dataset mounts at `/data/<dataset_name>` are separate; see "Dataset mounts" below — those are sourced from NFS and not user-writable for persistence.)
+
+**Compose and image projects use a different persistence model.** The `/workspace` rule applies to `deployment`-type projects (where Muvee builds the image and provisions the workspace mount). For:
+- `--compose` projects: persistence is whatever the docker-compose.yml declares — named volumes, bind mounts, etc. Compose projects are pinned to one deploy node so docker-local volumes survive redeploys.
+- `--image-ref` projects: pass `--volume-mount-path /your/path` to mount a docker named volume at that container path. The volume name is fixed (`app-data`) and survives across redeploys on the pinned deploy node. Without `--volume-mount-path`, the container has no persistent storage.
 
 ### Dataset mounts
 Datasets are injected as Docker volumes at `/data/<dataset_name>`:
