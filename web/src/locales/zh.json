@@ -675,6 +675,12 @@
         "project": "项目",
         "tunnel": "隧道"
       }
+    },
+    "about": {
+      "title": "关于",
+      "serverVersion": "Server 版本",
+      "versionHint": "嵌入在当前运行 muvee 二进制中的 git release。",
+      "unknown": "未知"
     }
   }
 }

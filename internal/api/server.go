@@ -50,6 +50,7 @@ type Server struct {
 	brandingDir        string   // directory for uploaded branding assets (logo, favicon)
 	tunnelBackendURL   string   // URL that Traefik uses to reach this server for tunnel traffic
 	acmeStoragePath    string   // path to Traefik's acme.json (admin cert-status panel)
+	serverVersion      string   // git-release version baked into the binary, surfaced via /api/runtime/config
 	tunnels            *tunnelRegistry
 	cliPending         sync.Map // state -> cliPendingEntry
 	oauthPending       sync.Map // state -> provider name (string); fallback when cookie is missing
@@ -77,6 +78,7 @@ type ServerConfig struct {
 	BrandingDir        string
 	TunnelBackendURL   string // URL Traefik uses to reach this server for tunnel proxy (e.g. http://muvee-server:8080)
 	ACMEStoragePath    string // path to Traefik's acme.json (defaults to /letsencrypt/acme.json)
+	ServerVersion      string // git-release version baked into the binary (e.g. v1.13.0-3-g1d875ac)
 }
 
 func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Scheduler, mon *monitor.Monitor, cfg ServerConfig) *Server {
@@ -100,6 +102,7 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		brandingDir:        cfg.BrandingDir,
 		tunnelBackendURL:   cfg.TunnelBackendURL,
 		acmeStoragePath:    cfg.ACMEStoragePath,
+		serverVersion:      cfg.ServerVersion,
 		tunnels:            newTunnelRegistry(),
 		domainOnlyPrefixes: make(map[string]bool),
 	}
@@ -333,6 +336,7 @@ func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 		"dataset_nfs_base_path": s.datasetNFSBasePath,
 		"base_domain":           s.baseDomain,
 		"secrets_enabled":       s.store.SecretsEnabled(),
+		"server_version":        s.serverVersion,
 	})
 }
 

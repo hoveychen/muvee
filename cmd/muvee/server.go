@@ -121,6 +121,7 @@ func runServer() {
 		BrandingDir:        brandingDir,
 		TunnelBackendURL:   tunnelBackendURL,
 		ACMEStoragePath:    os.Getenv("ACME_STORAGE_PATH"),
+		ServerVersion:      version,
 	})
 	handler := srv.TunnelAwareHandler(mountFrontend(srv.Router()))
 

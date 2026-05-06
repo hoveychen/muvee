@@ -675,6 +675,12 @@
         "project": "Project",
         "tunnel": "Tunnel"
       }
+    },
+    "about": {
+      "title": "About",
+      "serverVersion": "Server version",
+      "versionHint": "Git release baked into the running muvee binary.",
+      "unknown": "unknown"
     }
   }
 }

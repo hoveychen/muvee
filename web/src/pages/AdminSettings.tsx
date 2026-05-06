@@ -3,7 +3,7 @@ import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save, Upload } fr
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useSettings } from '../lib/settings'
-import type { SystemSettings, HealthReport, CertReport, CertStatus, AccessMode } from '../lib/types'
+import type { SystemSettings, HealthReport, CertReport, CertStatus, AccessMode, RuntimeConfig } from '../lib/types'
 
 const MONO = 'var(--font-mono)'
 
@@ -216,6 +216,8 @@ export default function AdminSettingsPage() {
   const [certReport, setCertReport] = useState<CertReport | null>(null)
   const [certLoading, setCertLoading] = useState(false)
 
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null)
+
   useEffect(() => {
     api.admin.getSettings()
       .then((s: SystemSettings) => {
@@ -255,6 +257,10 @@ export default function AdminSettingsPage() {
   }, [])
 
   useEffect(() => { loadCerts() }, [loadCerts])
+
+  useEffect(() => {
+    api.runtime.config().then(setRuntimeConfig).catch(() => {})
+  }, [])
 
   const saveSettings = async () => {
     setSaving(true)
@@ -478,6 +484,24 @@ export default function AdminSettingsPage() {
                 </div>
               </div>
             )}
+          </div>
+        </section>
+
+        {/* ── About ─────────────────────────────────────────────────────────── */}
+        <section className="card" style={{ gridColumn: '1 / -1' }}>
+          <div className="card-header">{t('adminSettings.about.title')}</div>
+          <div style={{ padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '4px' }}>
+                {t('adminSettings.about.serverVersion')}
+              </div>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
+                {t('adminSettings.about.versionHint')}
+              </div>
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: '0.9375rem', fontWeight: 600, color: 'var(--fg-primary)', wordBreak: 'break-all' }}>
+              {runtimeConfig?.server_version || t('adminSettings.about.unknown')}
+            </div>
           </div>
         </section>
       </div>
