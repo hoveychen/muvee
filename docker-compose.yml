@@ -116,7 +116,6 @@ services:
       # Path (inside the container) of the Traefik JSON access log tailed for per-project traffic metrics.
       TRAEFIK_ACCESS_LOG_PATH: /var/log/traefik/access.log
     volumes:
-      - ./db/migrations:/app/db/migrations:ro
       - ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:rw
       - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:rw
       - ${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}:rw
