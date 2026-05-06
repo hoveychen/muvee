@@ -31,7 +31,7 @@ RUN set -eux; \
 # agent role needs rsync + git + docker CLI; server/authservice only need ca-certs.
 # Install all tools so one image covers all roles.
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates rsync git docker-cli docker-cli-buildx
+RUN apk add --no-cache ca-certificates rsync git docker-cli docker-cli-buildx docker-cli-compose
 
 COPY --from=downloader /muvee /usr/local/bin/muvee
 

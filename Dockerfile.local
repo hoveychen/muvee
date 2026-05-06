@@ -93,7 +93,7 @@ FROM ${MUVEE_BUILD_MODE} AS picked-builder
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates rsync git docker-cli docker-cli-buildx
+RUN apk add --no-cache ca-certificates rsync git docker-cli docker-cli-buildx docker-cli-compose
 
 COPY --from=picked-builder /muvee /usr/local/bin/muvee
 COPY db/migrations /app/db/migrations
