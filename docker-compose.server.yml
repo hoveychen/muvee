@@ -207,8 +207,11 @@ services:
   # ── Watchtower — auto-pulls new ghcr.io/hoveychen/muvee:latest and restarts ─
   # Only watches containers labeled `com.centurylinklabs.watchtower.enable=true`
   # (muvee-server, muvee-authservice). Postgres, registry, and Traefik are pinned.
+  # Opt-in via the `auto-update` Compose profile: set COMPOSE_PROFILES=auto-update
+  # in your .env (or `docker compose --profile auto-update up -d`).
   watchtower:
     image: nickfedor/watchtower:latest
+    profiles: ["auto-update"]
     restart: unless-stopped
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"
