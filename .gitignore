@@ -65,6 +65,9 @@ letsencrypt/
 # Temp
 tmp/
 
+# Fleet PRD scratch state
+TASKS.md
+
 # Go build/test cache
 .gocache/
 
