@@ -11,6 +11,37 @@ import (
 
 // ─── validateProject ────────────────────────────────────────────────────────
 
+func TestValidateProject_AccessModeDefaultsToPublic(t *testing.T) {
+	p := store.Project{Name: "my-app"}
+	if err := validateProject(&p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.AccessMode != store.ProjectAccessModePublic {
+		t.Errorf("expected default access_mode=public, got %q", p.AccessMode)
+	}
+}
+
+func TestValidateProject_AccessModePrivatePreserved(t *testing.T) {
+	p := store.Project{Name: "my-app", AccessMode: store.ProjectAccessModePrivate}
+	if err := validateProject(&p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.AccessMode != store.ProjectAccessModePrivate {
+		t.Errorf("expected access_mode=private preserved, got %q", p.AccessMode)
+	}
+}
+
+func TestValidateProject_AccessModeRejectsUnknown(t *testing.T) {
+	p := store.Project{Name: "my-app", AccessMode: "internal"}
+	err := validateProject(&p)
+	if err == nil {
+		t.Fatal("expected error for unknown access_mode")
+	}
+	if !strings.Contains(err.Error(), "access_mode") {
+		t.Errorf("expected access_mode-related error, got %v", err)
+	}
+}
+
 func TestValidateProject_DeploymentDefaults(t *testing.T) {
 	p := store.Project{Name: "my-app"}
 	if err := validateProject(&p); err != nil {
