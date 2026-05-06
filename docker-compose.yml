@@ -264,8 +264,11 @@ services:
   # Only watches containers with `com.centurylinklabs.watchtower.enable=true`
   # (the four muvee services above). Postgres, registry, and Traefik are left
   # alone because they pin specific versions and need manual upgrade review.
+  # Uses the nickfedor fork because the original containrrr/watchtower image
+  # has been unmaintained since 2024 and its embedded Docker client (API 1.25)
+  # is rejected by modern dockerd (MinAPI 1.40+).
   watchtower:
-    image: containrrr/watchtower:latest
+    image: nickfedor/watchtower:latest
     restart: unless-stopped
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"
