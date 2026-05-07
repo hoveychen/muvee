@@ -83,8 +83,12 @@ func (tc *tunnelConn) newStream() *tunnelStream {
 	defer tc.streamMu.Unlock()
 	tc.nextStreamID++
 	s := &tunnelStream{
-		id:     tc.nextStreamID,
-		inbox:  make(chan []byte, 32),
+		id: tc.nextStreamID,
+		// Generous buffer (16KB × 1024 ≈ 16MB worst-case per stream) so a slow
+		// browser does not stall the shared serveConn read loop. Head-of-line
+		// blocking with the previous cap of 32 froze every other stream the
+		// moment one consumer fell behind by 512KB.
+		inbox:  make(chan []byte, 1024),
 		closed: make(chan struct{}),
 	}
 	tc.streams[s.id] = s
@@ -458,6 +462,16 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Force Connection: close on the forwarded request so the local service
+	// closes its socket after the response. That socket close propagates back
+	// as a frameClose, which triggers the server's defer conn.Close() on the
+	// hijacked TCP connection — which in turn signals Traefik to evict the
+	// backend conn from its idle pool. Without this, Traefik happily reuses
+	// the (now hijacked) backend conn for a different tunnel host and the
+	// next request's bytes leak into the wrong tunnel, causing intermittent
+	// cross-tunnel response mixing. WebSocket / HTTP upgrade requests must
+	// keep their original Connection header so the upgrade negotiation works.
+	isUpgrade := r.Header.Get("Upgrade") != ""
 	var reqBuf bytes.Buffer
 	fmt.Fprintf(&reqBuf, "%s %s HTTP/1.1\r\n", r.Method, r.URL.RequestURI())
 	fmt.Fprintf(&reqBuf, "Host: %s\r\n", r.Host)
@@ -467,9 +481,17 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 			strings.EqualFold(k, "Transfer-Encoding") {
 			continue
 		}
+		if !isUpgrade && (strings.EqualFold(k, "Connection") ||
+			strings.EqualFold(k, "Keep-Alive") ||
+			strings.EqualFold(k, "Proxy-Connection")) {
+			continue
+		}
 		for _, v := range vv {
 			fmt.Fprintf(&reqBuf, "%s: %s\r\n", k, v)
 		}
+	}
+	if !isUpgrade {
+		reqBuf.WriteString("Connection: close\r\n")
 	}
 	if len(body) > 0 {
 		fmt.Fprintf(&reqBuf, "Content-Length: %d\r\n", len(body))

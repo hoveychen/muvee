@@ -768,6 +768,132 @@ func TestTunnelTraffic_UnknownPrefixStillBadGateway(t *testing.T) {
 	}
 }
 
+// TestTunnelTraffic_ForcesConnectionClose verifies that handleTunnelTraffic
+// rewrites the per-request Connection header to "close" before forwarding to
+// the local service. This is what makes the local service emit
+// "Connection: close" in its response, which in turn signals Traefik to evict
+// the backend keep-alive connection from its idle pool — preventing Traefik
+// from later reusing the (now hijacked) TCP connection for a different
+// tunnel host and crossing requests between tunnels.
+//
+// Without this rewrite, two simultaneous tunnels with HTTP/1.1 keep-alive
+// local services intermittently swap responses (~40% rate observed in
+// production), because Traefik's HTTP transport happily reuses the backend
+// conn after a tunnel response, and any bytes Traefik writes to that conn
+// land in the original tunnel's bufrw.Reader and get forwarded to the wrong
+// local service.
+func TestTunnelTraffic_ForcesConnectionClose(t *testing.T) {
+	// Raw TCP listener acting as the "local service" so we can inspect the
+	// exact request bytes muvee-server forwards through the tunnel.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	gotReq := make(chan []byte, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 0, 4096)
+		tmp := make([]byte, 1024)
+		c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		for {
+			n, err := c.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+				if i := strings.Index(string(buf), "\r\n\r\n"); i != -1 {
+					gotReq <- buf[:i]
+					// Send a minimal HTTP/1.1 keep-alive response so the
+					// upstream client sees a normal response and we exercise
+					// the same shape as production.
+					_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"))
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	localAddr := ln.Addr().String()
+
+	s := &Server{
+		baseDomain:       "example.com",
+		tunnelBackendURL: "http://localhost:9999",
+		tunnels:          newTunnelRegistry(),
+		authServiceURL:   "http://authservice:4181",
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnel/connect", func(w http.ResponseWriter, r *http.Request) {
+		domain := r.URL.Query().Get("domain")
+		ws, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		tc := &tunnelConn{
+			ws:           ws,
+			userEmail:    "test@example.com",
+			authRequired: false,
+			streams:      make(map[uint32]*tunnelStream),
+		}
+		s.tunnels.register(domain, tc)
+		defer func() {
+			s.tunnels.unregister(domain, tc)
+			ws.Close()
+		}()
+		tc.serveConn()
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "t-test-fox.example.com"
+		s.handleTunnelTraffic(w, r)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	cliWsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/tunnel/connect?domain=t-test-fox&noauth=1"
+	cliWs, _, err := websocket.DefaultDialer.Dial(cliWsURL, nil)
+	if err != nil {
+		t.Fatalf("cli dial: %v", err)
+	}
+	defer cliWs.Close()
+	go runL4ClientSimulator(t, cliWs, localAddr)
+	waitForTunnel(t, s, "t-test-fox")
+
+	// Client sends a request with Connection: keep-alive (the default an
+	// upstream like Traefik would use). After the rewrite we expect the
+	// forwarded request to carry Connection: close instead.
+	req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+	req.Host = "t-test-fox.example.com"
+	req.Header.Set("Connection", "keep-alive")
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("http get: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case raw := <-gotReq:
+		head := string(raw)
+		// Append a trailing \r\n so a Connection header in the last header
+		// line still matches the "\r\nname: value\r\n" pattern.
+		probe := strings.ToLower(head) + "\r\n"
+		if !strings.Contains(probe, "\r\nconnection: close\r\n") {
+			t.Fatalf("expected forwarded request to contain 'Connection: close', got headers:\n%s", head)
+		}
+		if strings.Contains(probe, "connection: keep-alive") {
+			t.Fatalf("forwarded request must not carry Connection: keep-alive, got headers:\n%s", head)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for forwarded request bytes")
+	}
+}
+
 func TestWriteTunnelOfflinePage(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeTunnelOfflinePage(rec, "mine")
