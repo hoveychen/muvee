@@ -263,25 +263,41 @@ func tunnelSession(ctx context.Context, wsURL string, header http.Header, localA
 
 	fmt.Println("Connected.")
 
+	// Per-stream state. Each stream owns a dedicated writer goroutine that
+	// drains inbox and synchronously writes to the local conn. The main read
+	// loop only dispatches frames into the inbox, so a stuck local consumer
+	// never stalls other streams sharing this tunnel.
+	type cliStream struct {
+		conn      net.Conn
+		inbox     chan []byte
+		done      chan struct{}
+		closeOnce sync.Once
+	}
+	closeS := func(s *cliStream) {
+		s.closeOnce.Do(func() {
+			close(s.done)
+			s.conn.Close()
+		})
+	}
 	var streamsMu sync.Mutex
-	streams := make(map[uint32]net.Conn)
+	streams := make(map[uint32]*cliStream)
 
 	closeStream := func(sid uint32) {
 		streamsMu.Lock()
-		c, ok := streams[sid]
+		s, ok := streams[sid]
 		delete(streams, sid)
 		streamsMu.Unlock()
 		if ok {
-			c.Close()
+			closeS(s)
 		}
 	}
 
 	defer func() {
 		streamsMu.Lock()
-		for _, c := range streams {
-			c.Close()
+		for _, s := range streams {
+			closeS(s)
 		}
-		streams = map[uint32]net.Conn{}
+		streams = map[uint32]*cliStream{}
 		streamsMu.Unlock()
 	}()
 
@@ -310,8 +326,13 @@ func tunnelSession(ctx context.Context, wsURL string, header http.Header, localA
 				continue
 			}
 			log.Printf("tunnel: dial OK sid=%d local=%s remote=%s", sid, c.LocalAddr(), c.RemoteAddr())
+			s := &cliStream{
+				conn:  c,
+				inbox: make(chan []byte, 1024),
+				done:  make(chan struct{}),
+			}
 			streamsMu.Lock()
-			streams[sid] = c
+			streams[sid] = s
 			streamsMu.Unlock()
 
 			// local → tunnel
@@ -333,17 +354,42 @@ func tunnelSession(ctx context.Context, wsURL string, header http.Header, localA
 				}
 			}(c, sid)
 
+			// tunnel → local: dedicated per-stream writer so a stalled
+			// c.Write does not freeze the WS read loop for other streams.
+			go func(s *cliStream, sid uint32) {
+				for {
+					select {
+					case data := <-s.inbox:
+						if _, err := s.conn.Write(data); err != nil {
+							_ = writer.writeFrame(frameClose, sid, nil)
+							closeStream(sid)
+							return
+						}
+					case <-s.done:
+						return
+					}
+				}
+			}(s, sid)
+
 		case frameData:
 			streamsMu.Lock()
-			c := streams[sid]
+			s := streams[sid]
 			streamsMu.Unlock()
-			if c != nil {
+			if s != nil {
 				// Copy payload since the WebSocket read buffer is reused.
 				data := make([]byte, len(payload))
 				copy(data, payload)
-				if _, err := c.Write(data); err != nil {
-					closeStream(sid)
+				// Non-blocking dispatch: if the inbox is full the local
+				// consumer is hopelessly behind, so abort the stream rather
+				// than block the shared read loop and freeze every other
+				// stream on this tunnel.
+				select {
+				case s.inbox <- data:
+				case <-s.done:
+				default:
+					log.Printf("tunnel: frame DROP sid=%d reason=inbox_full", sid)
 					_ = writer.writeFrame(frameClose, sid, nil)
+					closeStream(sid)
 				}
 			}
 

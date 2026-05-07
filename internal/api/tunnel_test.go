@@ -293,7 +293,9 @@ func waitForTunnel(t *testing.T, s *Server, domain string) {
 
 // runL4ClientSimulator implements the CLI-side of the L4 tunnel frame
 // protocol: read binary frames from the server's tunnel WebSocket, dial
-// localAddr on OPEN, and pipe bytes in both directions.
+// localAddr on OPEN, and pipe bytes in both directions. Mirrors the real
+// CLI in cmd/muveectl/tunnel.go: a per-stream inbox + writer goroutine
+// prevent a stalled c.Write from blocking the shared WS read loop.
 func runL4ClientSimulator(t *testing.T, ws *websocket.Conn, localAddr string) {
 	t.Helper()
 	var wmu sync.Mutex
@@ -307,15 +309,27 @@ func runL4ClientSimulator(t *testing.T, ws *websocket.Conn, localAddr string) {
 		return ws.WriteMessage(websocket.BinaryMessage, buf)
 	}
 
+	type simStream struct {
+		conn      net.Conn
+		inbox     chan []byte
+		done      chan struct{}
+		closeOnce sync.Once
+	}
+	closeS := func(s *simStream) {
+		s.closeOnce.Do(func() {
+			close(s.done)
+			s.conn.Close()
+		})
+	}
 	var smu sync.Mutex
-	streams := make(map[uint32]net.Conn)
+	streams := make(map[uint32]*simStream)
 	closeStream := func(sid uint32) {
 		smu.Lock()
-		c, ok := streams[sid]
+		s, ok := streams[sid]
 		delete(streams, sid)
 		smu.Unlock()
 		if ok {
-			c.Close()
+			closeS(s)
 		}
 	}
 
@@ -337,13 +351,18 @@ func runL4ClientSimulator(t *testing.T, ws *websocket.Conn, localAddr string) {
 				_ = writeFrame(frameClose, sid, nil)
 				continue
 			}
+			s := &simStream{
+				conn:  c,
+				inbox: make(chan []byte, 1024),
+				done:  make(chan struct{}),
+			}
 			smu.Lock()
-			streams[sid] = c
+			streams[sid] = s
 			smu.Unlock()
-			go func(c net.Conn, sid uint32) {
+			go func(s *simStream, sid uint32) {
 				buf := make([]byte, 16*1024)
 				for {
-					n, rerr := c.Read(buf)
+					n, rerr := s.conn.Read(buf)
 					if n > 0 {
 						if werr := writeFrame(frameData, sid, buf[:n]); werr != nil {
 							closeStream(sid)
@@ -356,15 +375,34 @@ func runL4ClientSimulator(t *testing.T, ws *websocket.Conn, localAddr string) {
 						return
 					}
 				}
-			}(c, sid)
+			}(s, sid)
+			go func(s *simStream, sid uint32) {
+				for {
+					select {
+					case data := <-s.inbox:
+						if _, err := s.conn.Write(data); err != nil {
+							_ = writeFrame(frameClose, sid, nil)
+							closeStream(sid)
+							return
+						}
+					case <-s.done:
+						return
+					}
+				}
+			}(s, sid)
 		case frameData:
 			smu.Lock()
-			c := streams[sid]
+			s := streams[sid]
 			smu.Unlock()
-			if c != nil {
-				if _, err := c.Write(payload); err != nil {
-					closeStream(sid)
+			if s != nil {
+				data := make([]byte, len(payload))
+				copy(data, payload)
+				select {
+				case s.inbox <- data:
+				case <-s.done:
+				default:
 					_ = writeFrame(frameClose, sid, nil)
+					closeStream(sid)
 				}
 			}
 		case frameClose:
