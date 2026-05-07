@@ -478,7 +478,7 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 		}
 	}
 
-	inlineCompose := buildInlineComposeYAML(project.ImageRef, project.ContainerPort, project.VolumeMountPath)
+	inlineCompose := buildInlineComposeYAML(project.ImageRef, project.ContainerPort)
 
 	payload := map[string]interface{}{
 		"mode":                "compose",
@@ -488,6 +488,7 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 		"inline_compose_yaml": inlineCompose,
 		"expose_service":      "app",
 		"expose_port":         project.ContainerPort,
+		"volume_mount_path":   project.VolumeMountPath,
 		"env_vars":            envVars,
 	}
 
@@ -502,24 +503,16 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 }
 
 // buildInlineComposeYAML returns a minimal docker-compose.yml for an image-only
-// project: a single service named "app" bound to the given image and port,
-// with an optional named volume mounted at volumeMountPath. The volume is
-// named after the service so it survives across redeploys (compose binds it
-// to the project's pinned deploy node).
-func buildInlineComposeYAML(imageRef string, containerPort int, volumeMountPath string) string {
+// project: a single service named "app" bound to the given image. Workspace
+// volume mounting (when volume_mount_path is set on the project) is injected
+// agent-side via muvee.override.yml so the bind-mount points at the same NFS
+// directory the Workspace API serves, matching the deployment-type pattern.
+func buildInlineComposeYAML(imageRef string, containerPort int) string {
 	var sb strings.Builder
 	sb.WriteString("services:\n")
 	sb.WriteString("  app:\n")
 	sb.WriteString(fmt.Sprintf("    image: %s\n", imageRef))
 	sb.WriteString("    restart: unless-stopped\n")
-	if volumeMountPath != "" {
-		sb.WriteString("    volumes:\n")
-		sb.WriteString(fmt.Sprintf("      - app-data:%s\n", volumeMountPath))
-	}
-	if volumeMountPath != "" {
-		sb.WriteString("volumes:\n")
-		sb.WriteString("  app-data:\n")
-	}
 	_ = containerPort // ports are handled by the deployer's Traefik label injection
 	return sb.String()
 }

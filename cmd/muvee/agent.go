@@ -267,7 +267,7 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		var hostPort int
 		var err error
 		if str(task.Payload, "mode") == "compose" {
-			hostPort, err = runComposeDeploy(ctx, task, func(line string) {
+			hostPort, err = runComposeDeploy(ctx, task, volumeNFSBasePath, func(line string) {
 				appendLog(ctx, baseURL, secret, task.DeploymentID, line)
 			})
 		} else {
@@ -375,7 +375,7 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }
 
-func runComposeDeploy(ctx context.Context, task *store.Task, logFn func(string)) (int, error) {
+func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath string, logFn func(string)) (int, error) {
 	p := task.Payload
 	envVars := make(map[string]string)
 	if evRaw, ok := p["env_vars"].(map[string]interface{}); ok {
@@ -398,6 +398,8 @@ func runComposeDeploy(ctx context.Context, task *store.Task, logFn func(string))
 		InlineComposeYAML: str(p, "inline_compose_yaml"),
 		ExposeService:     str(p, "expose_service"),
 		ExposePort:        intVal(p, "expose_port"),
+		VolumeMountPath:   str(p, "volume_mount_path"),
+		VolumeNFSBasePath: volumeNFSBasePath,
 		EnvVars:           envVars,
 	}
 	return deployer.DeployCompose(ctx, cfg, logFn)

@@ -43,6 +43,13 @@ type ComposeConfig struct {
 	// by image-only projects whose compose file is synthesised by the
 	// scheduler from project.image_ref.
 	InlineComposeYAML string
+	// VolumeMountPath / VolumeNFSBasePath are only honoured for inline-compose
+	// (image-only) deploys. When both are set, the agent injects a bind-mount
+	// of {VolumeNFSBasePath}/{ProjectID} into the `app` service via the
+	// override file so the workspace API and the running container share the
+	// same on-disk directory (mirrors the deployment-type pattern).
+	VolumeMountPath   string
+	VolumeNFSBasePath string
 	// WorkBaseDir is the deploy-node directory under which per-project clones
 	// are kept. Defaults to /var/lib/muvee/compose.
 	WorkBaseDir string
@@ -138,6 +145,33 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 		return 0, fmt.Errorf("expose_service %q is not declared in the compose file", cfg.ExposeService)
 	}
 
+	// Workspace bind-mount injection (image-only projects):
+	// the inline compose file declares no volumes; we add a host bind-mount
+	// here so the workspace tab and the container see the same directory.
+	// One-shot migration: if a legacy named volume from a previous deploy of
+	// this project still has data and the NFS dir is empty, copy it over so
+	// data created before the bind-mount switch isn't orphaned.
+	var workspaceMount string
+	if cfg.InlineComposeYAML != "" && cfg.VolumeMountPath != "" && cfg.VolumeNFSBasePath != "" && cfg.ProjectID != "" {
+		nfsHostPath := filepath.Join(cfg.VolumeNFSBasePath, cfg.ProjectID)
+		if err := os.MkdirAll(nfsHostPath, 0755); err != nil {
+			return 0, fmt.Errorf("create workspace dir: %w", err)
+		}
+		projectName := composeProjectName(cfg.DomainPrefix)
+		legacyVolume := projectName + "_app-data"
+		if isEmptyDir(nfsHostPath) && dockerVolumeExists(ctx, legacyVolume) {
+			logFn(fmt.Sprintf("Migrating legacy named volume %q into %s...", legacyVolume, nfsHostPath))
+			if err := runCmd(ctx, logFn, "docker", "run", "--rm",
+				"-v", legacyVolume+":/src:ro",
+				"-v", nfsHostPath+":/dst",
+				"alpine", "sh", "-c", "cp -a /src/. /dst/",
+			); err != nil {
+				logFn(fmt.Sprintf("legacy volume migration warning: %v (continuing with empty workspace)", err))
+			}
+		}
+		workspaceMount = fmt.Sprintf("%s:%s:rw", nfsHostPath, cfg.VolumeMountPath)
+	}
+
 	// Override file: publish the exposed service's container port to a random
 	// host port and stamp muvee.* labels on the expose-service container so the
 	// agent can find it again after a restart reassigns the host port. Compose
@@ -153,6 +187,13 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 			"      muvee.expose_port: \"%d\"\n",
 		cfg.ExposeService, cfg.ExposePort, cfg.DomainPrefix, cfg.ExposePort,
 	)
+	if workspaceMount != "" {
+		override += fmt.Sprintf(
+			"    volumes:\n"+
+				"      - \"%s\"\n",
+			workspaceMount,
+		)
+	}
 	if err := os.WriteFile(overridePath, []byte(override), 0644); err != nil {
 		return 0, fmt.Errorf("write override file: %w", err)
 	}
@@ -341,6 +382,29 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 		return fmt.Errorf("git clone: %w", err)
 	}
 	return nil
+}
+
+// isEmptyDir reports whether path is an empty directory. Returns false on any
+// stat/read error so we never trigger migration into a directory we can't read.
+func isEmptyDir(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	return len(entries) == 0
+}
+
+// dockerVolumeExists reports whether a docker named volume with the given name
+// is present on this host. Used by the one-shot legacy-volume migration for
+// image-only projects switching from named volumes to NFS bind-mounts.
+func dockerVolumeExists(ctx context.Context, name string) bool {
+	if name == "" {
+		return false
+	}
+	if err := exec.CommandContext(ctx, "docker", "volume", "inspect", name).Run(); err != nil {
+		return false
+	}
+	return true
 }
 
 // redactGitURL strips inline HTTPS credentials so they don't end up in logs.
