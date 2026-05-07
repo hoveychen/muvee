@@ -1,13 +1,28 @@
 package embed_bridge
 
 import (
+	"bufio"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// hijackableRecorder is a minimal ResponseWriter that ALSO implements
+// http.Hijacker. Used to assert that the embed-bridge plugin does not
+// strip the Hijacker capability for HTTP Upgrade requests (WebSocket etc.) —
+// without this, Traefik returns "can't switch protocols using non-Hijacker
+// ResponseWriter type" and the WS handshake dies as 500.
+type hijackableRecorder struct {
+	*httptest.ResponseRecorder
+}
+
+func (h *hijackableRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, http.ErrNotSupported
+}
 
 // fakeNext is the downstream handler the middleware wraps. Each test
 // configures content-type / status / body it should emit.
@@ -180,6 +195,38 @@ func TestCustomScriptPath(t *testing.T) {
 	h.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(rec2.Body.String(), `src="/__bridge.js"`) {
 		t.Errorf("custom path not used in injected tag: %s", rec2.Body.String())
+	}
+}
+
+// TestUpgradeRequestPreservesHijacker is the regression for the cws.muveeai.com
+// WebSocket "500 Internal Server Error" symptom: the plugin wrapped every
+// downstream call in a buffering responseRecorder that did NOT implement
+// http.Hijacker, so when Traefik's reverse-proxy tried to switch protocols on
+// a 101 it failed with "can't switch protocols using non-Hijacker
+// ResponseWriter type". For Upgrade requests (websocket / h2c / etc.) the
+// plugin must pass through to next with the original ResponseWriter so the
+// Hijacker capability survives.
+func TestUpgradeRequestPreservesHijacker(t *testing.T) {
+	var receivedRW http.ResponseWriter
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		receivedRW = w
+	})
+	h := newPlugin(t, next)
+
+	rw := &hijackableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := httptest.NewRequest(http.MethodGet, "/api/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+
+	h.ServeHTTP(rw, req)
+
+	if receivedRW == nil {
+		t.Fatal("downstream handler never invoked")
+	}
+	if _, ok := receivedRW.(http.Hijacker); !ok {
+		t.Fatalf("downstream got non-Hijacker ResponseWriter %T; Upgrade requests must pass-through so Traefik can hijack the client conn", receivedRW)
 	}
 }
 

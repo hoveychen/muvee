@@ -55,6 +55,17 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 }
 
 func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// HTTP Upgrade requests (WebSocket, h2c, …) terminate in a 101 Switching
+	// Protocols and require Traefik's reverse proxy to hijack the client conn.
+	// Our responseRecorder is a buffering wrapper without http.Hijacker, which
+	// breaks the upgrade with "can't switch protocols using non-Hijacker
+	// ResponseWriter type". Pass through with the original rw so Hijacker
+	// survives — there is no HTML body to splice on an upgrade anyway.
+	if req.Header.Get("Upgrade") != "" {
+		e.next.ServeHTTP(rw, req)
+		return
+	}
+
 	// 1. /_embed-bridge.js short-circuit — serve the SDK body, do not
 	//    forward to the underlying project.
 	if req.Method == http.MethodGet && req.URL.Path == e.scriptPath {
