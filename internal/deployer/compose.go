@@ -177,23 +177,7 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	// agent can find it again after a restart reassigns the host port. Compose
 	// merges this on top of the user's compose file.
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
-	override := fmt.Sprintf(
-		"services:\n"+
-			"  %s:\n"+
-			"    ports:\n"+
-			"      - \"0:%d\"\n"+
-			"    labels:\n"+
-			"      muvee.domain_prefix: \"%s\"\n"+
-			"      muvee.expose_port: \"%d\"\n",
-		cfg.ExposeService, cfg.ExposePort, cfg.DomainPrefix, cfg.ExposePort,
-	)
-	if workspaceMount != "" {
-		override += fmt.Sprintf(
-			"    volumes:\n"+
-				"      - \"%s\"\n",
-			workspaceMount,
-		)
-	}
+	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, workspaceMount)
 	if err := os.WriteFile(overridePath, []byte(override), 0644); err != nil {
 		return 0, fmt.Errorf("write override file: %w", err)
 	}
@@ -382,6 +366,32 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 		return fmt.Errorf("git clone: %w", err)
 	}
 	return nil
+}
+
+// buildComposeOverrideYAML produces the muvee.override.yml content that
+// stamps the expose-service container with port + Traefik labels and, for
+// image-only projects whose workspace volume is bind-mounted from NFS,
+// appends a volumes entry. Pure function so the volume-injection branch
+// is unit-testable without touching docker.
+func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort int, workspaceMount string) string {
+	out := fmt.Sprintf(
+		"services:\n"+
+			"  %s:\n"+
+			"    ports:\n"+
+			"      - \"0:%d\"\n"+
+			"    labels:\n"+
+			"      muvee.domain_prefix: \"%s\"\n"+
+			"      muvee.expose_port: \"%d\"\n",
+		exposeService, exposePort, domainPrefix, exposePort,
+	)
+	if workspaceMount != "" {
+		out += fmt.Sprintf(
+			"    volumes:\n"+
+				"      - \"%s\"\n",
+			workspaceMount,
+		)
+	}
+	return out
 }
 
 // isEmptyDir reports whether path is an empty directory. Returns false on any
