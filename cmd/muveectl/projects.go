@@ -126,6 +126,9 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("description", "", "Project description")
 	cmd.Flags().String("icon", "", "Project icon (inline SVG or URL)")
 	cmd.Flags().String("tags", "", "Comma-separated project tags")
+	cmd.Flags().Int("fixed-port", 0, "Admin only: fix the published host port (1024-65535); requires --fixed-node")
+	cmd.Flags().String("fixed-node", "", "Admin only: pin the project to a deployer node UUID; requires --fixed-port")
+	cmd.Flags().Bool("clear-fixed-port", false, "Admin only: remove the fixed-port binding (clears both fixed_host_port and fixed_node_id)")
 }
 
 func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
@@ -218,6 +221,19 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		v, _ := cmd.Flags().GetString("tags")
 		p["tags"] = v
 	}
+	if v, _ := cmd.Flags().GetBool("clear-fixed-port"); v {
+		p["fixed_host_port"] = nil
+		p["fixed_node_id"] = nil
+	} else {
+		if cmd.Flags().Changed("fixed-port") {
+			v, _ := cmd.Flags().GetInt("fixed-port")
+			p["fixed_host_port"] = v
+		}
+		if cmd.Flags().Changed("fixed-node") {
+			v, _ := cmd.Flags().GetString("fixed-node")
+			p["fixed_node_id"] = v
+		}
+	}
 	return p
 }
 
@@ -294,6 +310,9 @@ var projectsCreateCmd = &cobra.Command{
 			}
 		} else if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
 			return fmt.Errorf("--git-url is required (or use --git-source hosted, --domain-only, --compose, or --image-ref)")
+		}
+		if cmd.Flags().Changed("fixed-port") != cmd.Flags().Changed("fixed-node") {
+			return fmt.Errorf("--fixed-port and --fixed-node must be set together")
 		}
 		result, err := cl.do("POST", "/api/projects", p)
 		if err != nil {

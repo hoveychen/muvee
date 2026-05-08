@@ -911,6 +911,75 @@ func validateDomainPrefix(prefix string) error {
 // validateProject checks required fields and resolves DomainPrefix.
 // If DomainPrefix is not set, Name is used as the default; if Name is not a
 // valid subdomain label either, an explicit DomainPrefix is required.
+// validateFixedPort enforces the both-or-neither rule between FixedHostPort and
+// FixedNodeID, the port range, and that fixed bindings only apply to project
+// types that actually run a container. The (node, port) uniqueness check lives
+// in the handlers — it needs DB access.
+func validateFixedPort(p *store.Project) error {
+	hasPort := p.FixedHostPort != nil
+	hasNode := p.FixedNodeID != nil
+	if hasPort != hasNode {
+		return fmt.Errorf("fixed_host_port and fixed_node_id must be set together (or both omitted)")
+	}
+	if !hasPort {
+		return nil
+	}
+	if *p.FixedHostPort < 1024 || *p.FixedHostPort > 65535 {
+		return fmt.Errorf("fixed_host_port must be between 1024 and 65535")
+	}
+	if *p.FixedNodeID == uuid.Nil {
+		return fmt.Errorf("fixed_node_id must not be the zero UUID")
+	}
+	if p.ProjectType == store.ProjectTypeDomainOnly {
+		return fmt.Errorf("fixed_host_port is not supported for domain_only projects")
+	}
+	return nil
+}
+
+// fixedPortChanged reports whether either fixed_host_port or fixed_node_id
+// differs between the existing project and the merged update payload. Used
+// to gate the admin-only check on UpdateProject — non-admin owners can save
+// the rest of the project without re-asserting these fields.
+func fixedPortChanged(existing, updated *store.Project) bool {
+	return !intPtrEq(existing.FixedHostPort, updated.FixedHostPort) ||
+		!uuidPtrEq(existing.FixedNodeID, updated.FixedNodeID)
+}
+
+func intPtrEq(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func uuidPtrEq(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// checkFixedNodeAndPortFree confirms the chosen deployer node exists and that
+// no other project (excluding excludeID) has already pinned the same
+// (node, port) pair. Returns (httpStatus, err) on failure; (0, nil) on success.
+func (s *Server) checkFixedNodeAndPortFree(ctx context.Context, nodeID uuid.UUID, port int, excludeID uuid.UUID) (int, error) {
+	node, err := s.store.GetNode(ctx, nodeID)
+	if err != nil {
+		return 500, err
+	}
+	if node == nil {
+		return 400, fmt.Errorf("fixed_node_id %s does not match any registered deployer node", nodeID)
+	}
+	inUse, err := s.store.IsFixedPortInUse(ctx, nodeID, port, excludeID)
+	if err != nil {
+		return 500, err
+	}
+	if inUse {
+		return 409, fmt.Errorf("port %d on node %s is already pinned by another fixed-port project", port, node.Hostname)
+	}
+	return 0, nil
+}
+
 func validateProject(p *store.Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("project name must not be empty")
@@ -923,6 +992,9 @@ func validateProject(p *store.Project) error {
 	}
 	if p.AccessMode != store.ProjectAccessModePublic && p.AccessMode != store.ProjectAccessModePrivate {
 		return fmt.Errorf("access_mode must be 'public' or 'private'")
+	}
+	if err := validateFixedPort(p); err != nil {
+		return err
 	}
 	switch p.ProjectType {
 	case store.ProjectTypeDeployment:
@@ -1135,6 +1207,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, fmt.Errorf("project name %q is already taken", p.Name), 409)
 		return
 	}
+	if p.FixedHostPort != nil {
+		if user.Role != store.UserRoleAdmin {
+			jsonErr(w, fmt.Errorf("only admins can set fixed_host_port / fixed_node_id"), 403)
+			return
+		}
+		if status, err := s.checkFixedNodeAndPortFree(r.Context(), *p.FixedNodeID, *p.FixedHostPort, uuid.Nil); err != nil {
+			jsonErr(w, err, status)
+			return
+		}
+	}
 
 	// For hosted repos: initialize a bare git repo and set the sentinel git_url.
 	if p.ProjectType == store.ProjectTypeDeployment && p.GitSource == store.GitSourceHosted {
@@ -1261,6 +1343,18 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		} else if byName != nil && byName.ID != id {
 			jsonErr(w, fmt.Errorf("project name %q is already taken", p.Name), 409)
 			return
+		}
+	}
+	if fixedPortChanged(existing, p) {
+		if user.Role != store.UserRoleAdmin {
+			jsonErr(w, fmt.Errorf("only admins can change fixed_host_port / fixed_node_id"), 403)
+			return
+		}
+		if p.FixedHostPort != nil {
+			if status, err := s.checkFixedNodeAndPortFree(r.Context(), *p.FixedNodeID, *p.FixedHostPort, id); err != nil {
+				jsonErr(w, err, status)
+				return
+			}
 		}
 	}
 	p.ID = id

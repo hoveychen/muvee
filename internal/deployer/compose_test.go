@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildComposeOverrideYAMLNoWorkspace(t *testing.T) {
-	got := buildComposeOverrideYAML("app", "foxy", 8080, "")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "")
 
 	mustContain(t, got, "services:")
 	mustContain(t, got, "  app:")
@@ -24,7 +24,7 @@ func TestBuildComposeOverrideYAMLNoWorkspace(t *testing.T) {
 
 func TestBuildComposeOverrideYAMLWithWorkspace(t *testing.T) {
 	mount := "/srv/muvee/volumes/abc-123:/workspace:rw"
-	got := buildComposeOverrideYAML("app", "foxy", 8080, mount)
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, mount)
 
 	mustContain(t, got, "    volumes:")
 	mustContain(t, got, `      - "`+mount+`"`)
@@ -33,6 +33,15 @@ func TestBuildComposeOverrideYAMLWithWorkspace(t *testing.T) {
 	// ports/labels — guarding against accidental top-level emission.
 	if i := strings.Index(got, "    volumes:"); i < 0 || strings.Index(got, "  app:") > i {
 		t.Fatalf("volumes should appear after `  app:` and at service indent level:\n%s", got)
+	}
+}
+
+func TestBuildComposeOverrideYAMLFixedHostPort(t *testing.T) {
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 13000, "")
+
+	mustContain(t, got, `      - "13000:8080"`)
+	if strings.Contains(got, `"0:8080"`) {
+		t.Fatalf("fixed-port override must not emit the dynamic 0:port mapping:\n%s", got)
 	}
 }
 
@@ -99,6 +108,37 @@ func TestRedactGitURL(t *testing.T) {
 		if got := redactGitURL(in); got != want {
 			t.Errorf("redactGitURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestPortIsListening(t *testing.T) {
+	// Real `ss -ltn` output, including header + IPv4 + IPv6 LISTEN rows.
+	ssOut := `State    Recv-Q   Send-Q   Local Address:Port   Peer Address:Port   Process
+LISTEN   0        128      0.0.0.0:22           0.0.0.0:*
+LISTEN   0        128      [::]:8080            [::]:*
+LISTEN   0        128      127.0.0.1:53         0.0.0.0:*
+`
+	cases := []struct {
+		port int
+		want bool
+	}{
+		{22, true},
+		{8080, true},
+		{53, true},
+		{80, false},
+		{443, false},
+	}
+	for _, c := range cases {
+		if got := portIsListening(ssOut, c.port); got != c.want {
+			t.Errorf("portIsListening(%d) = %v, want %v", c.port, got, c.want)
+		}
+	}
+
+	// Lines without LISTEN must be ignored — TIME_WAIT / ESTAB rows can have
+	// the same port and would falsely look bound.
+	estab := "ESTAB  0  0  10.0.0.1:9999  10.0.0.2:443"
+	if portIsListening(estab, 9999) {
+		t.Error("portIsListening must only flag LISTEN rows")
 	}
 }
 

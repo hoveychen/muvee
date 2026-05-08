@@ -92,9 +92,15 @@ type Project struct {
 	// AccessMode controls who can reach the deployed downstream service:
 	//   "public"  — any authenticated muvee user (legacy behaviour, default)
 	//   "private" — only project owner, system admins, and users in project_access_users
-	AccessMode string    `db:"access_mode"           json:"access_mode"`
-	CreatedAt  time.Time `db:"created_at"           json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"           json:"updated_at"`
+	AccessMode string `db:"access_mode"           json:"access_mode"`
+	// FixedHostPort + FixedNodeID together pin the project's deployment onto a
+	// specific deployer node and force the container's expose port to be
+	// published on that exact host port (instead of a Docker-assigned ephemeral).
+	// Both nil = dynamic allocation (legacy behaviour). Admin-only writable.
+	FixedHostPort *int       `db:"fixed_host_port"      json:"fixed_host_port,omitempty"`
+	FixedNodeID   *uuid.UUID `db:"fixed_node_id"        json:"fixed_node_id,omitempty"`
+	CreatedAt     time.Time  `db:"created_at"           json:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at"           json:"updated_at"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 	// Owner display fields, populated by ListProjectsForUser / GetProject via LEFT JOIN users.

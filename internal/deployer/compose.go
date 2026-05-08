@@ -53,6 +53,11 @@ type ComposeConfig struct {
 	// WorkBaseDir is the deploy-node directory under which per-project clones
 	// are kept. Defaults to /var/lib/muvee/compose.
 	WorkBaseDir string
+	// FixedHostPort, when non-zero, locks the published host port to this exact
+	// value (instead of letting Docker pick an ephemeral port). The deploy step
+	// runs a pre-flight `ss -ltn` probe and fails fast if the port is already
+	// bound by another process on this node.
+	FixedHostPort int
 }
 
 // composeFile captures the subset of a docker-compose file we need to inspect
@@ -177,7 +182,7 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	// agent can find it again after a restart reassigns the host port. Compose
 	// merges this on top of the user's compose file.
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
-	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, workspaceMount)
+	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, cfg.FixedHostPort, workspaceMount)
 	if err := os.WriteFile(overridePath, []byte(override), 0644); err != nil {
 		return 0, fmt.Errorf("write override file: %w", err)
 	}
@@ -211,6 +216,13 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 			"--project-directory", workDir,
 		}
 		return append(args, extra...)
+	}
+
+	if cfg.FixedHostPort > 0 {
+		logFn(fmt.Sprintf("Probing host port %d availability...", cfg.FixedHostPort))
+		if err := probePortAvailable(ctx, cfg.FixedHostPort); err != nil {
+			return 0, err
+		}
 	}
 
 	logFn(fmt.Sprintf("Pulling compose images for project %s...", projectName))
@@ -371,18 +383,23 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 // buildComposeOverrideYAML produces the muvee.override.yml content that
 // stamps the expose-service container with port + Traefik labels and, for
 // image-only projects whose workspace volume is bind-mounted from NFS,
-// appends a volumes entry. Pure function so the volume-injection branch
-// is unit-testable without touching docker.
-func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort int, workspaceMount string) string {
+// appends a volumes entry. When fixedHostPort is non-zero, the published
+// host port is locked to that exact value instead of "0" (Docker-assigned
+// ephemeral). Pure function so all branches are unit-testable.
+func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fixedHostPort int, workspaceMount string) string {
+	hostSpec := "0"
+	if fixedHostPort > 0 {
+		hostSpec = strconv.Itoa(fixedHostPort)
+	}
 	out := fmt.Sprintf(
 		"services:\n"+
 			"  %s:\n"+
 			"    ports:\n"+
-			"      - \"0:%d\"\n"+
+			"      - \"%s:%d\"\n"+
 			"    labels:\n"+
 			"      muvee.domain_prefix: \"%s\"\n"+
 			"      muvee.expose_port: \"%d\"\n",
-		exposeService, exposePort, domainPrefix, exposePort,
+		exposeService, hostSpec, exposePort, domainPrefix, exposePort,
 	)
 	if workspaceMount != "" {
 		out += fmt.Sprintf(
@@ -415,6 +432,53 @@ func dockerVolumeExists(ctx context.Context, name string) bool {
 		return false
 	}
 	return true
+}
+
+// portIsListening parses the output of `ss -ltn` (or `netstat -ltn`) and
+// reports whether `port` appears as a TCP LISTEN local port. Pure function so
+// the parser is unit-testable without invoking the OS. The local-address column
+// can take any of these forms — we split on the last colon to extract the port
+// for both IPv4 ("0.0.0.0:8080") and IPv6 ("[::]:8080" / "[::1]:8080").
+func portIsListening(raw string, port int) bool {
+	want := strconv.Itoa(port)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "LISTEN") {
+			continue
+		}
+		fields := strings.Fields(line)
+		for _, f := range fields {
+			// Local-address columns end with `:<port>`. Take the last colon.
+			i := strings.LastIndex(f, ":")
+			if i < 0 || i == len(f)-1 {
+				continue
+			}
+			if f[i+1:] == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// probePortAvailable runs `ss -ltn` (falling back to `netstat -ltn`) on the
+// deploy host and returns nil when `port` is not currently bound. Returns a
+// descriptive error when the port is taken, or when neither probe tool is
+// available — fixed-port deploys must not silently proceed with an unverified
+// port.
+func probePortAvailable(ctx context.Context, port int) error {
+	out, err := exec.CommandContext(ctx, "ss", "-ltn").Output()
+	if err != nil {
+		// Fall back to netstat for hosts without iproute2.
+		out, err = exec.CommandContext(ctx, "netstat", "-ltn").Output()
+		if err != nil {
+			return fmt.Errorf("port-probe failed: neither `ss` nor `netstat` is available on the deployer host (install iproute2 or net-tools, or unset fixed_host_port)")
+		}
+	}
+	if portIsListening(string(out), port) {
+		return fmt.Errorf("fixed host port %d is already bound by another process on this node", port)
+	}
+	return nil
 }
 
 // redactGitURL strips inline HTTPS credentials so they don't end up in logs.

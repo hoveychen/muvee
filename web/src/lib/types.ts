@@ -55,6 +55,12 @@ export interface Project {
   //   'public'  — any authenticated muvee user (default, legacy behaviour)
   //   'private' — only project owner, system admins, and explicitly allowed users
   access_mode: 'public' | 'private'
+  // Admin-only fixed-port binding. When both are set, the project is forced
+  // onto fixed_node_id and its container's port is published on
+  // fixed_host_port (instead of an ephemeral host port). null/undefined means
+  // dynamic allocation (default).
+  fixed_host_port?: number | null
+  fixed_node_id?: string | null
   created_at: string
   updated_at: string
 }

@@ -38,6 +38,10 @@ type Config struct {
 	DatasetNFSBasePath string
 	// VolumeMountPath is the container-internal path where the workspace volume is mounted.
 	VolumeMountPath string
+	// FixedHostPort, when non-zero, locks the published host port to this value
+	// instead of letting Docker pick an ephemeral. The deploy step probes the
+	// port first and fails fast if it is already bound.
+	FixedHostPort int
 }
 
 type DatasetSpec struct {
@@ -67,6 +71,15 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 	oldContainer := "muvee-" + cfg.DomainPrefix
 	logFn(fmt.Sprintf("Stopping old container %s (if any)...", oldContainer))
 	_ = runCmd(ctx, logFn, "docker", "rm", "-f", oldContainer)
+
+	// Pre-flight port probe for fixed-port deploys. The old container has been
+	// removed already so its own listener no longer counts as a conflict.
+	if cfg.FixedHostPort > 0 {
+		logFn(fmt.Sprintf("Probing host port %d availability...", cfg.FixedHostPort))
+		if err := probePortAvailable(ctx, cfg.FixedHostPort); err != nil {
+			return 0, err
+		}
+	}
 
 	// Prepare dataset mounts
 	var mounts []datacache.DatasetMount
@@ -105,15 +118,20 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 	}
 	allMounts := append(depMounts, rwMounts...)
 
-	// Build docker run command. Port 0 on the host lets Docker pick a free port.
-	// The actual assigned port is retrieved via `docker port` after startup.
+	// Build docker run command. The host-side spec is "0" by default (Docker
+	// picks an ephemeral port, retrieved via `docker port` after startup);
+	// when FixedHostPort is set we lock the published port to that value.
 	// muvee.* labels let the agent's status reporter group containers and look
 	// up the right host-side port mapping after a docker restart reassigns it.
+	hostSpec := "0"
+	if cfg.FixedHostPort > 0 {
+		hostSpec = strconv.Itoa(cfg.FixedHostPort)
+	}
 	dockerArgs := []string{
 		"run", "-d",
 		"--name", oldContainer,
 		"--restart", "unless-stopped",
-		"-p", fmt.Sprintf("0:%d", containerPort),
+		"-p", fmt.Sprintf("%s:%d", hostSpec, containerPort),
 		"--label", "muvee.domain_prefix=" + cfg.DomainPrefix,
 		"--label", "muvee.expose_port=" + strconv.Itoa(containerPort),
 	}

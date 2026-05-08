@@ -323,9 +323,15 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 		}
 	}
 
-	deployNode, err := s.PickDeployNode(ctx, depDatasetIDs)
+	deployNode, err := s.resolveFixedDeployNode(ctx, project)
 	if err != nil {
 		return err
+	}
+	if deployNode == nil {
+		deployNode, err = s.PickDeployNode(ctx, depDatasetIDs)
+		if err != nil {
+			return err
+		}
 	}
 	if err := s.store.SetDeploymentNode(ctx, deployment.ID, deployNode.ID); err != nil {
 		return err
@@ -357,23 +363,27 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 		}
 	}
 
+	payload := map[string]interface{}{
+		"image_tag":         imageTag,
+		"deployment_id":     deployment.ID.String(),
+		"project_id":        project.ID.String(),
+		"domain_prefix":     project.DomainPrefix,
+		"auth_required":     project.AuthRequired,
+		"auth_domains":      project.AuthAllowedDomains,
+		"container_port":    project.ContainerPort,
+		"memory_limit":      project.MemoryLimit,
+		"volume_mount_path": project.VolumeMountPath,
+		"datasets":          datasets,
+		"env_vars":          envVars,
+	}
+	if project.FixedHostPort != nil {
+		payload["fixed_host_port"] = *project.FixedHostPort
+	}
 	task := &store.Task{
 		Type:         store.TaskTypeDeploy,
 		NodeID:       &deployNode.ID,
 		DeploymentID: deployment.ID,
-		Payload: map[string]interface{}{
-			"image_tag":         imageTag,
-			"deployment_id":     deployment.ID.String(),
-			"project_id":        project.ID.String(),
-			"domain_prefix":     project.DomainPrefix,
-			"auth_required":     project.AuthRequired,
-			"auth_domains":      project.AuthAllowedDomains,
-			"container_port":    project.ContainerPort,
-			"memory_limit":      project.MemoryLimit,
-			"volume_mount_path": project.VolumeMountPath,
-			"datasets":          datasets,
-			"env_vars":          envVars,
-		},
+		Payload:      payload,
 	}
 	_, err = s.store.CreateTask(ctx, task)
 	return err
@@ -391,9 +401,15 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 		return fmt.Errorf("compose project must declare expose_service and expose_port")
 	}
 
-	deployNode, err := s.pickOrReusePinnedNode(ctx, project)
+	deployNode, err := s.resolveFixedDeployNode(ctx, project)
 	if err != nil {
 		return err
+	}
+	if deployNode == nil {
+		deployNode, err = s.pickOrReusePinnedNode(ctx, project)
+		if err != nil {
+			return err
+		}
 	}
 	if err := s.store.SetDeploymentNode(ctx, deployment.ID, deployNode.ID); err != nil {
 		return err
@@ -431,6 +447,9 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 		"expose_port":       project.ExposePort,
 		"env_vars":          envVars,
 	}
+	if project.FixedHostPort != nil {
+		payload["fixed_host_port"] = *project.FixedHostPort
+	}
 	if gitSSHKey != "" {
 		payload["git_ssh_key"] = gitSSHKey
 	}
@@ -462,9 +481,15 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 		return fmt.Errorf("image project has no container_port")
 	}
 
-	deployNode, err := s.pickOrReusePinnedNode(ctx, project)
+	deployNode, err := s.resolveFixedDeployNode(ctx, project)
 	if err != nil {
 		return err
+	}
+	if deployNode == nil {
+		deployNode, err = s.pickOrReusePinnedNode(ctx, project)
+		if err != nil {
+			return err
+		}
 	}
 	if err := s.store.SetDeploymentNode(ctx, deployment.ID, deployNode.ID); err != nil {
 		return err
@@ -491,6 +516,9 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 		"volume_mount_path":   project.VolumeMountPath,
 		"env_vars":            envVars,
 	}
+	if project.FixedHostPort != nil {
+		payload["fixed_host_port"] = *project.FixedHostPort
+	}
 
 	task := &store.Task{
 		Type:         store.TaskTypeDeploy,
@@ -515,6 +543,27 @@ func buildInlineComposeYAML(imageRef string, containerPort int) string {
 	sb.WriteString("    restart: unless-stopped\n")
 	_ = containerPort // ports are handled by the deployer's Traefik label injection
 	return sb.String()
+}
+
+// resolveFixedDeployNode loads the deployer node a project is pinned to via
+// admin-set fixed_node_id. Callers should fall back to the regular node picker
+// when this returns (nil, nil). An error from this function means the fixed
+// binding is broken (node missing/offline) and dispatch should abort.
+func (s *Scheduler) resolveFixedDeployNode(ctx context.Context, project *store.Project) (*store.Node, error) {
+	if project.FixedNodeID == nil {
+		return nil, nil
+	}
+	node, err := s.store.GetNode(ctx, *project.FixedNodeID)
+	if err != nil {
+		return nil, fmt.Errorf("get fixed deploy node: %w", err)
+	}
+	if node == nil {
+		return nil, fmt.Errorf("project's fixed deploy node %s no longer exists", project.FixedNodeID)
+	}
+	if time.Since(node.LastSeenAt) > 2*time.Minute {
+		return nil, fmt.Errorf("project's fixed deploy node %q is offline; refusing to dispatch", node.Hostname)
+	}
+	return node, nil
 }
 
 // pickOrReusePinnedNode returns the project's pinned deploy node, picking and

@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key, Layers, Package } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Project, Secret } from '../lib/types'
+import type { Node as DeployNode, Project, Secret } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
+import { useAuth } from '../lib/auth'
 
 // ─── Git provider detection ───────────────────────────────────────────────────
 
@@ -311,6 +312,22 @@ export default function NewProject() {
   const [error, setError] = useState('')
   const navigate = useNavigate()
   const { t } = useTranslation()
+  const { user: me } = useAuth()
+  const isAdmin = me?.role === 'admin'
+  const [nodes, setNodes] = useState<DeployNode[] | null>(null)
+  const [fixedHostPort, setFixedHostPort] = useState<number | ''>('')
+  const [fixedNodeID, setFixedNodeID] = useState('')
+
+  useEffect(() => {
+    if (!isAdmin) return
+    api.nodes.list().then(ns => setNodes(ns.filter(n => n.role === 'deploy'))).catch(() => setNodes([]))
+  }, [isAdmin])
+
+  const fixedPortPayload = (): Partial<Project> => {
+    if (!isAdmin) return {}
+    if (fixedHostPort === '' && !fixedNodeID) return {}
+    return { fixed_host_port: fixedHostPort === '' ? null : Number(fixedHostPort), fixed_node_id: fixedNodeID || null }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -334,6 +351,12 @@ export default function NewProject() {
 
     setSaving(true)
     try {
+      // Validate fixed-port pair: both-or-neither (admin only).
+      if (isAdmin && (fixedHostPort === '') !== (fixedNodeID === '')) {
+        setError('Fixed host port and fixed deploy node must be set together')
+        setSaving(false)
+        return
+      }
       // Step 1: create the project
       let payload: Partial<Project>
       if (projectType === 'domain_only') {
@@ -352,6 +375,7 @@ export default function NewProject() {
           icon: form.icon,
           tags: form.tags,
           project_type: 'compose',
+          ...fixedPortPayload(),
         }
       } else if (projectType === 'image') {
         payload = {
@@ -368,9 +392,10 @@ export default function NewProject() {
           icon: form.icon,
           tags: form.tags,
           project_type: 'image',
+          ...fixedPortPayload(),
         }
       } else {
-        payload = { ...form, project_type: 'deployment' }
+        payload = { ...form, project_type: 'deployment', ...fixedPortPayload() }
       }
       const project = await api.projects.create(payload)
 
@@ -918,6 +943,39 @@ export default function NewProject() {
               {t('newProject.fields.volumeMountPathHint')}
             </p>
           </div>
+          )}
+
+          {/* Admin-only fixed-port binding (not applicable to domain_only) */}
+          {isAdmin && projectType !== 'domain_only' && (
+            <div>
+              <label className="form-label">{t('projectDetail.config.fixedPort').toUpperCase()}</label>
+              <div className="flex flex-col gap-2">
+                <input
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  placeholder={t('projectDetail.config.fixedPortNone')}
+                  value={fixedHostPort}
+                  onChange={e => setFixedHostPort(e.target.value === '' ? '' : Number(e.target.value))}
+                  className="form-input"
+                  style={{ fontFamily: MONO }}
+                />
+                <select
+                  value={fixedNodeID}
+                  onChange={e => setFixedNodeID(e.target.value)}
+                  className="form-input"
+                  style={{ fontFamily: MONO }}
+                >
+                  <option value="">{t('projectDetail.config.fixedNode')} —</option>
+                  {(nodes ?? []).map(n => (
+                    <option key={n.id} value={n.id}>{n.hostname} ({n.id.slice(0, 8)})</option>
+                  ))}
+                </select>
+              </div>
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('projectDetail.config.fixedPortHint')}
+              </p>
+            </div>
           )}
 
           {error && (

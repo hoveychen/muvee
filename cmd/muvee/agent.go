@@ -371,6 +371,7 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 		Datasets:           datasets,
 		BaseDomain:         baseDomain,
 		EnvVars:            envVars,
+		FixedHostPort:      intVal(p, "fixed_host_port"),
 	}
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }
@@ -401,6 +402,7 @@ func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath s
 		VolumeMountPath:   str(p, "volume_mount_path"),
 		VolumeNFSBasePath: volumeNFSBasePath,
 		EnvVars:           envVars,
+		FixedHostPort:     intVal(p, "fixed_host_port"),
 	}
 	return deployer.DeployCompose(ctx, cfg, logFn)
 }

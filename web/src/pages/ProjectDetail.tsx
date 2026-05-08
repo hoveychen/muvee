@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Project, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Node as DeployNode, Project, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
@@ -680,12 +680,14 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
 }) {
   const { t } = useTranslation()
   const [users, setUsers] = useState<User[] | null>(null)
+  const [nodes, setNodes] = useState<DeployNode[] | null>(null)
   const [ownerSaving, setOwnerSaving] = useState(false)
   const [ownerError, setOwnerError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!isAdmin) return
     api.users.list().then(setUsers).catch(() => setUsers([]))
+    api.nodes.list().then(ns => setNodes(ns.filter(n => n.role === 'deploy'))).catch(() => setNodes([]))
   }, [isAdmin])
 
   const handleOwnerSelect = async (newOwnerId: string) => {
@@ -824,6 +826,56 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
           </p>
         )}
       </div>
+
+      {!isTunnelType && (isAdmin || form.fixed_host_port) && (
+        <div>
+          <label className="form-label">
+            {t('projectDetail.config.fixedPort').toUpperCase()}
+          </label>
+          {isAdmin ? (
+            <div className="flex flex-col gap-2">
+              <input
+                type="number"
+                min={1024}
+                max={65535}
+                placeholder={t('projectDetail.config.fixedPortNone')}
+                value={form.fixed_host_port ?? ''}
+                onChange={e => onChange({ ...form, fixed_host_port: e.target.value === '' ? null : Number(e.target.value) })}
+                className="form-input w-full"
+                style={{ fontFamily: MONO }}
+              />
+              <select
+                value={form.fixed_node_id ?? ''}
+                onChange={e => onChange({ ...form, fixed_node_id: e.target.value || null })}
+                className="form-input w-full"
+                style={{ fontFamily: MONO }}
+              >
+                <option value="">{t('projectDetail.config.fixedNode')} —</option>
+                {(nodes ?? []).map(n => (
+                  <option key={n.id} value={n.id}>{n.hostname} ({n.id.slice(0, 8)})</option>
+                ))}
+              </select>
+              {(form.fixed_host_port || form.fixed_node_id) && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ alignSelf: 'flex-start' }}
+                  onClick={() => onChange({ ...form, fixed_host_port: null, fixed_node_id: null })}
+                >
+                  {t('projectDetail.config.fixedPortClear')}
+                </button>
+              )}
+            </div>
+          ) : (
+            <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: form.fixed_host_port ? 'var(--fg-primary)' : 'var(--fg-muted)' }}>
+              {form.fixed_host_port ? `:${form.fixed_host_port} on ${form.fixed_node_id?.slice(0, 8) ?? '?'}` : t('projectDetail.config.fixedPortNone')}
+            </p>
+          )}
+          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            {t('projectDetail.config.fixedPortHint')}
+          </p>
+        </div>
+      )}
 
       <div>
         <label className="form-label">

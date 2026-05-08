@@ -144,12 +144,12 @@ func (s *Store) UpdateUserProfile(ctx context.Context, userID uuid.UUID, name *s
 
 // projectColumns is the full SELECT list for a Project row. git_url is COALESCEd
 // so domain_only projects (which have NULL git_url) scan into an empty string.
-const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, created_at, updated_at`
+const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, created_at, updated_at`
 
 // projectColumnsPrefixed is projectColumns with every column qualified by the
 // `p.` alias. Used when the query JOINs another table (e.g. users) so bare
 // column names like `id` or `name` would be ambiguous.
-const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.created_at, p.updated_at`
+const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.fixed_host_port, p.fixed_node_id, p.created_at, p.updated_at`
 
 // ownerJoinColumns is the tail of the SELECT list for projects queried with
 // `LEFT JOIN users u ON u.id = p.owner_id`.
@@ -158,13 +158,13 @@ const ownerJoinColumns = `, COALESCE(u.name, '') AS owner_name, COALESCE(u.email
 func scanProject(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.CreatedAt, &p.UpdatedAt)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt)
 }
 
 func scanProjectWithOwner(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.CreatedAt, &p.UpdatedAt, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
 }
 
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
@@ -206,9 +206,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 		p.AccessMode = ProjectAccessModePublic
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
-	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.PinnedNodeID, p.ImageRef, p.AutoDeployEnabled, p.LastTrackedCommitSHA, p.LastTrackedImageDigests, p.AccessMode, p.CreatedAt, p.UpdatedAt)
+		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
+	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.PinnedNodeID, p.ImageRef, p.AutoDeployEnabled, p.LastTrackedCommitSHA, p.LastTrackedImageDigests, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -294,8 +294,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		p.AccessMode = ProjectAccessModePublic
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, auth_bypass_paths=$9, container_port=$10, memory_limit=$11, volume_mount_path=$12, description=$13, icon=$14, tags=$15, compose_file_path=$16, expose_service=$17, expose_port=$18, image_ref=$19, auto_deploy_enabled=$20, access_mode=$21, updated_at=$22 WHERE id=$23
-	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.ImageRef, p.AutoDeployEnabled, p.AccessMode, p.UpdatedAt, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, auth_bypass_paths=$9, container_port=$10, memory_limit=$11, volume_mount_path=$12, description=$13, icon=$14, tags=$15, compose_file_path=$16, expose_service=$17, expose_port=$18, image_ref=$19, auto_deploy_enabled=$20, access_mode=$21, fixed_host_port=$22, fixed_node_id=$23, updated_at=$24 WHERE id=$25
+	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.ImageRef, p.AutoDeployEnabled, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.UpdatedAt, p.ID)
 	return err
 }
 
@@ -358,6 +358,23 @@ func (s *Store) SetProjectPinnedNode(ctx context.Context, projectID, nodeID uuid
 		`UPDATE projects SET pinned_node_id = $1, updated_at = $2 WHERE id = $3`,
 		nodeID, time.Now(), projectID)
 	return err
+}
+
+// IsFixedPortInUse reports whether another project has already claimed the
+// (nodeID, port) pair as its fixed-port binding. Used by the API layer to give
+// admins instant feedback when configuring fixed_host_port. Pass excludeID
+// equal to the project being edited so its own current binding doesn't count
+// as a conflict (zero UUID disables the exclusion).
+func (s *Store) IsFixedPortInUse(ctx context.Context, nodeID uuid.UUID, port int, excludeID uuid.UUID) (bool, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM projects
+		WHERE fixed_node_id = $1 AND fixed_host_port = $2 AND id <> $3
+	`, nodeID, port, excludeID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func (s *Store) DeleteProject(ctx context.Context, id uuid.UUID) error {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/store"
 )
 
@@ -188,6 +189,104 @@ func TestValidateProject_DomainOnly_Success(t *testing.T) {
 	}
 	if err := validateProject(&p); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// ─── fixed-port semantics ──────────────────────────────────────────────────
+
+func TestValidateFixedPort_BothNilOK(t *testing.T) {
+	p := store.Project{Name: "app"}
+	if err := validateProject(&p); err != nil {
+		t.Fatalf("unexpected error when both fixed-port fields are nil: %v", err)
+	}
+}
+
+func TestValidateFixedPort_PortWithoutNodeRejected(t *testing.T) {
+	port := 13000
+	p := store.Project{Name: "app", FixedHostPort: &port}
+	if err := validateProject(&p); err == nil {
+		t.Fatal("expected error when fixed_host_port is set without fixed_node_id")
+	}
+}
+
+func TestValidateFixedPort_NodeWithoutPortRejected(t *testing.T) {
+	id := uuid.New()
+	p := store.Project{Name: "app", FixedNodeID: &id}
+	if err := validateProject(&p); err == nil {
+		t.Fatal("expected error when fixed_node_id is set without fixed_host_port")
+	}
+}
+
+func TestValidateFixedPort_PortRange(t *testing.T) {
+	id := uuid.New()
+	cases := []struct {
+		port    int
+		wantErr bool
+	}{
+		{1023, true},
+		{1024, false},
+		{65535, false},
+		{65536, true},
+	}
+	for _, c := range cases {
+		port := c.port
+		p := store.Project{Name: "app", FixedHostPort: &port, FixedNodeID: &id}
+		err := validateProject(&p)
+		if c.wantErr && err == nil {
+			t.Errorf("port=%d: expected range error, got nil", c.port)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("port=%d: unexpected error: %v", c.port, err)
+		}
+	}
+}
+
+func TestValidateFixedPort_DomainOnlyRejected(t *testing.T) {
+	id := uuid.New()
+	port := 13000
+	p := store.Project{
+		Name:          "app",
+		ProjectType:   store.ProjectTypeDomainOnly,
+		DomainPrefix:  "mine",
+		FixedHostPort: &port,
+		FixedNodeID:   &id,
+	}
+	if err := validateProject(&p); err == nil {
+		t.Fatal("expected fixed-port to be rejected for domain_only projects")
+	}
+}
+
+func TestValidateFixedPort_ZeroNodeIDRejected(t *testing.T) {
+	port := 13000
+	zero := uuid.Nil
+	p := store.Project{Name: "app", FixedHostPort: &port, FixedNodeID: &zero}
+	if err := validateProject(&p); err == nil {
+		t.Fatal("expected fixed_node_id=zero UUID to be rejected")
+	}
+}
+
+func TestFixedPortChanged(t *testing.T) {
+	port13000 := 13000
+	port14000 := 14000
+	idA := uuid.New()
+	idB := uuid.New()
+
+	cases := []struct {
+		name string
+		a, b store.Project
+		want bool
+	}{
+		{"both nil — same", store.Project{}, store.Project{}, false},
+		{"port added", store.Project{}, store.Project{FixedHostPort: &port13000, FixedNodeID: &idA}, true},
+		{"port removed", store.Project{FixedHostPort: &port13000, FixedNodeID: &idA}, store.Project{}, true},
+		{"port changed", store.Project{FixedHostPort: &port13000, FixedNodeID: &idA}, store.Project{FixedHostPort: &port14000, FixedNodeID: &idA}, true},
+		{"node changed", store.Project{FixedHostPort: &port13000, FixedNodeID: &idA}, store.Project{FixedHostPort: &port13000, FixedNodeID: &idB}, true},
+		{"identical", store.Project{FixedHostPort: &port13000, FixedNodeID: &idA}, store.Project{FixedHostPort: &port13000, FixedNodeID: &idA}, false},
+	}
+	for _, c := range cases {
+		if got := fixedPortChanged(&c.a, &c.b); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 
