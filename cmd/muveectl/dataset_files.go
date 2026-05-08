@@ -27,14 +27,17 @@ func init() {
 // ─── Ls ─────────────────────────────────────────────────────────────────────
 
 var datasetLsCmd = &cobra.Command{
-	Use:   "ls DATASET_ID [path]",
+	Use:   "ls DATASET-ID-OR-NAME [path]",
 	Short: "List files in the dataset root (or a subdirectory)",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		datasetID := args[0]
+		datasetID, err := resolveDatasetRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		path := ""
 		if len(args) > 1 {
 			path = args[1]
@@ -78,14 +81,17 @@ var datasetLsCmd = &cobra.Command{
 // ─── Pull ───────────────────────────────────────────────────────────────────
 
 var datasetPullCmd = &cobra.Command{
-	Use:   "pull DATASET_ID REMOTE_PATH [LOCAL_PATH]",
+	Use:   "pull DATASET-ID-OR-NAME REMOTE_PATH [LOCAL_PATH]",
 	Short: "Download a file from the dataset",
 	Args:  cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		datasetID := args[0]
+		datasetID, err := resolveDatasetRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		remotePath := args[1]
 		localPath := filepath.Base(remotePath)
 		if len(args) >= 3 {
@@ -125,14 +131,17 @@ var datasetPullCmd = &cobra.Command{
 // ─── Push ───────────────────────────────────────────────────────────────────
 
 var datasetPushCmd = &cobra.Command{
-	Use:   "push DATASET_ID LOCAL_FILE",
+	Use:   "push DATASET-ID-OR-NAME LOCAL_FILE",
 	Short: "Upload a local file to the dataset",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		datasetID := args[0]
+		datasetID, err := resolveDatasetRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		localFile := args[1]
 		remotePath, _ := cmd.Flags().GetString("remote-path")
 
@@ -191,18 +200,20 @@ var datasetPushCmd = &cobra.Command{
 // ─── Rm ─────────────────────────────────────────────────────────────────────
 
 var datasetRmCmd = &cobra.Command{
-	Use:   "rm DATASET_ID PATH",
+	Use:   "rm DATASET-ID-OR-NAME PATH",
 	Short: "Delete a file or directory from the dataset",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		datasetID := args[0]
+		datasetID, err := resolveDatasetRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		remotePath := args[1]
 		url := "/api/datasets/" + datasetID + "/files?path=" + urlEscape(remotePath)
-		_, err := cl.do("DELETE", url, nil)
-		if err != nil {
+		if _, err := cl.do("DELETE", url, nil); err != nil {
 			return err
 		}
 		fmt.Printf("Deleted dataset:%s\n", remotePath)
@@ -213,18 +224,20 @@ var datasetRmCmd = &cobra.Command{
 // ─── Mkdir ──────────────────────────────────────────────────────────────────
 
 var datasetMkdirCmd = &cobra.Command{
-	Use:   "mkdir DATASET_ID PATH",
+	Use:   "mkdir DATASET-ID-OR-NAME PATH",
 	Short: "Create a directory in the dataset",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		datasetID := args[0]
+		datasetID, err := resolveDatasetRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		path := args[1]
 		body := map[string]interface{}{"path": path}
-		_, err := cl.do("POST", "/api/datasets/"+datasetID+"/files/mkdir", body)
-		if err != nil {
+		if _, err := cl.do("POST", "/api/datasets/"+datasetID+"/files/mkdir", body); err != nil {
 			return err
 		}
 		fmt.Printf("Created directory dataset:%s\n", path)
@@ -235,17 +248,19 @@ var datasetMkdirCmd = &cobra.Command{
 // ─── Mv ─────────────────────────────────────────────────────────────────────
 
 var datasetMvCmd = &cobra.Command{
-	Use:   "mv DATASET_ID SRC DST",
+	Use:   "mv DATASET-ID-OR-NAME SRC DST",
 	Short: "Move or rename a file/directory in the dataset",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		datasetID := args[0]
-		body := map[string]interface{}{"src": args[1], "dst": args[2]}
-		_, err := cl.do("POST", "/api/datasets/"+datasetID+"/files/move", body)
+		datasetID, err := resolveDatasetRef(cl, args[0])
 		if err != nil {
+			return err
+		}
+		body := map[string]interface{}{"src": args[1], "dst": args[2]}
+		if _, err := cl.do("POST", "/api/datasets/"+datasetID+"/files/move", body); err != nil {
 			return err
 		}
 		fmt.Printf("Moved dataset:%s → dataset:%s\n", args[1], args[2])
@@ -256,17 +271,19 @@ var datasetMvCmd = &cobra.Command{
 // ─── Cp ─────────────────────────────────────────────────────────────────────
 
 var datasetCpCmd = &cobra.Command{
-	Use:   "cp DATASET_ID SRC DST",
+	Use:   "cp DATASET-ID-OR-NAME SRC DST",
 	Short: "Copy a file in the dataset",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		datasetID := args[0]
-		body := map[string]interface{}{"src": args[1], "dst": args[2]}
-		_, err := cl.do("POST", "/api/datasets/"+datasetID+"/files/copy", body)
+		datasetID, err := resolveDatasetRef(cl, args[0])
 		if err != nil {
+			return err
+		}
+		body := map[string]interface{}{"src": args[1], "dst": args[2]}
+		if _, err := cl.do("POST", "/api/datasets/"+datasetID+"/files/copy", body); err != nil {
 			return err
 		}
 		fmt.Printf("Copied dataset:%s → dataset:%s\n", args[1], args[2])

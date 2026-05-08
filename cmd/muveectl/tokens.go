@@ -41,14 +41,18 @@ func init() {
 // ─── List ────────────────────────────────────────────────────────────────────
 
 var tokensListCmd = &cobra.Command{
-	Use:   "list PROJECT_ID",
+	Use:   "list PROJECT-ID-OR-NAME",
 	Short: "List tokens for a project",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		items, err := cl.doArray("GET", "/api/projects/"+args[0]+"/tokens", nil)
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		items, err := cl.doArray("GET", "/api/projects/"+projectID+"/tokens", nil)
 		if err != nil {
 			return err
 		}
@@ -68,15 +72,19 @@ var tokensListCmd = &cobra.Command{
 // ─── Create ──────────────────────────────────────────────────────────────────
 
 var tokensCreateCmd = &cobra.Command{
-	Use:   "create PROJECT_ID",
+	Use:   "create PROJECT-ID-OR-NAME",
 	Short: "Create a project token",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		name, _ := cmd.Flags().GetString("name")
-		result, err := cl.do("POST", "/api/projects/"+args[0]+"/tokens", map[string]string{"name": name})
+		result, err := cl.do("POST", "/api/projects/"+projectID+"/tokens", map[string]string{"name": name})
 		if err != nil {
 			return err
 		}
@@ -93,15 +101,18 @@ var tokensCreateCmd = &cobra.Command{
 // ─── Delete ──────────────────────────────────────────────────────────────────
 
 var tokensDeleteCmd = &cobra.Command{
-	Use:   "delete PROJECT_ID TOKEN_ID",
+	Use:   "delete PROJECT-ID-OR-NAME TOKEN_ID",
 	Short: "Delete a project token",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		_, err := cl.do("DELETE", "/api/projects/"+args[0]+"/tokens/"+args[1], nil)
+		projectID, err := resolveProjectRef(cl, args[0])
 		if err != nil {
+			return err
+		}
+		if _, err := cl.do("DELETE", "/api/projects/"+projectID+"/tokens/"+args[1], nil); err != nil {
 			return err
 		}
 		fmt.Println("Deleted token", args[1])

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +18,50 @@ import (
 var projectsCmd = &cobra.Command{
 	Use:   "projects",
 	Short: "Manage projects",
+}
+
+// resolveResourceRef accepts either a UUID (passed through unchanged) or a
+// resource name and looks it up against the given list endpoint, matching
+// on the `name` field. Returns the canonical UUID string, or an error
+// shaped for CLI display ("<kind> not found" / "ambiguous <kind> name").
+func resolveResourceRef(c *client, kind, listURL, arg string) (string, error) {
+	if _, err := uuid.Parse(arg); err == nil {
+		return arg, nil
+	}
+	items, err := c.doArray("GET", listURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s %q: %w", kind, arg, err)
+	}
+	var matches []string
+	for _, raw := range items {
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if str(m, "name") == arg {
+			matches = append(matches, str(m, "id"))
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("%s not found: %s", kind, arg)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("ambiguous %s name: %s (matched %d; use the UUID instead)", kind, arg, len(matches))
+	}
+}
+
+// resolveProjectRef accepts a project UUID or name (scoped to projects the
+// caller can see via GET /api/projects).
+func resolveProjectRef(c *client, arg string) (string, error) {
+	return resolveResourceRef(c, "project", "/api/projects", arg)
+}
+
+// resolveDatasetRef accepts a dataset UUID or name (scoped to datasets the
+// caller can see via GET /api/datasets).
+func resolveDatasetRef(c *client, arg string) (string, error) {
+	return resolveResourceRef(c, "dataset", "/api/datasets", arg)
 }
 
 func init() {
@@ -271,14 +316,18 @@ var projectsCreateCmd = &cobra.Command{
 // ─── Get ─────────────────────────────────────────────────────────────────────
 
 var projectsGetCmd = &cobra.Command{
-	Use:   "get ID",
+	Use:   "get ID-OR-NAME",
 	Short: "Get project details",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		result, err := cl.do("GET", "/api/projects/"+args[0], nil)
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		result, err := cl.do("GET", "/api/projects/"+id, nil)
 		if err != nil {
 			return err
 		}
@@ -300,15 +349,19 @@ var projectsGetCmd = &cobra.Command{
 // ─── Update ──────────────────────────────────────────────────────────────────
 
 var projectsUpdateCmd = &cobra.Command{
-	Use:   "update ID",
+	Use:   "update ID-OR-NAME",
 	Short: "Update project configuration",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		p := collectProjectFlags(cmd)
-		result, err := cl.do("PUT", "/api/projects/"+args[0], p)
+		result, err := cl.do("PUT", "/api/projects/"+id, p)
 		if err != nil {
 			return err
 		}
@@ -324,15 +377,18 @@ var projectsUpdateCmd = &cobra.Command{
 // ─── Delete ──────────────────────────────────────────────────────────────────
 
 var projectsDeleteCmd = &cobra.Command{
-	Use:   "delete ID",
+	Use:   "delete ID-OR-NAME",
 	Short: "Delete a project",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		_, err := cl.do("DELETE", "/api/projects/"+args[0], nil)
+		id, err := resolveProjectRef(cl, args[0])
 		if err != nil {
+			return err
+		}
+		if _, err := cl.do("DELETE", "/api/projects/"+id, nil); err != nil {
 			return err
 		}
 		fmt.Println("Deleted project", args[0])
@@ -343,14 +399,18 @@ var projectsDeleteCmd = &cobra.Command{
 // ─── Deploy ──────────────────────────────────────────────────────────────────
 
 var projectsDeployCmd = &cobra.Command{
-	Use:   "deploy ID",
+	Use:   "deploy ID-OR-NAME",
 	Short: "Trigger a deployment",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		result, err := cl.do("POST", "/api/projects/"+args[0]+"/deploy", nil)
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		result, err := cl.do("POST", "/api/projects/"+id+"/deploy", nil)
 		if err != nil {
 			return err
 		}
@@ -366,14 +426,18 @@ var projectsDeployCmd = &cobra.Command{
 // ─── Deployments ─────────────────────────────────────────────────────────────
 
 var projectsDeploymentsCmd = &cobra.Command{
-	Use:   "deployments ID",
+	Use:   "deployments ID-OR-NAME",
 	Short: "List deployment history",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		items, err := cl.doArray("GET", "/api/projects/"+args[0]+"/deployments", nil)
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		items, err := cl.doArray("GET", "/api/projects/"+id+"/deployments", nil)
 		if err != nil {
 			return err
 		}
@@ -393,7 +457,7 @@ var projectsDeploymentsCmd = &cobra.Command{
 // ─── Logs ────────────────────────────────────────────────────────────────────
 
 var projectsLogsCmd = &cobra.Command{
-	Use:   "logs ID",
+	Use:   "logs ID-OR-NAME",
 	Short: "Show build/deploy logs (latest deployment by default)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -402,7 +466,11 @@ var projectsLogsCmd = &cobra.Command{
 		}
 		deploymentID, _ := cmd.Flags().GetString("deployment")
 
-		items, err := cl.doArray("GET", "/api/projects/"+args[0]+"/deployments", nil)
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		items, err := cl.doArray("GET", "/api/projects/"+id+"/deployments", nil)
 		if err != nil {
 			return err
 		}
@@ -449,15 +517,19 @@ var projectsLogsCmd = &cobra.Command{
 // ─── Metrics ─────────────────────────────────────────────────────────────────
 
 var projectsMetricsCmd = &cobra.Command{
-	Use:   "metrics ID",
+	Use:   "metrics ID-OR-NAME",
 	Short: "Show container resource metrics (CPU, mem, net, disk)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		limit, _ := cmd.Flags().GetInt("limit")
-		items, err := cl.doArray("GET", fmt.Sprintf("/api/projects/%s/metrics?limit=%d", args[0], limit), nil)
+		items, err := cl.doArray("GET", fmt.Sprintf("/api/projects/%s/metrics?limit=%d", id, limit), nil)
 		if err != nil {
 			return err
 		}
@@ -494,7 +566,7 @@ var projectsMetricsCmd = &cobra.Command{
 // ─── Port Forward ────────────────────────────────────────────────────────────
 
 var projectsPortForwardCmd = &cobra.Command{
-	Use:   "port-forward ID",
+	Use:   "port-forward ID-OR-NAME",
 	Short: "Forward a local port to the project's running container",
 	Long:  "Auth is injected automatically using your CLI identity.",
 	Args:  cobra.ExactArgs(1),
@@ -503,7 +575,10 @@ var projectsPortForwardCmd = &cobra.Command{
 			return err
 		}
 		localPort, _ := cmd.Flags().GetString("port")
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 
 		// Verify project exists and has a running deployment.
 		proj, err := cl.do("GET", "/api/projects/"+projectID, nil)
@@ -564,7 +639,7 @@ var projectsPortForwardCmd = &cobra.Command{
 // ─── Curl ────────────────────────────────────────────────────────────────────
 
 var projectsCurlCmd = &cobra.Command{
-	Use:   "curl ID [PATH]",
+	Use:   "curl ID-OR-NAME [PATH]",
 	Short: "Send a single HTTP request to the project's running container as yourself",
 	Long: `Sends a single HTTP request to the project's running deployment via the
 authenticated proxy endpoint, using your CLI identity. Bypasses Traefik
@@ -583,7 +658,10 @@ Examples:
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		path := "/"
 		if len(args) == 2 {
 			path = args[1]

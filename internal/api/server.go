@@ -795,7 +795,10 @@ func (s *Server) createUserToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteUserToken(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
-	tokenID := mustParseUUID(chi.URLParam(r, "tokenId"))
+	tokenID, ok := parsePathUUID(w, r, "tokenId")
+	if !ok {
+		return
+	}
 	if err := s.store.DeleteUserAPIToken(r.Context(), tokenID, user.ID); err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -804,7 +807,10 @@ func (s *Server) deleteUserToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listProjectTokens(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	projectID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	tokens, err := s.store.ListAPITokensForProject(r.Context(), projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -835,7 +841,10 @@ func (s *Server) listProjectTokens(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createProjectToken(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	projectID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -860,7 +869,10 @@ func (s *Server) createProjectToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteProjectToken(w http.ResponseWriter, r *http.Request) {
-	tokenID := mustParseUUID(chi.URLParam(r, "tokenId"))
+	tokenID, ok := parsePathUUID(w, r, "tokenId")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	if err := s.store.DeleteAPIToken(r.Context(), tokenID, user.ID); err != nil {
 		jsonErr(w, err, 500)
@@ -1160,10 +1172,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 404)
 		return
 	}
@@ -1191,10 +1206,13 @@ func mergeProjectUpdate(existing *store.Project, body io.Reader) (*store.Project
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -1260,7 +1278,10 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 // changeProjectOwner reassigns a project to a different owner.
 // Admin-only (enforced by the route group's AdminOnly middleware).
 func (s *Server) changeProjectOwner(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	var body struct {
 		OwnerID uuid.UUID `json:"owner_id"`
 	}
@@ -1317,10 +1338,13 @@ func (s *Server) changeProjectOwner(w http.ResponseWriter, r *http.Request) {
 // downstream service. Available to anyone who can already see the project (admin
 // or project_members row) so members can see who else is allowed in.
 func (s *Server) listProjectAccessUsers(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 404)
 		return
 	}
@@ -1335,7 +1359,10 @@ func (s *Server) listProjectAccessUsers(w http.ResponseWriter, r *http.Request) 
 // addProjectAccessUser grants a user access to a project's downstream service
 // by email lookup. Restricted to project owner or system admin. Body: {email}.
 func (s *Server) addProjectAccessUser(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	proj, err := s.store.GetProject(r.Context(), id)
 	if err != nil || proj == nil {
@@ -1386,8 +1413,14 @@ func (s *Server) addProjectAccessUser(w http.ResponseWriter, r *http.Request) {
 // removeProjectAccessUser revokes a user's access to a project's downstream
 // service. Restricted to project owner or system admin.
 func (s *Server) removeProjectAccessUser(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	userID := mustParseUUID(chi.URLParam(r, "userId"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	userID, ok := parsePathUUID(w, r, "userId")
+	if !ok {
+		return
+	}
 	caller := auth.UserFromCtx(r.Context())
 	proj, err := s.store.GetProject(r.Context(), id)
 	if err != nil || proj == nil {
@@ -1406,10 +1439,13 @@ func (s *Server) removeProjectAccessUser(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -1435,7 +1471,10 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getProjectDatasets(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	pds, err := s.store.GetProjectDatasets(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -1445,10 +1484,13 @@ func (s *Server) getProjectDatasets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setProjectDatasets(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -1474,10 +1516,13 @@ func (s *Server) setProjectDatasets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -1500,7 +1545,10 @@ func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listDeployments(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	deployments, err := s.store.ListDeployments(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -1548,10 +1596,13 @@ func (s *Server) createDataset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getDataset(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 404)
 		return
 	}
@@ -1568,10 +1619,13 @@ func (s *Server) updateDataset(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, fmt.Errorf("DATASET_NFS_BASE_PATH is not configured"), 503)
 		return
 	}
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -1613,10 +1667,13 @@ func validateDatasetSubPath(p string) (string, error) {
 }
 
 func (s *Server) deleteDataset(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -1625,10 +1682,13 @@ func (s *Server) deleteDataset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) scanDataset(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -1644,7 +1704,10 @@ func (s *Server) scanDataset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	snaps, err := s.store.ListSnapshotsForDataset(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -1654,7 +1717,10 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listFileHistory(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	filePath := r.URL.Query().Get("file")
 	history, err := s.store.ListFileHistory(r.Context(), id, filePath, 500)
 	if err != nil {
@@ -1685,7 +1751,10 @@ func (s *Server) datasetDir(ctx context.Context, datasetID uuid.UUID, userID uui
 // datasetFileList lists files in a dataset directory.
 // GET /api/datasets/{id}/files?path=<subdir>
 func (s *Server) datasetFileList(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
 	if err != nil {
@@ -1733,7 +1802,10 @@ func (s *Server) datasetFileList(w http.ResponseWriter, r *http.Request) {
 // datasetFileDownload streams a single file from a dataset.
 // GET /api/datasets/{id}/files/download?path=<file>
 func (s *Server) datasetFileDownload(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
 	if err != nil {
@@ -1777,7 +1849,10 @@ func (s *Server) datasetFileDownload(w http.ResponseWriter, r *http.Request) {
 // datasetFileUpload saves an uploaded file into a dataset.
 // POST /api/datasets/{id}/files/upload?path=<subdir>
 func (s *Server) datasetFileUpload(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
 	if err != nil {
@@ -1825,7 +1900,10 @@ func (s *Server) datasetFileUpload(w http.ResponseWriter, r *http.Request) {
 // datasetFileDelete removes a file or directory from a dataset.
 // DELETE /api/datasets/{id}/files?path=<path>
 func (s *Server) datasetFileDelete(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
 	if err != nil {
@@ -1860,7 +1938,10 @@ func (s *Server) datasetFileDelete(w http.ResponseWriter, r *http.Request) {
 // datasetFileMkdir creates a directory inside a dataset.
 // POST /api/datasets/{id}/files/mkdir  body: {"path":"subdir/name"}
 func (s *Server) datasetFileMkdir(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
 	if err != nil {
@@ -1897,7 +1978,10 @@ func (s *Server) datasetFileMkdir(w http.ResponseWriter, r *http.Request) {
 // datasetFileMove moves/renames a file or directory inside a dataset.
 // POST /api/datasets/{id}/files/move  body: {"src":"old/path","dst":"new/path"}
 func (s *Server) datasetFileMove(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
 	if err != nil {
@@ -1944,7 +2028,10 @@ func (s *Server) datasetFileMove(w http.ResponseWriter, r *http.Request) {
 // datasetFileCopy copies a file inside a dataset.
 // POST /api/datasets/{id}/files/copy  body: {"src":"path/a","dst":"path/b"}
 func (s *Server) datasetFileCopy(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	base, err := s.datasetDir(r.Context(), id, user.ID, user.Role == store.UserRoleAdmin)
 	if err != nil {
@@ -2025,7 +2112,10 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	if err := s.store.DeleteNode(r.Context(), id); err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -2035,7 +2125,10 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 
 // getNodeMetrics returns the latest host-level metric sample for a node.
 func (s *Server) getNodeMetrics(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	m, err := s.store.GetLatestNodeMetricByNodeID(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -2069,7 +2162,10 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	var body struct{ Role string }
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, err, 400)
@@ -2207,7 +2303,10 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 // getProjectMetrics returns recent container metric samples for a project's running deployment.
 // Query param: limit (default 60, max 1440).
 func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	limit := 60
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := fmt.Sscanf(v, "%d", &limit); n == 1 && err == nil {
@@ -2256,7 +2355,10 @@ func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
 // getProjectTraffic returns the most recent HTTP requests observed by Traefik
 // for this project. Query param: limit (default 100, max 1000).
 func (s *Server) getProjectTraffic(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	limit := 100
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := fmt.Sscanf(v, "%d", &limit); n == 1 && err == nil {
@@ -2338,7 +2440,10 @@ func (s *Server) pollTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
-	taskID := mustParseUUID(chi.URLParam(r, "id"))
+	taskID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	var body struct {
 		Status   string `json:"status"`
 		Result   string `json:"result"`
@@ -2421,7 +2526,10 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appendDeploymentLog(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	var body struct {
 		Line string `json:"line"`
 	}
@@ -2786,10 +2894,13 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 // sees the same identity as it would through Traefik ForwardAuth.
 // Route: /api/projects/{id}/proxy/*
 func (s *Server) handleProjectProxy(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 404)
 		return
 	}
@@ -2947,7 +3058,10 @@ func (s *Server) handleListAuthorizationRequests(w http.ResponseWriter, r *http.
 }
 
 func (s *Server) handleApproveAuthorizationRequest(w http.ResponseWriter, r *http.Request) {
-	reqID := mustParseUUID(chi.URLParam(r, "id"))
+	reqID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	admin := auth.UserFromCtx(r.Context())
 	if err := s.store.ApproveAuthorizationRequest(r.Context(), reqID, admin.ID); err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
@@ -2957,7 +3071,10 @@ func (s *Server) handleApproveAuthorizationRequest(w http.ResponseWriter, r *htt
 }
 
 func (s *Server) handleRejectAuthorizationRequest(w http.ResponseWriter, r *http.Request) {
-	reqID := mustParseUUID(chi.URLParam(r, "id"))
+	reqID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	admin := auth.UserFromCtx(r.Context())
 	if err := s.store.RejectAuthorizationRequest(r.Context(), reqID, admin.ID); err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
@@ -2986,6 +3103,33 @@ func jsonErr(w http.ResponseWriter, err error, code int) {
 func mustParseUUID(s string) uuid.UUID {
 	id, _ := uuid.Parse(s)
 	return id
+}
+
+// parseProjectID validates a UUID from a path parameter and returns the
+// parsed UUID or an error suitable for a 400 response. Used to reject
+// non-UUID input (e.g. project name) before it silently coerces to the
+// zero UUID and confuses downstream lookups.
+func parseProjectID(s string) (uuid.UUID, error) {
+	if s == "" {
+		return uuid.Nil, fmt.Errorf("invalid id: empty")
+	}
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid id %q: %v", s, err)
+	}
+	return id, nil
+}
+
+// parsePathUUID extracts a UUID-typed chi path parameter, responding with
+// 400 if the value is not a valid UUID. Returns (uuid, true) on success or
+// (uuid.Nil, false) after writing the error response.
+func parsePathUUID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
+	id, err := parseProjectID(chi.URLParam(r, name))
+	if err != nil {
+		jsonErr(w, err, http.StatusBadRequest)
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 // Suppress unused import
@@ -3057,7 +3201,10 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	if err := s.store.DeleteSecret(r.Context(), id, user.ID); err != nil {
 		jsonErr(w, err, 500)
@@ -3067,7 +3214,10 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getProjectSecrets(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	projectID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	bindings, err := s.store.GetProjectSecretsWithMeta(r.Context(), projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -3100,7 +3250,10 @@ func (s *Server) getProjectSecrets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setProjectSecrets(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
+	projectID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	var body []struct {
 		SecretID      string `json:"secret_id"`
 		EnvVarName    string `json:"env_var_name"`
@@ -3162,10 +3315,13 @@ type workspaceEntry struct {
 // workspaceList lists files in a workspace directory.
 // GET /api/projects/{id}/workspace?path=<subdir>
 func (s *Server) workspaceList(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 404)
 		return
 	}
@@ -3211,10 +3367,13 @@ func (s *Server) workspaceList(w http.ResponseWriter, r *http.Request) {
 // workspaceDownload streams a single file to the client.
 // GET /api/projects/{id}/workspace/download?path=<file>
 func (s *Server) workspaceDownload(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 404)
 		return
 	}
@@ -3256,10 +3415,13 @@ func (s *Server) workspaceDownload(w http.ResponseWriter, r *http.Request) {
 // workspaceUpload saves an uploaded file into the workspace.
 // POST /api/projects/{id}/workspace/upload?path=<subdir>
 func (s *Server) workspaceUpload(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -3305,10 +3467,13 @@ func (s *Server) workspaceUpload(w http.ResponseWriter, r *http.Request) {
 // workspaceDelete removes a file or directory from the workspace.
 // DELETE /api/projects/{id}/workspace?path=<path>
 func (s *Server) workspaceDelete(w http.ResponseWriter, r *http.Request) {
-	projectID := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 403)
 		return
 	}
@@ -3515,10 +3680,13 @@ func (s *Server) repoBranches(w http.ResponseWriter, r *http.Request) {
 // for repo browser endpoints. Returns the project and true, or writes an
 // error response and returns false.
 func (s *Server) requireHostedProject(w http.ResponseWriter, r *http.Request) (*store.Project, bool) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
-	user := auth.UserFromCtx(r.Context())
-	ok, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return nil, false
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
 		jsonErr(w, nil, 404)
 		return nil, false
 	}

@@ -141,14 +141,18 @@ var secretsDeleteCmd = &cobra.Command{
 // ─── Project Secret Bindings ─────────────────────────────────────────────────
 
 var projectsSecretsCmd = &cobra.Command{
-	Use:   "secrets PROJECT_ID",
+	Use:   "secrets PROJECT-ID-OR-NAME",
 	Short: "List secrets bound to a project",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		items, err := cl.doArray("GET", "/api/projects/"+args[0]+"/secrets", nil)
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		items, err := cl.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
 		if err != nil {
 			return err
 		}
@@ -166,14 +170,17 @@ var projectsSecretsCmd = &cobra.Command{
 }
 
 var projectsBindSecretCmd = &cobra.Command{
-	Use:   "bind-secret PROJECT_ID",
+	Use:   "bind-secret PROJECT-ID-OR-NAME",
 	Short: "Attach a secret to a project",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		secretID, _ := cmd.Flags().GetString("secret-id")
 		envVar, _ := cmd.Flags().GetString("env-var")
 		useForGit, _ := cmd.Flags().GetBool("use-for-git")
@@ -252,14 +259,17 @@ var projectsBindSecretCmd = &cobra.Command{
 }
 
 var projectsUnbindSecretCmd = &cobra.Command{
-	Use:   "unbind-secret PROJECT_ID SECRET_ID",
+	Use:   "unbind-secret PROJECT-ID-OR-NAME SECRET_ID",
 	Short: "Detach a secret from a project",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		secretID := args[1]
 		current, err := cl.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
 		if err != nil {

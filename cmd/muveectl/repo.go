@@ -36,14 +36,17 @@ func init() {
 // ─── Tree ────────────────────────────────────────────────────────────────────
 
 var repoTreeCmd = &cobra.Command{
-	Use:   "tree PROJECT_ID",
+	Use:   "tree PROJECT-ID-OR-NAME",
 	Short: "List directory entries at a given ref and path",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		ref, _ := cmd.Flags().GetString("ref")
 		path, _ := cmd.Flags().GetString("path")
 
@@ -82,14 +85,17 @@ var repoTreeCmd = &cobra.Command{
 // ─── Log ─────────────────────────────────────────────────────────────────────
 
 var repoLogCmd = &cobra.Command{
-	Use:   "log PROJECT_ID",
+	Use:   "log PROJECT-ID-OR-NAME",
 	Short: "Show recent commits",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		ref, _ := cmd.Flags().GetString("ref")
 		limit, _ := cmd.Flags().GetInt("limit")
 
@@ -123,14 +129,17 @@ var repoLogCmd = &cobra.Command{
 // ─── Branches ────────────────────────────────────────────────────────────────
 
 var repoBranchesCmd = &cobra.Command{
-	Use:   "branches PROJECT_ID",
+	Use:   "branches PROJECT-ID-OR-NAME",
 	Short: "List branches in the hosted repository",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		result, err := cl.doRaw("GET", "/api/projects/"+projectID+"/repo/branches", nil)
 		if err != nil {
 			return err
@@ -158,14 +167,17 @@ var repoBranchesCmd = &cobra.Command{
 // ─── Show ────────────────────────────────────────────────────────────────────
 
 var repoShowCmd = &cobra.Command{
-	Use:   "show PROJECT_ID REF:PATH",
+	Use:   "show PROJECT-ID-OR-NAME REF:PATH",
 	Short: "Show file content (e.g. main:README.md)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		refPath := args[1]
 		// refPath format: ref:path, e.g. "main:README.md"
 		parts := strings.SplitN(refPath, ":", 2)

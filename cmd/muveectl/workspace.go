@@ -34,14 +34,17 @@ func init() {
 // ─── Ls ──────────────────────────────────────────────────────────────────────
 
 var workspaceLsCmd = &cobra.Command{
-	Use:   "ls PROJECT_ID [path]",
+	Use:   "ls PROJECT-ID-OR-NAME [path]",
 	Short: "List files in the workspace root (or a subdirectory)",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		path := ""
 		if len(args) > 1 {
 			path = args[1]
@@ -85,14 +88,17 @@ var workspaceLsCmd = &cobra.Command{
 // ─── Pull ────────────────────────────────────────────────────────────────────
 
 var workspacePullCmd = &cobra.Command{
-	Use:   "pull PROJECT_ID REMOTE_PATH [LOCAL_PATH]",
+	Use:   "pull PROJECT-ID-OR-NAME REMOTE_PATH [LOCAL_PATH]",
 	Short: "Download a file from the workspace",
 	Args:  cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		remotePath := args[1]
 		localPath := filepath.Base(remotePath)
 		if len(args) >= 3 {
@@ -132,14 +138,17 @@ var workspacePullCmd = &cobra.Command{
 // ─── Push ────────────────────────────────────────────────────────────────────
 
 var workspacePushCmd = &cobra.Command{
-	Use:   "push PROJECT_ID LOCAL_FILE",
+	Use:   "push PROJECT-ID-OR-NAME LOCAL_FILE",
 	Short: "Upload a local file to the workspace",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		localFile := args[1]
 		remotePath, _ := cmd.Flags().GetString("remote-path")
 
@@ -194,18 +203,20 @@ var workspacePushCmd = &cobra.Command{
 // ─── Rm ──────────────────────────────────────────────────────────────────────
 
 var workspaceRmCmd = &cobra.Command{
-	Use:   "rm PROJECT_ID REMOTE_PATH",
+	Use:   "rm PROJECT-ID-OR-NAME REMOTE_PATH",
 	Short: "Delete a file from the workspace",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		projectID := args[0]
+		projectID, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
 		remotePath := args[1]
 		url := "/api/projects/" + projectID + "/workspace?path=" + urlEscape(remotePath)
-		_, err := cl.do("DELETE", url, nil)
-		if err != nil {
+		if _, err := cl.do("DELETE", url, nil); err != nil {
 			return err
 		}
 		fmt.Printf("Deleted workspace:%s\n", remotePath)

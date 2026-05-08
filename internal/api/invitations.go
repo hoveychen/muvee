@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/hoveychen/muvee/internal/auth"
 )
 
@@ -41,7 +40,10 @@ func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleDeleteInvitation(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	if err := s.store.DeleteInvitation(r.Context(), id); err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
 		return
@@ -92,7 +94,10 @@ func (s *Server) handleCreateInvitationLink(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleDeleteInvitationLink(w http.ResponseWriter, r *http.Request) {
-	id := mustParseUUID(chi.URLParam(r, "id"))
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	if err := s.store.DeleteInvitationLink(r.Context(), id); err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
 		return

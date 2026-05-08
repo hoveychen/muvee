@@ -86,14 +86,18 @@ var datasetsCreateCmd = &cobra.Command{
 // ─── Get ─────────────────────────────────────────────────────────────────────
 
 var datasetsGetCmd = &cobra.Command{
-	Use:   "get ID",
+	Use:   "get ID-OR-NAME",
 	Short: "Get dataset details",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		result, err := cl.do("GET", "/api/datasets/"+args[0], nil)
+		id, err := resolveDatasetRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		result, err := cl.do("GET", "/api/datasets/"+id, nil)
 		if err != nil {
 			return err
 		}
@@ -111,15 +115,18 @@ var datasetsGetCmd = &cobra.Command{
 // ─── Scan ────────────────────────────────────────────────────────────────────
 
 var datasetsScanCmd = &cobra.Command{
-	Use:   "scan ID",
+	Use:   "scan ID-OR-NAME",
 	Short: "Trigger an NFS scan",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		_, err := cl.do("POST", "/api/datasets/"+args[0]+"/scan", nil)
+		id, err := resolveDatasetRef(cl, args[0])
 		if err != nil {
+			return err
+		}
+		if _, err := cl.do("POST", "/api/datasets/"+id+"/scan", nil); err != nil {
 			return err
 		}
 		fmt.Println("Scan triggered for dataset", args[0])
@@ -130,15 +137,18 @@ var datasetsScanCmd = &cobra.Command{
 // ─── Delete ──────────────────────────────────────────────────────────────────
 
 var datasetsDeleteCmd = &cobra.Command{
-	Use:   "delete ID",
+	Use:   "delete ID-OR-NAME",
 	Short: "Delete a dataset",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
 			return err
 		}
-		_, err := cl.do("DELETE", "/api/datasets/"+args[0], nil)
+		id, err := resolveDatasetRef(cl, args[0])
 		if err != nil {
+			return err
+		}
+		if _, err := cl.do("DELETE", "/api/datasets/"+id, nil); err != nil {
 			return err
 		}
 		fmt.Println("Deleted dataset", args[0])
