@@ -492,3 +492,82 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 		t.Errorf("oauth-bypass router should have NO middlewares (bypasses ForwardAuth), got %v", dfRouter.Middlewares)
 	}
 }
+
+// ─── compose hosted git ─────────────────────────────────────────────────────
+
+func TestValidateProject_Compose_HostedAcceptedAndClearsGitURL(t *testing.T) {
+	p := store.Project{
+		Name:          "stack",
+		ProjectType:   store.ProjectTypeCompose,
+		GitSource:     store.GitSourceHosted,
+		GitURL:        "https://example.com/should-be-ignored.git",
+		ExposeService: "web",
+		ExposePort:    8080,
+	}
+	if err := validateProject(&p); err != nil {
+		t.Fatalf("hosted compose should validate, got %v", err)
+	}
+	if p.GitSource != store.GitSourceHosted {
+		t.Errorf("expected git_source=hosted preserved, got %q", p.GitSource)
+	}
+	if p.GitURL != "" {
+		t.Errorf("expected git_url cleared for hosted compose, got %q", p.GitURL)
+	}
+	if p.GitBranch != "main" {
+		t.Errorf("expected git_branch defaulted to main, got %q", p.GitBranch)
+	}
+	if p.ComposeFilePath != "docker-compose.yml" {
+		t.Errorf("expected compose_file_path defaulted, got %q", p.ComposeFilePath)
+	}
+}
+
+func TestValidateProject_Compose_ExternalStillRequiresGitURL(t *testing.T) {
+	p := store.Project{
+		Name:          "stack",
+		ProjectType:   store.ProjectTypeCompose,
+		GitSource:     store.GitSourceExternal,
+		ExposeService: "web",
+		ExposePort:    8080,
+	}
+	err := validateProject(&p)
+	if err == nil {
+		t.Fatal("expected error for external compose without git_url")
+	}
+	if !strings.Contains(err.Error(), "git_url") {
+		t.Errorf("expected git_url error, got %v", err)
+	}
+}
+
+func TestValidateProject_Compose_HostedStillRequiresExposeService(t *testing.T) {
+	p := store.Project{
+		Name:        "stack",
+		ProjectType: store.ProjectTypeCompose,
+		GitSource:   store.GitSourceHosted,
+		ExposePort:  8080,
+	}
+	err := validateProject(&p)
+	if err == nil {
+		t.Fatal("expected error for hosted compose without expose_service")
+	}
+	if !strings.Contains(err.Error(), "expose_service") {
+		t.Errorf("expected expose_service error, got %v", err)
+	}
+}
+
+func TestValidateProject_Compose_RejectsBogusGitSource(t *testing.T) {
+	p := store.Project{
+		Name:          "stack",
+		ProjectType:   store.ProjectTypeCompose,
+		GitSource:     "bogus",
+		GitURL:        "https://example.com/x.git",
+		ExposeService: "web",
+		ExposePort:    8080,
+	}
+	err := validateProject(&p)
+	if err == nil {
+		t.Fatal("expected error for invalid git_source on compose")
+	}
+	if !strings.Contains(err.Error(), "git_source") {
+		t.Errorf("expected git_source error, got %v", err)
+	}
+}

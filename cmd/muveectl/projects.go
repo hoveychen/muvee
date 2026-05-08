@@ -289,11 +289,8 @@ var projectsCreateCmd = &cobra.Command{
 			}
 			p["project_type"] = "image"
 		} else if composeMode {
-			if !cmd.Flags().Changed("git-url") {
-				return fmt.Errorf("--git-url is required for compose projects")
-			}
-			if isHosted == "hosted" {
-				return fmt.Errorf("compose projects must use an external git repository")
+			if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
+				return fmt.Errorf("--git-url is required for compose projects (or use --git-source hosted)")
 			}
 			if !cmd.Flags().Changed("expose-service") {
 				return fmt.Errorf("--expose-service is required for compose projects")

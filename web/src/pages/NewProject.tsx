@@ -362,12 +362,12 @@ export default function NewProject() {
       if (projectType === 'domain_only') {
         payload = { name: form.name, domain_prefix: form.domain_prefix, project_type: 'domain_only' }
       } else if (projectType === 'compose') {
+        const composeHosted = form.git_source === 'hosted'
         payload = {
           name: form.name,
           domain_prefix: form.domain_prefix,
-          git_url: form.git_url,
           git_branch: form.git_branch,
-          git_source: 'external',
+          git_source: composeHosted ? 'hosted' : 'external',
           compose_file_path: form.compose_file_path || 'docker-compose.yml',
           expose_service: form.expose_service,
           expose_port: form.expose_port,
@@ -375,6 +375,7 @@ export default function NewProject() {
           icon: form.icon,
           tags: form.tags,
           project_type: 'compose',
+          ...(composeHosted ? {} : { git_url: form.git_url }),
           ...fixedPortPayload(),
         }
       } else if (projectType === 'image') {
@@ -404,8 +405,10 @@ export default function NewProject() {
         navigate(`/projects/${project.id}`)
         return
       }
-      // compose projects also skip credential setup for now and navigate.
-      if (projectType === 'compose') {
+      // compose projects skip credential setup for now. Hosted compose
+      // falls through to the shared hosted-created screen below; external
+      // compose just navigates to the project page.
+      if (projectType === 'compose' && project.git_source !== 'hosted') {
         navigate(`/projects/${project.id}`)
         return
       }
@@ -673,8 +676,8 @@ export default function NewProject() {
             )}
           </div>
 
-          {/* Git Source selector — deployment only */}
-          {projectType === 'deployment' && (
+          {/* Git Source selector — deployment + compose */}
+          {(projectType === 'deployment' || projectType === 'compose') && (
           <div>
             <label className="form-label">{t('newProject.fields.gitSource').toUpperCase()}</label>
             <div className="flex gap-2">
@@ -720,7 +723,7 @@ export default function NewProject() {
           </div>
 
           {/* Git URL — for deployment+external and compose */}
-          {((projectType === 'deployment' && !isHosted) || projectType === 'compose') && (
+          {((projectType === 'deployment' || projectType === 'compose') && !isHosted) && (
             <div>
               {fieldLabel(t('newProject.fields.gitUrl'))}
               <input
@@ -744,7 +747,7 @@ export default function NewProject() {
           )}
 
           {/* Branch — for deployment+external and compose */}
-          {((projectType === 'deployment' && !isHosted) || projectType === 'compose') && (
+          {((projectType === 'deployment' || projectType === 'compose') && !isHosted) && (
             <div>
               {fieldLabel(t('newProject.fields.gitBranch'), false)}
               <input

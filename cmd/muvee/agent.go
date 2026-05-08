@@ -267,7 +267,7 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		var hostPort int
 		var err error
 		if str(task.Payload, "mode") == "compose" {
-			hostPort, err = runComposeDeploy(ctx, task, volumeNFSBasePath, func(line string) {
+			hostPort, err = runComposeDeploy(ctx, task, volumeNFSBasePath, baseURL, func(line string) {
 				appendLog(ctx, baseURL, secret, task.DeploymentID, line)
 			})
 		} else {
@@ -376,7 +376,7 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }
 
-func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath string, logFn func(string)) (int, error) {
+func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath, controlPlaneURL string, logFn func(string)) (int, error) {
 	p := task.Payload
 	envVars := make(map[string]string)
 	if evRaw, ok := p["env_vars"].(map[string]interface{}); ok {
@@ -386,11 +386,17 @@ func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath s
 			}
 		}
 	}
+	// Hosted repos use a relative path (e.g. "/git/<id>.git");
+	// prepend the control-plane URL so the deployer can clone it.
+	composeGitURL := str(p, "git_url")
+	if strings.HasPrefix(composeGitURL, "/") {
+		composeGitURL = strings.TrimRight(controlPlaneURL, "/") + composeGitURL
+	}
 	cfg := deployer.ComposeConfig{
 		DeploymentID:      str(p, "deployment_id"),
 		ProjectID:         str(p, "project_id"),
 		DomainPrefix:      str(p, "domain_prefix"),
-		GitURL:            str(p, "git_url"),
+		GitURL:            composeGitURL,
 		GitBranch:         str(p, "git_branch"),
 		GitSSHKey:         str(p, "git_ssh_key"),
 		GitUsername:       str(p, "git_username"),

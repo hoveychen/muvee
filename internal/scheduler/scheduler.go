@@ -394,7 +394,7 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 // pin on the project; subsequent deploys must run on the same node so docker
 // named volumes survive across redeploys.
 func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
-	if project.GitURL == "" {
+	if project.GitSource != store.GitSourceHosted && project.GitURL == "" {
 		return fmt.Errorf("compose project has no git_url")
 	}
 	if project.ExposeService == "" || project.ExposePort == 0 {
@@ -435,13 +435,26 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 		}
 	}
 
+	// For hosted repos, use a relative path; the agent prepends its CONTROL_PLANE_URL.
+	gitURL := project.GitURL
+	gitBranch := project.GitBranch
+	if project.GitSource == store.GitSourceHosted {
+		gitURL = fmt.Sprintf("/git/%s.git", project.ID)
+		gitUsername = "agent"
+		gitToken = s.agentSecret
+		gitSSHKey = ""
+		if gitBranch == "" {
+			gitBranch = "main"
+		}
+	}
+
 	payload := map[string]interface{}{
 		"mode":              "compose",
 		"deployment_id":     deployment.ID.String(),
 		"project_id":        project.ID.String(),
 		"domain_prefix":     project.DomainPrefix,
-		"git_url":           project.GitURL,
-		"git_branch":        project.GitBranch,
+		"git_url":           gitURL,
+		"git_branch":        gitBranch,
 		"compose_file_path": project.ComposeFilePath,
 		"expose_service":    project.ExposeService,
 		"expose_port":       project.ExposePort,

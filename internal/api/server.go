@@ -1043,15 +1043,24 @@ func validateProject(p *store.Project) error {
 		}
 		return nil
 	case store.ProjectTypeCompose:
-		if p.GitURL == "" {
+		if p.GitSource == "" {
+			p.GitSource = store.GitSourceExternal
+		}
+		if p.GitSource != store.GitSourceExternal && p.GitSource != store.GitSourceHosted {
+			return fmt.Errorf("git_source must be 'external' or 'hosted'")
+		}
+		// External compose still requires a git_url; hosted compose creates a
+		// bare repo on the server and the user pushes to it later, so git_url
+		// is left empty at creation time.
+		if p.GitSource == store.GitSourceExternal && p.GitURL == "" {
 			return fmt.Errorf("git_url is required for compose projects")
 		}
-		// Hosted git is not supported for compose — the agent clones an
-		// external repo on the pinned deploy node before running compose.
 		if p.GitSource == store.GitSourceHosted {
-			return fmt.Errorf("compose projects must use an external git repository")
+			p.GitURL = ""
 		}
-		p.GitSource = store.GitSourceExternal
+		if strings.TrimSpace(p.GitBranch) == "" {
+			p.GitBranch = "main"
+		}
 		// Build-related fields don't apply: compose images come pre-built.
 		p.DockerfilePath = ""
 		p.MemoryLimit = ""
@@ -1219,7 +1228,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For hosted repos: initialize a bare git repo and set the sentinel git_url.
-	if p.ProjectType == store.ProjectTypeDeployment && p.GitSource == store.GitSourceHosted {
+	if (p.ProjectType == store.ProjectTypeDeployment || p.ProjectType == store.ProjectTypeCompose) && p.GitSource == store.GitSourceHosted {
 		if s.gitRepoBasePath == "" {
 			jsonErr(w, fmt.Errorf("hosted git repositories are not enabled on this server (GIT_REPO_BASE_PATH not set)"), 400)
 			return
@@ -1233,7 +1242,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if created.ProjectType == store.ProjectTypeDeployment && created.GitSource == store.GitSourceHosted {
+	if (created.ProjectType == store.ProjectTypeDeployment || created.ProjectType == store.ProjectTypeCompose) && created.GitSource == store.GitSourceHosted {
 		repoPath := gitrepo.RepoPath(s.gitRepoBasePath, created.ID)
 		if err := gitrepo.InitBareRepo(repoPath); err != nil {
 			// Clean up the project if repo init fails.
