@@ -28,6 +28,18 @@ type User struct {
 	AvatarOverridden bool `db:"avatar_overridden" json:"avatar_overridden"`
 }
 
+// PlatformMember records a user's authorization to use the muvee admin plane
+// (the "muvee platform" itself, as distinct from any project deployed on it).
+// Subdomain auth users land in `users` for identity but not here, unless they
+// also have a platform-side relationship (admin email, project member/owner,
+// dataset member/owner).
+type PlatformMember struct {
+	UserID     uuid.UUID `db:"user_id"    json:"user_id"`
+	Role       UserRole  `db:"role"       json:"role"`
+	Authorized bool      `db:"authorized" json:"authorized"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+}
+
 const (
 	GitSourceExternal = "external"
 	GitSourceHosted   = "hosted"

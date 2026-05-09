@@ -33,7 +33,10 @@ type Claims struct {
 
 type contextKey string
 
-const CtxUserKey contextKey = "user"
+const (
+	CtxUserKey           contextKey = "user"
+	CtxPlatformMemberKey contextKey = "platform_member"
+)
 
 // ProviderInfo is returned by ListProviders for the frontend to render login buttons.
 type ProviderInfo struct {
@@ -167,7 +170,7 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 		return nil, "", fmt.Errorf("user info: %w", err)
 	}
 
-	user, err := s.EnsureUser(ctx, providerName, email, name, avatarURL, inviteToken)
+	user, _, err := s.EnsurePlatformMember(ctx, providerName, email, name, avatarURL, inviteToken)
 	if err != nil {
 		return nil, "", err
 	}
@@ -179,23 +182,45 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 	return user, jwtToken, nil
 }
 
-// EnsureUser applies the post-OAuth identity-management rules to an
-// already-verified (email, name, avatarURL) triple: domain restrictions for
-// non-org-scoped providers, invite-mode gating, request-mode authorization
-// defaults, user upsert, admin auto-promotion, and one-time invitation link
-// consumption. Returns ErrNotInvited when access_mode is "invite" and the
-// email is neither white-listed, link-bearing, nor an existing account.
+// EnsureIdentity upserts the user row for an already-verified
+// (email, name, avatarURL) triple. It does NOT enforce platform-side policy:
+// no domain check, no invite gate, no admin promotion, no platform_members
+// row. Callers that only need identity (e.g. the subdomain ForwardAuth
+// handler in cmd/muvee/authservice — those users may never become platform
+// members) should use this path.
 //
-// Callers that already performed their own OAuth code exchange (e.g. the
-// standalone authservice running ForwardAuth on subdomains) pass the verified
-// claims in directly. providerName is consulted only to skip the domain check
-// for org-scoped providers; it falls back to a hard-coded list when the
-// provider is not registered locally so authservice-only providers still get
-// the right treatment.
-func (s *Service) EnsureUser(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (*store.User, error) {
+// Subdomain users still need to exist in `users` so per-project access
+// checks like IsProjectAccessAllowedByEmail can resolve them.
+func (s *Service) EnsureIdentity(ctx context.Context, email, name, avatarURL string) (*store.User, error) {
+	// authorizedOnInsert is a legacy mirror that survives migration 033; the
+	// real authorization signal lives in platform_members and is set by
+	// EnsurePlatformMember. Pass TRUE so existing UpsertUser SQL keeps
+	// satisfying the NOT NULL constraint without flagging anything new.
+	user, _, err := s.store.UpsertUser(ctx, email, name, avatarURL, true)
+	if err != nil {
+		return nil, fmt.Errorf("upsert user: %w", err)
+	}
+	return user, nil
+}
+
+// EnsurePlatformMember runs the full set of post-OAuth platform-side policy
+// rules on an already-verified (email, name, avatarURL) triple: domain
+// restrictions for non-org-scoped providers, invite-mode gating, request-mode
+// authorization defaults, identity upsert, admin auto-promotion, and one-time
+// invitation link consumption. The user is also upserted into
+// platform_members so /admin/users sees them and the requireAuthorized
+// middleware can recognise them. Returns ErrNotInvited when access_mode is
+// "invite" and the email is neither white-listed, link-bearing, nor an
+// existing account.
+//
+// providerName is consulted only to skip the domain check for org-scoped
+// providers; it falls back to a hard-coded list when the provider is not
+// registered locally so authservice-only providers still get the right
+// treatment.
+func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (*store.User, *store.PlatformMember, error) {
 	if !isOrgScopedProvider(s.providers, providerName) {
 		if err := s.checkDomain(email); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -204,73 +229,114 @@ func (s *Service) EnsureUser(ctx context.Context, providerName, email, name, ava
 
 	// Pre-flight checks for invite mode: figure out whether this email is
 	// invited (white-list), holds a valid one-time link, or — for already
-	// existing accounts — gets to keep signing in regardless. New accounts
-	// matching none of these are rejected without ever being created.
+	// existing platform members — gets to keep signing in regardless. New
+	// platform members matching none of these are rejected without ever
+	// being created.
 	emailInvited := false
 	var consumeLink *store.InvitationLink
 	if mode == store.AccessModeInvite && !isAdmin {
 		invited, err := s.store.IsEmailInvited(ctx, email)
 		if err != nil {
-			return nil, fmt.Errorf("check invitation: %w", err)
+			return nil, nil, fmt.Errorf("check invitation: %w", err)
 		}
 		emailInvited = invited
 		if !emailInvited && inviteToken != "" {
 			link, err := s.store.GetValidInvitationLinkByHash(ctx, hashInviteToken(inviteToken), time.Now())
 			if err != nil {
-				return nil, fmt.Errorf("check invite link: %w", err)
+				return nil, nil, fmt.Errorf("check invite link: %w", err)
 			}
 			consumeLink = link
 		}
 		if !emailInvited && consumeLink == nil {
+			// Existing platform members can keep signing in even after the
+			// invite list shifts; identity-only rows (came in through
+			// subdomain auth) do NOT count — they were never granted
+			// platform access in the first place.
 			existing, err := s.store.GetUserByEmail(ctx, email)
 			if err != nil {
-				return nil, fmt.Errorf("lookup user: %w", err)
+				return nil, nil, fmt.Errorf("lookup user: %w", err)
 			}
 			if existing == nil {
-				return nil, ErrNotInvited
+				return nil, nil, ErrNotInvited
+			}
+			pm, err := s.store.GetPlatformMember(ctx, existing.ID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("lookup platform member: %w", err)
+			}
+			if pm == nil {
+				return nil, nil, ErrNotInvited
 			}
 		}
 	}
 
-	// In request mode, brand-new non-admin accounts default to authorized=FALSE
-	// so they have to go through the request flow. Other modes default to TRUE
-	// for new accounts (invite mode reaches here only when invited or
-	// link-consumed; open mode is unrestricted). UpsertUser only applies this
-	// on INSERT — existing rows preserve their flag.
+	// In request mode, brand-new non-admin platform members default to
+	// authorized=FALSE so they have to go through the request flow.
+	// UpsertPlatformMember only applies this on INSERT — existing rows
+	// preserve their flag.
 	authorizedOnInsert := true
 	if mode == store.AccessModeRequest && !isAdmin {
 		authorizedOnInsert = false
 	}
 
-	user, _, err := s.store.UpsertUser(ctx, email, name, avatarURL, authorizedOnInsert)
+	user, err := s.EnsureIdentity(ctx, email, name, avatarURL)
 	if err != nil {
-		return nil, fmt.Errorf("upsert user: %w", err)
+		return nil, nil, err
 	}
 
-	// Auto-promote users listed in ADMIN_EMAILS on every login.
-	if isAdmin && user.Role != store.UserRoleAdmin {
-		if err := s.store.SetUserRole(ctx, user.ID, store.UserRoleAdmin); err != nil {
-			return nil, fmt.Errorf("promote admin: %w", err)
-		}
-		user.Role = store.UserRoleAdmin
+	roleOnInsert := store.UserRoleMember
+	if isAdmin {
+		roleOnInsert = store.UserRoleAdmin
+	}
+	pm, _, err := s.store.UpsertPlatformMember(ctx, user.ID, roleOnInsert, authorizedOnInsert)
+	if err != nil {
+		return nil, nil, fmt.Errorf("upsert platform member: %w", err)
 	}
 
-	// In invite mode, an existing-but-unauthorized user being newly invited (or
-	// arriving with a valid link) should be flipped to authorized on this login.
-	if mode == store.AccessModeInvite && !user.Authorized && (emailInvited || consumeLink != nil) {
-		if err := s.store.SetUserAuthorized(ctx, user.ID, true); err != nil {
-			return nil, fmt.Errorf("authorize user: %w", err)
+	// Auto-promote ADMIN_EMAILS on every login (handles existing rows that
+	// were created as 'member' before being added to ADMIN_EMAILS).
+	if isAdmin && pm.Role != store.UserRoleAdmin {
+		if err := s.store.SetPlatformMemberRole(ctx, user.ID, store.UserRoleAdmin); err != nil {
+			return nil, nil, fmt.Errorf("promote admin: %w", err)
 		}
-		user.Authorized = true
+		pm.Role = store.UserRoleAdmin
+	}
+
+	// In invite mode, an existing-but-unauthorized platform member being
+	// newly invited (or arriving with a valid link) should be flipped to
+	// authorized on this login.
+	if mode == store.AccessModeInvite && !pm.Authorized && (emailInvited || consumeLink != nil) {
+		if err := s.store.SetPlatformMemberAuthorized(ctx, user.ID, true); err != nil {
+			return nil, nil, fmt.Errorf("authorize platform member: %w", err)
+		}
+		pm.Authorized = true
 	}
 
 	if consumeLink != nil {
 		// Best-effort: a concurrent login may have already consumed the link.
-		// We've already promoted the user above, so swallow the error.
+		// We've already promoted the platform member above, so swallow the
+		// error.
 		_ = s.store.ConsumeInvitationLink(ctx, consumeLink.ID, user.ID)
 	}
 
-	return user, nil
+	// Mirror platform_member values back onto the legacy user.Role /
+	// user.Authorized fields so JSON responses and JWT claims that still
+	// read from the User struct stay correct during the rollout window.
+	// Migration 034 will drop these columns; this mirroring goes away then.
+	user.Role = pm.Role
+	user.Authorized = pm.Authorized
+
+	return user, pm, nil
+}
+
+// EnsureUser is preserved as a thin wrapper for backwards compatibility; it
+// runs the full platform path and returns only the user. New code should
+// call EnsurePlatformMember (for platform-side login flows) or
+// EnsureIdentity (for subdomain ForwardAuth flows) directly.
+//
+// Deprecated: use EnsurePlatformMember or EnsureIdentity instead.
+func (s *Service) EnsureUser(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (*store.User, error) {
+	user, _, err := s.EnsurePlatformMember(ctx, providerName, email, name, avatarURL, inviteToken)
+	return user, err
 }
 
 // isOrgScopedProvider reports whether the named provider inherently restricts
@@ -461,15 +527,32 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), CtxUserKey, user)
+		// Load the platform_members row alongside the user so handlers can
+		// answer "is this caller a platform admin / authorized to write?"
+		// without an extra round-trip. Identity-only users (came in through
+		// subdomain auth) get nil here; PlatformRoleFromCtx and
+		// PlatformAuthorizedFromCtx then return their zero values.
+		if pm, err := s.store.GetPlatformMember(r.Context(), user.ID); err == nil && pm != nil {
+			ctx = context.WithValue(ctx, CtxPlatformMemberKey, pm)
+			// Mirror onto the legacy User fields so JSON responses and JWT
+			// claims still see correct values during the rollout window.
+			user.Role = pm.Role
+			user.Authorized = pm.Authorized
+		} else {
+			// No platform_member row → strip any stale legacy values so
+			// downstream code that mistakenly reads user.Role / user.Authorized
+			// can't accidentally let an identity-only user past a platform gate.
+			user.Role = store.UserRoleMember
+			user.Authorized = false
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// AdminOnly requires the Admin role.
+// AdminOnly requires the platform admin role.
 func AdminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := UserFromCtx(r.Context())
-		if user == nil || user.Role != store.UserRoleAdmin {
+		if PlatformRoleFromCtx(r.Context()) != store.UserRoleAdmin {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -480,6 +563,39 @@ func AdminOnly(next http.Handler) http.Handler {
 func UserFromCtx(ctx context.Context) *store.User {
 	u, _ := ctx.Value(CtxUserKey).(*store.User)
 	return u
+}
+
+// PlatformMemberFromCtx returns the platform_members row for the request's
+// authenticated user, or nil for identity-only users (came in through
+// subdomain auth and never crossed over to the muvee admin plane).
+func PlatformMemberFromCtx(ctx context.Context) *store.PlatformMember {
+	pm, _ := ctx.Value(CtxPlatformMemberKey).(*store.PlatformMember)
+	return pm
+}
+
+// PlatformRoleFromCtx returns the caller's platform role, or "" when they
+// are not a platform member.
+func PlatformRoleFromCtx(ctx context.Context) store.UserRole {
+	pm := PlatformMemberFromCtx(ctx)
+	if pm == nil {
+		return ""
+	}
+	return pm.Role
+}
+
+// PlatformAuthorizedFromCtx reports whether the caller is a platform member
+// authorized to perform write operations (admins are always authorized;
+// non-members are never authorized regardless of any legacy users.authorized
+// value).
+func PlatformAuthorizedFromCtx(ctx context.Context) bool {
+	pm := PlatformMemberFromCtx(ctx)
+	if pm == nil {
+		return false
+	}
+	if pm.Role == store.UserRoleAdmin {
+		return true
+	}
+	return pm.Authorized
 }
 
 func extractToken(r *http.Request) string {

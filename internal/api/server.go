@@ -228,6 +228,49 @@ func (s *Server) handleInternalAuthUpsert(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// handleInternalAuthIdentityUpsert is the lightweight counterpart to
+// handleInternalAuthUpsert: it performs an identity-only upsert (writes the
+// users row, skips ALLOWED_DOMAINS, invite-mode gate, and ADMIN_EMAILS
+// promotion) so subdomain ForwardAuth callbacks can record their users
+// without inheriting platform-side policy. ALLOWED_DOMAINS is a platform
+// admission rule and invite mode is a platform invite gate; subdomain
+// projects have their own AuthAllowedDomains and ACL list and should not be
+// blocked by either.
+//
+// Authenticated via X-Muvee-Internal-Key. Errors map: 401 (key), 400
+// (payload), 500 otherwise. Unlike upsert, this endpoint never returns 403 /
+// not_invited because the invite gate does not apply.
+func (s *Server) handleInternalAuthIdentityUpsert(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		Email     string `json:"email"`
+		Name      string `json:"name"`
+		AvatarURL string `json:"avatar_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, fmt.Errorf("invalid json: %w", err), http.StatusBadRequest)
+		return
+	}
+	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
+	if body.Email == "" {
+		jsonErr(w, fmt.Errorf("email is required"), http.StatusBadRequest)
+		return
+	}
+	user, err := s.auth.EnsureIdentity(r.Context(), body.Email, body.Name, body.AvatarURL)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"user_id": user.ID.String(),
+	})
+}
+
 // agentSecretMiddleware rejects requests that do not carry the correct X-Agent-Secret header.
 // When no secret is configured the middleware passes all requests through (dev/test mode).
 func (s *Server) agentSecretMiddleware(next http.Handler) http.Handler {
@@ -276,9 +319,15 @@ func (s *Server) Router() http.Handler {
 	// Internal access-check endpoint called by muvee-authservice during ForwardAuth.
 	// Authenticated via X-Muvee-Internal-Key (derived from JWT_SECRET).
 	r.Get("/api/internal/access/check", s.handleInternalAccessCheck)
-	// Internal user-upsert endpoint called by muvee-authservice after a
+	// Internal identity-only user upsert called by muvee-authservice after a
 	// per-subdomain OAuth callback completes, so server's users table stays in
-	// sync with users that authenticated only on subdomains.
+	// sync with users that authenticated only on subdomains. Identity-only
+	// means no domain check, no invite gate, no platform_members row — those
+	// are platform-side concerns that subdomain users should not inherit.
+	r.Post("/api/internal/auth/identity-upsert", s.handleInternalAuthIdentityUpsert)
+	// Legacy upsert endpoint kept for rolling-upgrade compatibility with
+	// older authservice binaries that still call this path. New code should
+	// not depend on it; remove once everything is on identity-upsert.
 	r.Post("/api/internal/auth/upsert", s.handleInternalAuthUpsert)
 
 	// Public community feed – no auth required
@@ -2316,15 +2365,39 @@ func (s *Server) getNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// listUsers returns the muvee admin plane's user list. By default it shows
+// only platform members (?scope=platform); pass ?scope=all to include
+// identity-only users (those that signed in only through subdomain
+// ForwardAuth). The User.Role / User.Authorized fields are filled from
+// platform_members when present, or zeroed for identity-only users.
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := s.store.ListUsers(r.Context())
+	scope := r.URL.Query().Get("scope")
+	if scope != "all" {
+		scope = "platform"
+	}
+	rows, err := s.store.ListPlatformMemberUsers(r.Context(), scope)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
+	users := make([]*store.User, 0, len(rows))
+	for _, pu := range rows {
+		u := pu.User
+		if pu.PlatformMember != nil {
+			u.Role = pu.PlatformMember.Role
+			u.Authorized = pu.PlatformMember.Authorized
+		} else {
+			u.Role = store.UserRoleMember
+			u.Authorized = false
+		}
+		users = append(users, &u)
+	}
 	jsonOK(w, users)
 }
 
+// setUserRole updates a user's platform role. The user is upserted into
+// platform_members so calling setUserRole on an identity-only account
+// effectively promotes them to a platform member.
 func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
@@ -2335,7 +2408,16 @@ func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
-	if err := s.store.SetUserRole(r.Context(), id, store.UserRole(body.Role)); err != nil {
+	role := store.UserRole(body.Role)
+	if role != store.UserRoleAdmin && role != store.UserRoleMember {
+		jsonErr(w, fmt.Errorf("role must be 'admin' or 'member'"), 400)
+		return
+	}
+	if _, _, err := s.store.UpsertPlatformMember(r.Context(), id, role, true); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if err := s.store.SetPlatformMemberRole(r.Context(), id, role); err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
@@ -3142,25 +3224,33 @@ func (s *Server) accessMode(ctx context.Context) store.AccessMode {
 	return store.AccessModeOpen
 }
 
-// isUserAuthorized checks whether a user is authorized to perform write operations.
-// Admins always pass. Otherwise the access_mode determines the gate:
-//   - open: everyone authorized.
-//   - invite / request: gated on user.authorized.
-func (s *Server) isUserAuthorized(ctx context.Context, user *store.User) bool {
-	if user.Role == store.UserRoleAdmin {
+// isUserAuthorized checks whether the request's caller is authorized to
+// perform write operations on the muvee platform. Platform admins always
+// pass. Otherwise the access_mode determines the gate:
+//   - open: every platform member is authorized.
+//   - invite / request: gated on platform_members.authorized.
+//
+// Identity-only callers (came in through subdomain auth and never crossed
+// over to the muvee admin plane) are never authorized.
+func (s *Server) isUserAuthorized(ctx context.Context) bool {
+	role := auth.PlatformRoleFromCtx(ctx)
+	if role == store.UserRoleAdmin {
 		return true
+	}
+	if role == "" {
+		// Identity-only — not a platform member, no platform writes.
+		return false
 	}
 	if s.accessMode(ctx) == store.AccessModeOpen {
 		return true
 	}
-	return user.Authorized
+	return auth.PlatformAuthorizedFromCtx(ctx)
 }
 
 // requireAuthorized wraps a handler and returns 403 if the user is not authorized.
 func (s *Server) requireAuthorized(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user := auth.UserFromCtx(r.Context())
-		if !s.isUserAuthorized(r.Context(), user) {
+		if !s.isUserAuthorized(r.Context()) {
 			jsonErr(w, fmt.Errorf("publishing authorization required"), http.StatusForbidden)
 			return
 		}
@@ -3171,6 +3261,7 @@ func (s *Server) requireAuthorized(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleAuthorizationStatus(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
 	mode := s.accessMode(r.Context())
+	platformRole := auth.PlatformRoleFromCtx(r.Context())
 
 	type statusResponse struct {
 		AccessMode store.AccessMode            `json:"access_mode"`
@@ -3180,11 +3271,13 @@ func (s *Server) handleAuthorizationStatus(w http.ResponseWriter, r *http.Reques
 
 	resp := statusResponse{
 		AccessMode: mode,
-		Authorized: user.Role == store.UserRoleAdmin || mode == store.AccessModeOpen || user.Authorized,
+		Authorized: s.isUserAuthorized(r.Context()),
 	}
 
-	// Only the request flow has a per-user pending record to surface.
-	if mode == store.AccessModeRequest && user.Role != store.UserRoleAdmin {
+	// Only the request flow has a per-user pending record to surface, and
+	// only for non-admin platform members (admins are unconditionally
+	// authorized).
+	if mode == store.AccessModeRequest && platformRole != store.UserRoleAdmin {
 		req, _ := s.store.GetAuthorizationRequestByUser(r.Context(), user.ID)
 		resp.Request = req
 	}
@@ -3193,7 +3286,7 @@ func (s *Server) handleAuthorizationStatus(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleCreateAuthorizationRequest(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
-	if user.Role == store.UserRoleAdmin {
+	if auth.PlatformRoleFromCtx(r.Context()) == store.UserRoleAdmin {
 		jsonErr(w, fmt.Errorf("admins are always authorized"), http.StatusBadRequest)
 		return
 	}
@@ -3201,7 +3294,7 @@ func (s *Server) handleCreateAuthorizationRequest(w http.ResponseWriter, r *http
 		jsonErr(w, fmt.Errorf("requesting access is only available in request mode"), http.StatusBadRequest)
 		return
 	}
-	if user.Authorized {
+	if auth.PlatformAuthorizedFromCtx(r.Context()) {
 		jsonErr(w, fmt.Errorf("already authorized"), http.StatusBadRequest)
 		return
 	}

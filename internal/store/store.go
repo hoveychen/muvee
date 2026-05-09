@@ -140,6 +140,129 @@ func (s *Store) UpdateUserProfile(ctx context.Context, userID uuid.UUID, name *s
 	return &u, nil
 }
 
+// ─── Platform Members ────────────────────────────────────────────────────────
+//
+// platform_members records a user's authorization on the muvee admin plane,
+// separately from their identity in the `users` table. Subdomain-auth users
+// (ensured via /api/internal/auth/identity-upsert) land in `users` only and
+// never become platform members unless they cross over via project ownership
+// or admin promotion.
+
+const platformMemberColumns = `user_id, role, authorized, created_at`
+
+func scanPlatformMember(scanner interface {
+	Scan(dest ...interface{}) error
+}, m *PlatformMember) error {
+	return scanner.Scan(&m.UserID, &m.Role, &m.Authorized, &m.CreatedAt)
+}
+
+// GetPlatformMember returns the platform_members row for a user, or
+// (nil, nil) when the user is not a platform member.
+func (s *Store) GetPlatformMember(ctx context.Context, userID uuid.UUID) (*PlatformMember, error) {
+	var m PlatformMember
+	err := scanPlatformMember(s.db.QueryRow(ctx,
+		`SELECT `+platformMemberColumns+` FROM platform_members WHERE user_id = $1`, userID), &m)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return &m, err
+}
+
+// UpsertPlatformMember creates or updates the platform_members row. role is
+// only applied on INSERT; existing rows keep their role (use SetPlatformMemberRole
+// to change it). authorizedOnInsert mirrors the same insert-only semantics.
+func (s *Store) UpsertPlatformMember(ctx context.Context, userID uuid.UUID, role UserRole, authorizedOnInsert bool) (*PlatformMember, bool, error) {
+	var m PlatformMember
+	var inserted bool
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO platform_members (user_id, role, authorized, created_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id
+		RETURNING `+platformMemberColumns+`, (xmax = 0) AS inserted`,
+		userID, role, authorizedOnInsert).Scan(
+		&m.UserID, &m.Role, &m.Authorized, &m.CreatedAt, &inserted)
+	return &m, inserted, err
+}
+
+func (s *Store) SetPlatformMemberRole(ctx context.Context, userID uuid.UUID, role UserRole) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE platform_members SET role = $1 WHERE user_id = $2`, role, userID)
+	return err
+}
+
+func (s *Store) SetPlatformMemberAuthorized(ctx context.Context, userID uuid.UUID, authorized bool) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE platform_members SET authorized = $1 WHERE user_id = $2`, authorized, userID)
+	return err
+}
+
+// IsPlatformAdmin is a hot-path helper: returns true iff the user is a
+// platform_member with role='admin'.
+func (s *Store) IsPlatformAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var ok bool
+	err := s.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM platform_members WHERE user_id = $1 AND role = 'admin')`,
+		userID).Scan(&ok)
+	return ok, err
+}
+
+// PlatformUser bundles a User with its (optional) PlatformMember row, used by
+// admin/users listing. PlatformMember is nil when the user is identity-only
+// (came in through subdomain auth and never crossed over to the platform).
+type PlatformUser struct {
+	User
+	PlatformMember *PlatformMember `json:"-"`
+}
+
+// ListPlatformMemberUsers returns users joined with their platform_members
+// rows. scope:
+//   - "platform": only users with a platform_members row (i.e. real platform
+//     members; this is what /admin/users shows by default)
+//   - "all":      every user, with PlatformMember=nil for identity-only users
+func (s *Store) ListPlatformMemberUsers(ctx context.Context, scope string) ([]*PlatformUser, error) {
+	join := `LEFT JOIN`
+	where := ``
+	if scope == "platform" {
+		join = `JOIN`
+	}
+	q := `SELECT u.id, u.email, u.name, u.avatar_url, u.role, u.authorized,
+	             u.created_at, u.name_overridden, u.avatar_overridden,
+	             pm.user_id, pm.role, pm.authorized, pm.created_at
+	      FROM users u ` + join + ` platform_members pm ON pm.user_id = u.id ` + where + `
+	      ORDER BY u.created_at`
+	rows, err := s.db.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*PlatformUser, 0)
+	for rows.Next() {
+		var pu PlatformUser
+		var pmUserID *uuid.UUID
+		var pmRole *UserRole
+		var pmAuthorized *bool
+		var pmCreatedAt *time.Time
+		if err := rows.Scan(
+			&pu.User.ID, &pu.User.Email, &pu.User.Name, &pu.User.AvatarURL,
+			&pu.User.Role, &pu.User.Authorized, &pu.User.CreatedAt,
+			&pu.User.NameOverridden, &pu.User.AvatarOverridden,
+			&pmUserID, &pmRole, &pmAuthorized, &pmCreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if pmUserID != nil {
+			pu.PlatformMember = &PlatformMember{
+				UserID:     *pmUserID,
+				Role:       *pmRole,
+				Authorized: *pmAuthorized,
+				CreatedAt:  *pmCreatedAt,
+			}
+		}
+		out = append(out, &pu)
+	}
+	return out, nil
+}
+
 // ─── Projects ────────────────────────────────────────────────────────────────
 
 // projectColumns is the full SELECT list for a Project row. git_url is COALESCEd
@@ -1766,7 +1889,13 @@ func (s *Store) ListPendingAuthorizationRequests(ctx context.Context) ([]*Author
 	return out, nil
 }
 
-// ApproveAuthorizationRequest sets the request to approved and marks the user as authorized.
+// ApproveAuthorizationRequest sets the request to approved and marks the
+// requesting user as an authorized platform member. Inserts a
+// platform_members row when one does not already exist (the request flow
+// only fires from the apex Portal, so by definition the user is asking to
+// become a platform member). Also keeps the legacy users.authorized mirror
+// in sync so any code path still reading the old column behaves correctly
+// during the rollout window.
 func (s *Store) ApproveAuthorizationRequest(ctx context.Context, requestID, adminID uuid.UUID) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -1784,6 +1913,13 @@ func (s *Store) ApproveAuthorizationRequest(ctx context.Context, requestID, admi
 		return fmt.Errorf("request not found or already processed: %w", err)
 	}
 
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO platform_members (user_id, role, authorized, created_at)
+		VALUES ($1, 'member', TRUE, NOW())
+		ON CONFLICT (user_id) DO UPDATE SET authorized = TRUE
+	`, userID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE users SET authorized = TRUE WHERE id = $1`, userID); err != nil {
 		return err
 	}

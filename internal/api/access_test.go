@@ -138,3 +138,60 @@ func TestHandleInternalAuthUpsert_RejectsBadPayload(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleInternalAuthIdentityUpsert_RejectsMissingOrWrongKey(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	s := &Server{}
+
+	cases := []struct {
+		name       string
+		key        string
+		wantStatus int
+	}{
+		{"missing key", "", http.StatusUnauthorized},
+		{"wrong key", "deadbeef", http.StatusUnauthorized},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/internal/auth/identity-upsert",
+				strings.NewReader(`{"email":"a@b.com"}`))
+			if c.key != "" {
+				r.Header.Set("X-Muvee-Internal-Key", c.key)
+			}
+			w := httptest.NewRecorder()
+			s.handleInternalAuthIdentityUpsert(w, r)
+			if w.Code != c.wantStatus {
+				t.Errorf("got status %d, want %d", w.Code, c.wantStatus)
+			}
+		})
+	}
+}
+
+func TestHandleInternalAuthIdentityUpsert_RejectsBadPayload(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	key := internalAPIKey()
+	s := &Server{}
+
+	// Note: identity-upsert does NOT require a `provider` field (unlike upsert)
+	// because there is no domain check or invite gate to apply.
+	cases := []struct {
+		name, body string
+		wantStatus int
+	}{
+		{"invalid json", `{not json`, http.StatusBadRequest},
+		{"missing email", `{}`, http.StatusBadRequest},
+		{"whitespace email", `{"email":"   "}`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/internal/auth/identity-upsert",
+				strings.NewReader(c.body))
+			r.Header.Set("X-Muvee-Internal-Key", key)
+			w := httptest.NewRecorder()
+			s.handleInternalAuthIdentityUpsert(w, r)
+			if w.Code != c.wantStatus {
+				t.Errorf("got status %d, want %d (body=%s)", w.Code, c.wantStatus, w.Body.String())
+			}
+		})
+	}
+}

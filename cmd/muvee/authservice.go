@@ -155,28 +155,27 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// errNotInvitedUpstream signals that muvee-server rejected the upsert because
-// access_mode is "invite" and the email is neither white-listed, link-bearing,
-// nor an existing account. Caller redirects to the not_invited login page.
-var errNotInvitedUpstream = fmt.Errorf("upstream rejected: not invited")
-
 // upsertUserUpstream syncs an OAuth-verified identity into muvee-server's
-// users table via the X-Muvee-Internal-Key-gated /api/internal/auth/upsert
-// endpoint. Called from handleOAuthCallback so that users authenticating only
-// through ForwardAuth subdomains (never through the apex Portal) still appear
-// in the users table — required by IsProjectAccessAllowedByEmail.
+// users table via the X-Muvee-Internal-Key-gated identity-upsert endpoint.
+// Called from handleOAuthCallback so that users authenticating only through
+// ForwardAuth subdomains (never through the apex Portal) still appear in the
+// users table — required by IsProjectAccessAllowedByEmail.
+//
+// The endpoint is identity-only: no domain check, no invite gate, no
+// platform_members row. Subdomain users have their own per-project access
+// control (project_access_users + projects.auth_allowed_domains) so the
+// platform's invite list and ALLOWED_DOMAINS do not apply.
 func upsertUserUpstream(ctx context.Context, providerName, email, name, avatarURL string) error {
 	body, err := json.Marshal(map[string]string{
 		"email":      email,
 		"name":       name,
 		"avatar_url": avatarURL,
-		"provider":   providerName,
 	})
 	if err != nil {
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		muveeServerURL+"/api/internal/auth/upsert",
+		muveeServerURL+"/api/internal/auth/identity-upsert",
 		strings.NewReader(string(body)))
 	if err != nil {
 		return err
@@ -191,16 +190,7 @@ func upsertUserUpstream(ctx context.Context, providerName, email, name, avatarUR
 	if resp.StatusCode == http.StatusOK {
 		return nil
 	}
-	if resp.StatusCode == http.StatusForbidden {
-		var payload struct {
-			Code string `json:"code"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&payload)
-		if payload.Code == "not_invited" {
-			return errNotInvitedUpstream
-		}
-	}
-	return fmt.Errorf("upstream upsert returned %d", resp.StatusCode)
+	return fmt.Errorf("upstream identity upsert returned %d", resp.StatusCode)
 }
 
 // checkProjectAccess asks muvee-server whether the given email is permitted to
@@ -431,12 +421,12 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// authenticated through this subdomain ForwardAuth path would not exist
 	// in the central `users` table, and IsProjectAccessAllowedByEmail would
 	// reject them as "not a member" even on public projects.
+	//
+	// This is identity-only: domain restrictions and invite-mode gating do
+	// not apply to subdomain logins (those are platform-side admission
+	// rules). Per-project ACL still runs in checkProjectAccess below.
 	if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
-		if err == errNotInvitedUpstream {
-			http.Redirect(w, r, "/_oauth/login?error=not_invited", http.StatusFound)
-			return
-		}
-		log.Printf("authservice: upstream upsert (%s, %s): %v", providerName, email, err)
+		log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return
 	}
