@@ -1,9 +1,56 @@
 package auth
 
 import (
+	"context"
 	"testing"
 	"time"
 )
+
+// fakeProvider is a minimal Provider used to drive isOrgScopedProvider tests
+// without going through the real OAuth client constructors.
+type fakeProvider struct {
+	name      string
+	orgScoped bool
+}
+
+func (p fakeProvider) Name() string              { return p.name }
+func (p fakeProvider) DisplayName() string       { return p.name }
+func (p fakeProvider) AuthCodeURL(string) string { return "" }
+func (p fakeProvider) UserInfo(context.Context, string) (string, string, string, error) {
+	return "", "", "", nil
+}
+func (p fakeProvider) OrgScoped() bool { return p.orgScoped }
+
+func TestIsOrgScopedProvider(t *testing.T) {
+	registered := map[string]Provider{
+		"google": fakeProvider{name: "google", orgScoped: false},
+		"feishu": fakeProvider{name: "feishu", orgScoped: true},
+	}
+
+	cases := []struct {
+		name     string
+		provider string
+		want     bool
+	}{
+		{"registered org-scoped feishu", "feishu", true},
+		{"registered non-org-scoped google", "google", false},
+		// Fallback path: provider isn't registered locally (e.g. authservice
+		// has feishu but muvee-server in some test deployment doesn't). The
+		// canonical list still kicks in for known org-scoped providers.
+		{"unregistered fallback wecom", "wecom", true},
+		{"unregistered fallback dingtalk", "dingtalk", true},
+		{"unregistered fallback unknown", "github", false},
+		{"empty name", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := isOrgScopedProvider(registered, c.provider)
+			if got != c.want {
+				t.Errorf("isOrgScopedProvider(%q) = %v, want %v", c.provider, got, c.want)
+			}
+		})
+	}
+}
 
 func TestIsAPITokenPrefix(t *testing.T) {
 	cases := []struct {

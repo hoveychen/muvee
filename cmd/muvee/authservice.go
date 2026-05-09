@@ -155,6 +155,54 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// errNotInvitedUpstream signals that muvee-server rejected the upsert because
+// access_mode is "invite" and the email is neither white-listed, link-bearing,
+// nor an existing account. Caller redirects to the not_invited login page.
+var errNotInvitedUpstream = fmt.Errorf("upstream rejected: not invited")
+
+// upsertUserUpstream syncs an OAuth-verified identity into muvee-server's
+// users table via the X-Muvee-Internal-Key-gated /api/internal/auth/upsert
+// endpoint. Called from handleOAuthCallback so that users authenticating only
+// through ForwardAuth subdomains (never through the apex Portal) still appear
+// in the users table — required by IsProjectAccessAllowedByEmail.
+func upsertUserUpstream(ctx context.Context, providerName, email, name, avatarURL string) error {
+	body, err := json.Marshal(map[string]string{
+		"email":      email,
+		"name":       name,
+		"avatar_url": avatarURL,
+		"provider":   providerName,
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		muveeServerURL+"/api/internal/auth/upsert",
+		strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		var payload struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		if payload.Code == "not_invited" {
+			return errNotInvitedUpstream
+		}
+	}
+	return fmt.Errorf("upstream upsert returned %d", resp.StatusCode)
+}
+
 // checkProjectAccess asks muvee-server whether the given email is permitted to
 // reach the project's downstream service. Public projects always return true;
 // private projects consult the per-project allow-list. Errors are propagated to
@@ -374,6 +422,21 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	email, name, avatarURL, err := p.UserInfo(ctx, code)
 	if err != nil {
 		log.Printf("authservice: UserInfo (%s): %v", providerName, err)
+		http.Error(w, "authentication failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Sync the verified identity into muvee-server's users table BEFORE
+	// signing the forward JWT. Without this, users that only ever
+	// authenticated through this subdomain ForwardAuth path would not exist
+	// in the central `users` table, and IsProjectAccessAllowedByEmail would
+	// reject them as "not a member" even on public projects.
+	if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
+		if err == errNotInvitedUpstream {
+			http.Redirect(w, r, "/_oauth/login?error=not_invited", http.StatusFound)
+			return
+		}
+		log.Printf("authservice: upstream upsert (%s, %s): %v", providerName, email, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return
 	}

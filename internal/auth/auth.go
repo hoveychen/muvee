@@ -167,12 +167,35 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 		return nil, "", fmt.Errorf("user info: %w", err)
 	}
 
-	// Skip domain restrictions for org-scoped providers (Feishu, WeCom, DingTalk).
-	// These providers inherently restrict users to a specific organisation, so the
-	// email domain check is redundant — regardless of whether the email is real or synthetic.
-	if !p.OrgScoped() {
+	user, err := s.EnsureUser(ctx, providerName, email, name, avatarURL, inviteToken)
+	if err != nil {
+		return nil, "", err
+	}
+
+	jwtToken, err := s.signJWT(user)
+	if err != nil {
+		return nil, "", err
+	}
+	return user, jwtToken, nil
+}
+
+// EnsureUser applies the post-OAuth identity-management rules to an
+// already-verified (email, name, avatarURL) triple: domain restrictions for
+// non-org-scoped providers, invite-mode gating, request-mode authorization
+// defaults, user upsert, admin auto-promotion, and one-time invitation link
+// consumption. Returns ErrNotInvited when access_mode is "invite" and the
+// email is neither white-listed, link-bearing, nor an existing account.
+//
+// Callers that already performed their own OAuth code exchange (e.g. the
+// standalone authservice running ForwardAuth on subdomains) pass the verified
+// claims in directly. providerName is consulted only to skip the domain check
+// for org-scoped providers; it falls back to a hard-coded list when the
+// provider is not registered locally so authservice-only providers still get
+// the right treatment.
+func (s *Service) EnsureUser(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (*store.User, error) {
+	if !isOrgScopedProvider(s.providers, providerName) {
 		if err := s.checkDomain(email); err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 
@@ -188,23 +211,23 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 	if mode == store.AccessModeInvite && !isAdmin {
 		invited, err := s.store.IsEmailInvited(ctx, email)
 		if err != nil {
-			return nil, "", fmt.Errorf("check invitation: %w", err)
+			return nil, fmt.Errorf("check invitation: %w", err)
 		}
 		emailInvited = invited
 		if !emailInvited && inviteToken != "" {
 			link, err := s.store.GetValidInvitationLinkByHash(ctx, hashInviteToken(inviteToken), time.Now())
 			if err != nil {
-				return nil, "", fmt.Errorf("check invite link: %w", err)
+				return nil, fmt.Errorf("check invite link: %w", err)
 			}
 			consumeLink = link
 		}
 		if !emailInvited && consumeLink == nil {
 			existing, err := s.store.GetUserByEmail(ctx, email)
 			if err != nil {
-				return nil, "", fmt.Errorf("lookup user: %w", err)
+				return nil, fmt.Errorf("lookup user: %w", err)
 			}
 			if existing == nil {
-				return nil, "", ErrNotInvited
+				return nil, ErrNotInvited
 			}
 		}
 	}
@@ -221,13 +244,13 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 
 	user, _, err := s.store.UpsertUser(ctx, email, name, avatarURL, authorizedOnInsert)
 	if err != nil {
-		return nil, "", fmt.Errorf("upsert user: %w", err)
+		return nil, fmt.Errorf("upsert user: %w", err)
 	}
 
 	// Auto-promote users listed in ADMIN_EMAILS on every login.
 	if isAdmin && user.Role != store.UserRoleAdmin {
 		if err := s.store.SetUserRole(ctx, user.ID, store.UserRoleAdmin); err != nil {
-			return nil, "", fmt.Errorf("promote admin: %w", err)
+			return nil, fmt.Errorf("promote admin: %w", err)
 		}
 		user.Role = store.UserRoleAdmin
 	}
@@ -236,7 +259,7 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 	// arriving with a valid link) should be flipped to authorized on this login.
 	if mode == store.AccessModeInvite && !user.Authorized && (emailInvited || consumeLink != nil) {
 		if err := s.store.SetUserAuthorized(ctx, user.ID, true); err != nil {
-			return nil, "", fmt.Errorf("authorize user: %w", err)
+			return nil, fmt.Errorf("authorize user: %w", err)
 		}
 		user.Authorized = true
 	}
@@ -247,11 +270,22 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 		_ = s.store.ConsumeInvitationLink(ctx, consumeLink.ID, user.ID)
 	}
 
-	jwtToken, err := s.signJWT(user)
-	if err != nil {
-		return nil, "", err
+	return user, nil
+}
+
+// isOrgScopedProvider reports whether the named provider inherently restricts
+// users to a specific organisation. Looks up the live provider when registered;
+// otherwise falls back to the canonical list so authservice-only providers
+// still skip the domain check when invoked through EnsureUser.
+func isOrgScopedProvider(providers map[string]Provider, name string) bool {
+	if p, ok := providers[name]; ok {
+		return p.OrgScoped()
 	}
-	return user, jwtToken, nil
+	switch name {
+	case "feishu", "wecom", "dingtalk":
+		return true
+	}
+	return false
 }
 
 // accessMode returns the current AccessMode setting, defaulting to Open when

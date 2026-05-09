@@ -173,6 +173,61 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleInternalAuthUpsert lets the standalone authservice (which terminates
+// per-subdomain ForwardAuth OAuth flows) register the user it just verified
+// into muvee-server's `users` table. Without this, users that only ever
+// authenticated through a per-project subdomain (e.g. flab.muveeai.com via
+// Feishu) never get a row created and trip the "not a member of this project"
+// rejection in IsProjectAccessAllowedByEmail even for public projects.
+//
+// Authenticated via X-Muvee-Internal-Key (sha256 of the shared JWT_SECRET).
+// Errors map: 401 (key), 400 (payload), 403 + {"code":"not_invited"} when
+// invite mode rejects the email, 500 otherwise.
+func (s *Server) handleInternalAuthUpsert(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		Email       string `json:"email"`
+		Name        string `json:"name"`
+		AvatarURL   string `json:"avatar_url"`
+		Provider    string `json:"provider"`
+		InviteToken string `json:"invite_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, fmt.Errorf("invalid json: %w", err), http.StatusBadRequest)
+		return
+	}
+	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
+	body.Provider = strings.TrimSpace(body.Provider)
+	if body.Email == "" || body.Provider == "" {
+		jsonErr(w, fmt.Errorf("email and provider are required"), http.StatusBadRequest)
+		return
+	}
+	user, err := s.auth.EnsureUser(r.Context(), body.Provider, body.Email, body.Name, body.AvatarURL, body.InviteToken)
+	if err != nil {
+		if errors.Is(err, auth.ErrNotInvited) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"code":  "not_invited",
+				"error": err.Error(),
+			})
+			return
+		}
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"user_id":    user.ID.String(),
+		"role":       string(user.Role),
+		"authorized": user.Authorized,
+	})
+}
+
 // agentSecretMiddleware rejects requests that do not carry the correct X-Agent-Secret header.
 // When no secret is configured the middleware passes all requests through (dev/test mode).
 func (s *Server) agentSecretMiddleware(next http.Handler) http.Handler {
@@ -221,6 +276,10 @@ func (s *Server) Router() http.Handler {
 	// Internal access-check endpoint called by muvee-authservice during ForwardAuth.
 	// Authenticated via X-Muvee-Internal-Key (derived from JWT_SECRET).
 	r.Get("/api/internal/access/check", s.handleInternalAccessCheck)
+	// Internal user-upsert endpoint called by muvee-authservice after a
+	// per-subdomain OAuth callback completes, so server's users table stays in
+	// sync with users that authenticated only on subdomains.
+	r.Post("/api/internal/auth/upsert", s.handleInternalAuthUpsert)
 
 	// Public community feed – no auth required
 	r.Get("/api/public/projects", s.handlePublicProjects)
