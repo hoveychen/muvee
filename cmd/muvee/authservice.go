@@ -92,6 +92,10 @@ func runAuthservice() {
 	r.Get("/_oauth/userinfo", handleUserInfo)
 	r.Get("/_oauth/logout", handleFwdLogout)
 	r.Get("/_oauth/login", handleLoginPage)
+	r.Get("/_oauth/request-access", handleRequestAccessPage)
+	r.Post("/_oauth/request-access", handleRequestAccessSubmit)
+	// {provider} catch-all must come after the more specific /_oauth/* routes
+	// above; chi matches in registration order for static segments.
 	r.Get("/_oauth/{provider}", handleOAuthCallback)
 
 	// Device Flow for CLI / headless access
@@ -147,11 +151,12 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !check.Allowed {
-			// If muvee-server pointed us at /request-access, send the user
-			// there via a 302 (Traefik ForwardAuth transparently forwards
-			// redirects). Otherwise fall back to a plain 403.
-			if check.RejectRedirectURL != "" {
-				http.Redirect(w, r, check.RejectRedirectURL, http.StatusFound)
+			// Send the user to the request-access page on the same subdomain
+			// they tried to reach (e.g. https://my-project.example.com/_oauth/request-access?project=X).
+			// Keeping the URL on the project's own host means downstream
+			// users never get a glimpse of the platform main domain.
+			if redirect := requestAccessRedirectURL(r, projectID); redirect != "" {
+				http.Redirect(w, r, redirect, http.StatusFound)
 				return
 			}
 			http.Error(w, "access denied: not a member of this project", http.StatusForbidden)
@@ -201,14 +206,30 @@ func upsertUserUpstream(ctx context.Context, providerName, email, name, avatarUR
 }
 
 // accessCheckResult is the structured result from muvee-server's
-// /api/internal/access/check endpoint. RejectRedirectURL is non-empty only
-// when the user was denied AND the server has somewhere meaningful to send
-// them (the platform's /request-access page); when set, ForwardAuth issues
-// a 302 instead of a 403 so the user lands on the request-access form.
+// /api/internal/access/check endpoint. On deny, authservice constructs the
+// request-access redirect itself from X-Forwarded-Host (see
+// requestAccessRedirectURL) — the server doesn't know the subdomain.
 type accessCheckResult struct {
-	Allowed           bool   `json:"allowed"`
-	Mode              string `json:"mode"`
-	RejectRedirectURL string `json:"reject_redirect_url"`
+	Allowed bool   `json:"allowed"`
+	Mode    string `json:"mode"`
+}
+
+// requestAccessRedirectURL returns the absolute URL of the request-access page
+// on the same subdomain the user tried to reach. ForwardAuth runs on the
+// authservice but the user's browser sees the project subdomain; we recover
+// that from the Traefik X-Forwarded-* headers and bounce them to a path on
+// the same host. Returns "" if the headers are missing (the caller falls back
+// to a 403 in that case).
+func requestAccessRedirectURL(r *http.Request, projectID string) string {
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		return ""
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		proto = "https"
+	}
+	return proto + "://" + host + "/_oauth/request-access?project=" + url.QueryEscape(projectID)
 }
 
 // checkProjectAccess asks muvee-server whether the given email is permitted to
@@ -782,6 +803,258 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
 	http.Redirect(w, r, forwardAuthBase+"/_oauth/login", http.StatusFound)
+}
+
+// projectMinimalInfo mirrors muvee-server's projectMinimalInfo response shape
+// for /api/internal/projects/{id}.
+type projectMinimalInfo struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	AccessMode string `json:"access_mode"`
+	OwnerName  string `json:"owner_name"`
+	OwnerEmail string `json:"owner_email"`
+}
+
+func fetchProjectInfoInternal(ctx context.Context, projectID string) (*projectMinimalInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		muveeServerURL+"/api/internal/projects/"+url.PathEscape(projectID), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("internal project info returned %d", resp.StatusCode)
+	}
+	var info projectMinimalInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+type submitAccessRequestResult struct {
+	AlreadyAllowed bool `json:"already_allowed"`
+}
+
+func submitAccessRequestInternal(ctx context.Context, projectID, email, reason string) (*submitAccessRequestResult, error) {
+	body, err := json.Marshal(map[string]string{
+		"project_id": projectID,
+		"email":      email,
+		"reason":     reason,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		muveeServerURL+"/api/internal/access/submit-request",
+		strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("submit access request returned %d", resp.StatusCode)
+	}
+	var out submitAccessRequestResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// requestAccessPageTmpl renders both the form and the post-submit confirmation
+// states of /_oauth/request-access. Kept as a Go template (instead of a SPA
+// bundle) because authservice already serves /_oauth/login the same way and
+// the page has no client-side state worth pulling in React for.
+const requestAccessPageTmpl = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request access — {{.ProjectName}}</title>
+<style>
+  body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5;padding:1rem}
+  .card{background:#fff;border-radius:12px;padding:2.5rem 3rem;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:520px;width:100%;box-sizing:border-box}
+  h1{font-size:1.4rem;margin:0 0 .8rem;color:#111}
+  p{color:#555;line-height:1.6;font-size:.95rem;margin:.4rem 0}
+  .muted{color:#888;font-size:.85rem}
+  textarea{width:100%;min-height:6rem;padding:.65rem;border:1px solid #ddd;border-radius:6px;font:inherit;box-sizing:border-box;resize:vertical}
+  textarea:focus{outline:none;border-color:#4f46e5}
+  button{padding:.7rem 1.4rem;border-radius:8px;background:#4f46e5;color:#fff;border:none;font-size:.95rem;cursor:pointer;margin-top:1rem}
+  button:hover{background:#4338ca}
+  .err{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;padding:.6rem .8rem;border-radius:6px;margin-top:1rem;font-size:.85rem}
+  .ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;padding:.6rem .8rem;border-radius:6px;margin-top:1rem;font-size:.9rem}
+  a{color:#4f46e5;text-decoration:none}
+  a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="card">
+{{if eq .Phase "form"}}
+  <h1>Request access</h1>
+  <p><strong>{{.ProjectName}}</strong> is private. Send the owner a quick note explaining why you need access — they'll decide and you'll be let in once approved.</p>
+  <form method="POST" action="/_oauth/request-access">
+    <input type="hidden" name="project_id" value="{{.ProjectID}}">
+    <label for="reason" class="muted">Reason (optional)</label>
+    <textarea id="reason" name="reason" maxlength="1000" placeholder="What do you need this for?"></textarea>
+    <button type="submit">Send request</button>
+  </form>
+  <p class="muted" style="margin-top:1.2rem">Signed in as {{.Email}}. <a href="/_oauth/logout?redirect=/">Sign out</a></p>
+{{else if eq .Phase "submitted"}}
+  <h1>Request submitted</h1>
+  <div class="ok">We've notified the owner of <strong>{{.ProjectName}}</strong>. You'll be able to reach this project once they approve your request.</div>
+  <p class="muted">Signed in as {{.Email}}.</p>
+{{else if eq .Phase "already-allowed"}}
+  <h1>You already have access</h1>
+  <p>{{.ProjectName}} is already accessible from your account. <a href="/">Try opening it again</a> — if it still fails, ask the owner to verify.</p>
+  <p class="muted">Signed in as {{.Email}}.</p>
+{{else if eq .Phase "error"}}
+  <h1>Something went wrong</h1>
+  <div class="err">{{.Error}}</div>
+  <p class="muted">If this keeps happening, contact the project owner directly.</p>
+{{end}}
+</div>
+</body>
+</html>`
+
+// renderRequestAccessPage executes requestAccessPageTmpl with the given fields.
+// Kept as a single helper so the GET / POST branches can't drift on look.
+func renderRequestAccessPage(w http.ResponseWriter, status int, data map[string]string) {
+	t := template.Must(template.New("request-access").Parse(requestAccessPageTmpl))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = t.Execute(w, data)
+}
+
+// handleRequestAccessPage renders the request-access form on the project's
+// own subdomain. ForwardAuth-deny redirects land here directly so users never
+// see the platform domain.
+//
+// Flow:
+//   - If the user has no muvee_fwd_session, save the current URL in
+//     fwd_oauth_redirect (mirroring redirectToLogin) and bounce them to
+//     /_oauth/login. After OAuth they come back here with a session.
+//   - With a session, fetch project info via the internal endpoint and render
+//     the form. Errors render an inline error page rather than redirecting,
+//     so the URL bar stays predictable for the user.
+func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(r.URL.Query().Get("project"))
+	if projectID == "" {
+		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+			"Phase": "error", "Error": "Missing ?project=<id> in the URL.",
+		})
+		return
+	}
+	claims, err := resolveAuthClaims(r)
+	if err != nil {
+		// Save full request URL so the user lands back on this page after
+		// completing OAuth. Reuses the same cookie redirectToLogin uses.
+		host := r.Host
+		proto := "https"
+		if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
+			proto = "http"
+		}
+		if xfp := r.Header.Get("X-Forwarded-Proto"); xfp != "" {
+			proto = xfp
+		}
+		if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
+			host = xfh
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name: "fwd_oauth_redirect",
+			Value: proto + "://" + host + "/_oauth/request-access?project=" + url.QueryEscape(projectID),
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			SameSite: http.SameSiteLaxMode, Secure: true,
+		})
+		http.Redirect(w, r, "/_oauth/login", http.StatusFound)
+		return
+	}
+	info, err := fetchProjectInfoInternal(r.Context(), projectID)
+	if err != nil {
+		log.Printf("authservice: fetch project info (%s): %v", projectID, err)
+		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
+		})
+		return
+	}
+	if info == nil {
+		renderRequestAccessPage(w, http.StatusNotFound, map[string]string{
+			"Phase": "error", "Error": "Project not found.",
+		})
+		return
+	}
+	renderRequestAccessPage(w, http.StatusOK, map[string]string{
+		"Phase":       "form",
+		"ProjectID":   info.ID,
+		"ProjectName": info.Name,
+		"Email":       claims.Email,
+	})
+}
+
+// handleRequestAccessSubmit accepts the form POST from the request-access
+// page and forwards the submission to muvee-server's internal endpoint. The
+// caller's email comes from the JWT (not a form field) so a user can't open
+// a request on someone else's behalf.
+func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
+	claims, err := resolveAuthClaims(r)
+	if err != nil {
+		http.Redirect(w, r, "/_oauth/login", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+			"Phase": "error", "Error": "Invalid form submission.",
+		})
+		return
+	}
+	projectID := strings.TrimSpace(r.PostFormValue("project_id"))
+	reason := strings.TrimSpace(r.PostFormValue("reason"))
+	if projectID == "" {
+		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+			"Phase": "error", "Error": "Missing project id.",
+		})
+		return
+	}
+	info, err := fetchProjectInfoInternal(r.Context(), projectID)
+	if err != nil || info == nil {
+		log.Printf("authservice: fetch project info (%s): %v", projectID, err)
+		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
+		})
+		return
+	}
+	res, err := submitAccessRequestInternal(r.Context(), projectID, claims.Email, reason)
+	if err != nil {
+		log.Printf("authservice: submit access request (project=%s email=%s): %v", projectID, claims.Email, err)
+		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+			"Phase": "error", "Error": "Could not submit your request. Try again in a moment.",
+		})
+		return
+	}
+	phase := "submitted"
+	if res.AlreadyAllowed {
+		phase = "already-allowed"
+	}
+	renderRequestAccessPage(w, http.StatusOK, map[string]string{
+		"Phase":       phase,
+		"ProjectID":   info.ID,
+		"ProjectName": info.Name,
+		"Email":       claims.Email,
+	})
 }
 
 func signForwardJWT(email, name, avatarURL, provider string) (string, error) {

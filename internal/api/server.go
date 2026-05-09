@@ -189,14 +189,112 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 		// Buffered batch UPSERT into project_visits; non-blocking.
 		s.visits.Push(projectID, res.UserID)
 	}
-	if !res.Allowed && res.UserID != uuid.Nil && s.baseDomain != "" {
-		// Tell muvee-authservice where to send the user to apply for access.
-		// authservice translates this into a 302 (or a meta-refresh fallback)
-		// when ForwardAuth denies the request. Empty baseDomain (test mode)
-		// suppresses the field; authservice then falls back to its 401 page.
-		resp["reject_redirect_url"] = "https://" + s.baseDomain + "/request-access?project=" + projectID.String()
-	}
+	// On deny we no longer set reject_redirect_url here — the request-access
+	// page now lives on the project subdomain itself, so muvee-authservice
+	// constructs that redirect from its own X-Forwarded-Host. muvee-server
+	// has no way to know which subdomain the user came from.
 	jsonOK(w, resp)
+}
+
+// handleInternalProjectInfo returns minimal project info (id, name, access_mode,
+// owner display) so muvee-authservice can render the request-access page on
+// the project subdomain without forwarding the user to the platform domain.
+// Subdomain ForwardAuth never has a platform JWT, so this path is gated on
+// X-Muvee-Internal-Key instead. The projection deliberately omits git_url,
+// secrets, env, etc. — anything that could leak project internals.
+func (s *Server) handleInternalProjectInfo(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	p, err := s.store.GetProject(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonErr(w, nil, http.StatusNotFound)
+		return
+	}
+	jsonOK(w, projectMinimalInfo(p))
+}
+
+// handleInternalSubmitAccessRequest is called by muvee-authservice when a user
+// submits the request-access form on a project subdomain. The user is
+// identified by email (extracted from the muvee_fwd_session JWT validated by
+// authservice) rather than by a platform JWT, so this endpoint must be
+// internal-key-gated. Body: {project_id, email, reason}.
+func (s *Server) handleInternalSubmitAccessRequest(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		ProjectID string `json:"project_id"`
+		Email     string `json:"email"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, fmt.Errorf("invalid json: %w", err), http.StatusBadRequest)
+		return
+	}
+	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
+	if body.ProjectID == "" || body.Email == "" {
+		jsonErr(w, fmt.Errorf("project_id and email are required"), http.StatusBadRequest)
+		return
+	}
+	projectID, err := uuid.Parse(body.ProjectID)
+	if err != nil {
+		jsonErr(w, fmt.Errorf("invalid project_id"), http.StatusBadRequest)
+		return
+	}
+	user, err := s.store.GetUserByEmail(r.Context(), body.Email)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
+		jsonErr(w, fmt.Errorf("user not found"), http.StatusNotFound)
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if len(reason) > 1000 {
+		reason = reason[:1000]
+	}
+	req, err := s.store.CreateAccessRequest(r.Context(), projectID, user.ID, reason)
+	if err != nil {
+		if errors.Is(err, store.ErrAccessRequestAlreadyApproved) {
+			jsonOK(w, map[string]any{"already_allowed": true})
+			return
+		}
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]any{
+		"already_allowed": false,
+		"request":         req,
+	})
+}
+
+// projectMinimalInfo is the shared projection for endpoints that expose
+// project metadata to non-members (request-access flow). Keeps everything
+// safe to share with users who do not yet have ACL access.
+func projectMinimalInfo(p *store.Project) map[string]any {
+	return map[string]any{
+		"id":          p.ID.String(),
+		"name":        p.Name,
+		"access_mode": p.AccessMode,
+		"owner_name":  p.OwnerName,
+		"owner_email": p.OwnerEmail,
+	}
 }
 
 // handleInternalAuthUpsert lets the standalone authservice (which terminates
@@ -345,6 +443,11 @@ func (s *Server) Router() http.Handler {
 	// Internal access-check endpoint called by muvee-authservice during ForwardAuth.
 	// Authenticated via X-Muvee-Internal-Key (derived from JWT_SECRET).
 	r.Get("/api/internal/access/check", s.handleInternalAccessCheck)
+	// Internal project info + access-request submission endpoints — used by
+	// muvee-authservice to render and process the request-access page directly
+	// on the project subdomain (no platform-domain hop needed).
+	r.Get("/api/internal/projects/{id}", s.handleInternalProjectInfo)
+	r.Post("/api/internal/access/submit-request", s.handleInternalSubmitAccessRequest)
 	// Internal identity-only user upsert called by muvee-authservice after a
 	// per-subdomain OAuth callback completes, so server's users table stays in
 	// sync with users that authenticated only on subdomains. Identity-only
@@ -403,6 +506,11 @@ func (s *Server) Router() http.Handler {
 
 		// Projects (write operations require authorization)
 		r.Post("/api/projects", s.requireAuthorized(s.createProject))
+		// /info returns the same minimal projection that subdomain authservice
+		// uses. Open to any authenticated user so the platform-domain
+		// /request-access deep-link can render even before the user has been
+		// approved (the regular getProject endpoint 404s non-members).
+		r.Get("/api/projects/{id}/info", s.getProjectInfo)
 		r.Get("/api/projects/{id}", s.getProject)
 		r.Put("/api/projects/{id}", s.requireAuthorized(s.updateProject))
 		r.Delete("/api/projects/{id}", s.requireAuthorized(s.deleteProject))
@@ -551,8 +659,30 @@ func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 	}
+	// Optional post-login redirect target. Constrained to same-origin paths
+	// (must start with a single "/") so a crafted URL can't bounce the user
+	// to an external domain after login.
+	if dest := safePostLoginRedirect(r.URL.Query().Get("redirect")); dest != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name: "muvee_post_login_redirect", Value: dest,
+			MaxAge: 600, HttpOnly: true, Path: "/",
+			SameSite: http.SameSiteLaxMode, Secure: true,
+		})
+	}
 	s.oauthPending.Store(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// safePostLoginRedirect returns dest unchanged if it's a same-origin path
+// (starts with a single "/" and doesn't smuggle a protocol-relative host via
+// "//evil.com"). Anything else returns "" so the caller falls back to the
+// default landing page.
+func safePostLoginRedirect(dest string) string {
+	dest = strings.TrimSpace(dest)
+	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") {
+		return ""
+	}
+	return dest
 }
 
 // cliPendingEntry carries the state the server needs to complete a CLI login
@@ -683,7 +813,18 @@ fetch(%q).catch(function(){});
 		Name: "muvee_session", Value: jwtToken,
 		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/", SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/", http.StatusFound)
+	// Honor the post-login redirect saved by handleProviderLogin so deep
+	// links into pages like /request-access survive the OAuth round-trip.
+	dest := "/"
+	if c, err := r.Cookie("muvee_post_login_redirect"); err == nil {
+		if safe := safePostLoginRedirect(c.Value); safe != "" {
+			dest = safe
+		}
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "muvee_post_login_redirect", Value: "", MaxAge: -1, Path: "/",
+	})
+	http.Redirect(w, r, dest, http.StatusFound)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -1402,6 +1543,28 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, created)
+}
+
+// getProjectInfo returns the minimal projection of a project to any
+// authenticated user. Used by the platform-domain /request-access deep-link
+// page (which gets here even when the caller is not yet a member, so it can
+// show the project name and submit a request). git_url, secrets, env, and
+// other internals are deliberately excluded.
+func (s *Server) getProjectInfo(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	p, err := s.store.GetProject(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonErr(w, nil, http.StatusNotFound)
+		return
+	}
+	jsonOK(w, projectMinimalInfo(p))
 }
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {

@@ -139,6 +139,110 @@ func TestHandleInternalAuthUpsert_RejectsBadPayload(t *testing.T) {
 	}
 }
 
+func TestHandleInternalProjectInfo_RejectsMissingOrWrongKey(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	s := &Server{}
+
+	cases := []struct {
+		name       string
+		key        string
+		wantStatus int
+	}{
+		{"missing key", "", http.StatusUnauthorized},
+		{"wrong key", "deadbeef", http.StatusUnauthorized},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/api/internal/projects/11111111-1111-1111-1111-111111111111", nil)
+			if c.key != "" {
+				r.Header.Set("X-Muvee-Internal-Key", c.key)
+			}
+			w := httptest.NewRecorder()
+			s.handleInternalProjectInfo(w, r)
+			if w.Code != c.wantStatus {
+				t.Errorf("got status %d, want %d", w.Code, c.wantStatus)
+			}
+		})
+	}
+}
+
+func TestHandleInternalSubmitAccessRequest_RejectsMissingOrWrongKey(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	s := &Server{}
+
+	cases := []struct {
+		name       string
+		key        string
+		wantStatus int
+	}{
+		{"missing key", "", http.StatusUnauthorized},
+		{"wrong key", "deadbeef", http.StatusUnauthorized},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/internal/access/submit-request",
+				strings.NewReader(`{"project_id":"11111111-1111-1111-1111-111111111111","email":"a@b.com","reason":"please"}`))
+			if c.key != "" {
+				r.Header.Set("X-Muvee-Internal-Key", c.key)
+			}
+			w := httptest.NewRecorder()
+			s.handleInternalSubmitAccessRequest(w, r)
+			if w.Code != c.wantStatus {
+				t.Errorf("got status %d, want %d", w.Code, c.wantStatus)
+			}
+		})
+	}
+}
+
+func TestHandleInternalSubmitAccessRequest_RejectsBadPayload(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	key := internalAPIKey()
+	s := &Server{}
+
+	cases := []struct {
+		name, body string
+		wantStatus int
+	}{
+		{"invalid json", `{not json`, http.StatusBadRequest},
+		{"missing project_id", `{"email":"a@b.com"}`, http.StatusBadRequest},
+		{"missing email", `{"project_id":"11111111-1111-1111-1111-111111111111"}`, http.StatusBadRequest},
+		{"invalid project_id uuid", `{"project_id":"not-a-uuid","email":"a@b.com"}`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/internal/access/submit-request",
+				strings.NewReader(c.body))
+			r.Header.Set("X-Muvee-Internal-Key", key)
+			w := httptest.NewRecorder()
+			s.handleInternalSubmitAccessRequest(w, r)
+			if w.Code != c.wantStatus {
+				t.Errorf("got status %d, want %d (body=%s)", w.Code, c.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestSafePostLoginRedirect(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"   ", ""},
+		{"/portal", "/portal"},
+		{"/request-access?project=abc", "/request-access?project=abc"},
+		{"//evil.com/foo", ""},
+		{"https://evil.com/", ""},
+		{"javascript:alert(1)", ""},
+		{"portal", ""},
+	}
+	for _, c := range cases {
+		got := safePostLoginRedirect(c.in)
+		if got != c.want {
+			t.Errorf("safePostLoginRedirect(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestHandleInternalAuthIdentityUpsert_RejectsMissingOrWrongKey(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	s := &Server{}

@@ -27,6 +27,8 @@ export const api = {
   projects: {
     list: () => request<import('./types').Project[]>('/api/projects'),
     get: (id: string) => request<import('./types').Project>(`/api/projects/${id}`),
+    // Minimal projection for non-members (used by /request-access deep-link).
+    info: (id: string) => request<import('./types').ProjectInfo>(`/api/projects/${id}/info`),
     create: (data: Partial<import('./types').Project>) => request<import('./types').Project>('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<import('./types').Project>) => request<import('./types').Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     changeOwner: (id: string, ownerId: string) =>

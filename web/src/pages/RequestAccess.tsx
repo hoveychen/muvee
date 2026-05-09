@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import type { Project, ProjectAccessRequest } from '../lib/types'
+import type { ProjectAccessRequest, ProjectInfo } from '../lib/types'
 
 type Phase = 'loading' | 'form' | 'submitted' | 'already-allowed' | 'error'
 
@@ -12,7 +12,7 @@ export default function RequestAccess() {
   const { user, loading: authLoading } = useAuth()
   const projectId = params.get('project') ?? ''
   const [phase, setPhase] = useState<Phase>('loading')
-  const [project, setProject] = useState<Project | null>(null)
+  const [project, setProject] = useState<ProjectInfo | null>(null)
   const [reason, setReason] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState<ProjectAccessRequest | null>(null)
@@ -30,7 +30,7 @@ export default function RequestAccess() {
       setError('Missing ?project=<id> in the URL.')
       return
     }
-    api.projects.get(projectId)
+    api.projects.info(projectId)
       .then(p => { setProject(p); setPhase('form') })
       .catch(e => { setPhase('error'); setError(e instanceof Error ? e.message : String(e)) })
   }, [authLoading, user, projectId, navigate])

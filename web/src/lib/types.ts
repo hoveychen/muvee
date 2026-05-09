@@ -87,6 +87,17 @@ export interface ProjectVisit {
   in_allow_list: boolean
 }
 
+// Minimal project projection returned by GET /api/projects/{id}/info. Used
+// by the request-access page so users who are not yet members can render
+// the project name without tripping the regular getProject 404.
+export interface ProjectInfo {
+  id: string
+  name: string
+  access_mode: 'public' | 'private'
+  owner_name: string
+  owner_email: string
+}
+
 export type ProjectAccessRequestStatus = 'pending' | 'approved' | 'denied'
 
 export interface ProjectAccessRequest {

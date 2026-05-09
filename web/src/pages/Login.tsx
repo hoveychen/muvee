@@ -18,6 +18,7 @@ export default function LoginPage() {
   const cliHostname = params.get('hostname')
   const inviteToken = params.get('invite_token')
   const errorCode = params.get('error')
+  const redirectTo = params.get('redirect')
 
   useEffect(() => {
     document.title = `${brandName} — Sign In`
@@ -134,7 +135,7 @@ export default function LoginPage() {
             )}
             <div className="flex flex-col gap-3">
               {providers.map(p => (
-                <ProviderButton key={p.id} provider={p} cliPort={cliPort} cliHostname={cliHostname} inviteToken={inviteToken} />
+                <ProviderButton key={p.id} provider={p} cliPort={cliPort} cliHostname={cliHostname} inviteToken={inviteToken} redirectTo={redirectTo} />
               ))}
             </div>
           </div>
@@ -151,13 +152,20 @@ export default function LoginPage() {
   )
 }
 
-function ProviderButton({ provider, cliPort, cliHostname, inviteToken }: { provider: ProviderInfo; cliPort: string | null; cliHostname: string | null; inviteToken: string | null }) {
+function ProviderButton({ provider, cliPort, cliHostname, inviteToken, redirectTo }: { provider: ProviderInfo; cliPort: string | null; cliHostname: string | null; inviteToken: string | null; redirectTo: string | null }) {
   const { t } = useTranslation()
   const inviteQuery = inviteToken ? `&invite_token=${encodeURIComponent(inviteToken)}` : ''
-  const inviteQueryFirst = inviteToken ? `?invite_token=${encodeURIComponent(inviteToken)}` : ''
+  // CLI device-flow doesn't pass redirect through; redirect only applies to
+  // the regular browser login. Constrain to same-origin paths to avoid
+  // turning the login URL into an open redirect.
+  const safeRedirect = redirectTo && redirectTo.startsWith('/') && !redirectTo.startsWith('//') ? redirectTo : null
+  const params = new URLSearchParams()
+  if (inviteToken) params.set('invite_token', inviteToken)
+  if (safeRedirect) params.set('redirect', safeRedirect)
+  const browserQuery = params.toString() ? `?${params.toString()}` : ''
   const href = cliPort
     ? `/auth/cli/login?port=${cliPort}&provider=${provider.id}${cliHostname ? `&hostname=${encodeURIComponent(cliHostname)}` : ''}${inviteQuery}`
-    : `/auth/${provider.id}/login${inviteQueryFirst}`
+    : `/auth/${provider.id}/login${browserQuery}`
   return (
     <a
       href={href}
