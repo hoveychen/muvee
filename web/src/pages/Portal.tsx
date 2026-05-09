@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Lock, Inbox, Search } from 'lucide-react'
+import { Lock, Inbox, Search, UserCheck } from 'lucide-react'
 import { useSettings } from '../lib/settings'
 import { useTranslation } from 'react-i18next'
 
@@ -12,6 +12,7 @@ interface PublicProject {
   tags: string
   url: string
   auth_required: boolean
+  access_mode: 'public' | 'private'
   owner_name: string
   owner_avatar_url: string
   updated_at: number
@@ -297,6 +298,20 @@ function AppCard({ project }: { project: PublicProject }) {
         </span>
         {project.auth_required && (
           <Lock size={10} style={{ color: 'var(--fg-muted)', opacity: 0.6 }} />
+        )}
+        {project.access_mode === 'private' && (
+          <span
+            title="Private — invitation only"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '3px',
+              fontSize: '0.625rem', padding: '1px 6px',
+              borderRadius: '99px', background: 'var(--accent-bg, rgba(99,102,241,0.12))',
+              color: 'var(--accent, #6366f1)', fontWeight: 600,
+            }}
+          >
+            <UserCheck size={10} />
+            Private
+          </span>
         )}
       </div>
     </a>

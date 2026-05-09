@@ -1153,6 +1153,7 @@ func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
 		Tags           string `json:"tags"`
 		URL            string `json:"url"`
 		AuthRequired   bool   `json:"auth_required"`
+		AccessMode     string `json:"access_mode"`
 		OwnerName      string `json:"owner_name"`
 		OwnerAvatarURL string `json:"owner_avatar_url"`
 		UpdatedAt      int64  `json:"updated_at"`
@@ -1168,6 +1169,7 @@ func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
 			Tags:           p.Tags,
 			URL:            fmt.Sprintf("https://%s.%s", p.DomainPrefix, s.baseDomain),
 			AuthRequired:   p.AuthRequired,
+			AccessMode:     p.AccessMode,
 			OwnerName:      p.OwnerName,
 			OwnerAvatarURL: p.OwnerAvatarURL,
 			UpdatedAt:      p.UpdatedAt.Unix(),
@@ -2884,15 +2886,22 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				},
 			}
 
-			// Per-tunnel ForwardAuth middleware (enabled by default).
-			if t.AuthRequired {
+			// Per-tunnel ForwardAuth middleware. Triggered by the bound
+			// domain_only project's auth_required OR access_mode=private; falls
+			// back to the live tunnel's auth_required when no project is bound.
+			proj, hasProj := domainOnlyByPrefix[t.Domain]
+			needsForwardAuth := t.AuthRequired || (hasProj && proj.AccessMode == store.ProjectAccessModePrivate)
+			if needsForwardAuth {
 				if cfg.HTTP.Middlewares == nil {
 					cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
 				}
 				mwName := name + "-auth"
 				verifyURL := fmt.Sprintf("%s/verify", s.authServiceURL)
-				if proj, ok := domainOnlyByPrefix[t.Domain]; ok && proj.AuthAllowedDomains != "" {
-					verifyURL += "?project=" + proj.ID.String() + "&domains=" + proj.AuthAllowedDomains
+				if hasProj {
+					verifyURL += "?project_id=" + proj.ID.String()
+					if proj.AuthAllowedDomains != "" {
+						verifyURL += "&domains=" + proj.AuthAllowedDomains
+					}
 				}
 				cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
 					ForwardAuth: &traefikForwardAuth{
@@ -2904,7 +2913,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				router.Middlewares = []string{mwName}
 
 				// Auth bypass paths from the bound domain_only project.
-				if proj, ok := domainOnlyByPrefix[t.Domain]; ok && proj.AuthBypassPaths != "" {
+				if hasProj && proj.AuthBypassPaths != "" {
 					addBypassRouters(&cfg, name, host, router.TLS, proj.AuthBypassPaths)
 				}
 
@@ -2950,12 +2959,12 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Apply auth + bypass paths for domain-only projects (offline placeholder).
-			if p.AuthRequired {
+			if p.AuthRequired || p.AccessMode == store.ProjectAccessModePrivate {
 				if cfg.HTTP.Middlewares == nil {
 					cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
 				}
 				mwName := name + "-auth"
-				verifyURL := fmt.Sprintf("%s/verify?project=%s", s.authServiceURL, p.ID)
+				verifyURL := fmt.Sprintf("%s/verify?project_id=%s", s.authServiceURL, p.ID)
 				if p.AuthAllowedDomains != "" {
 					verifyURL += "&domains=" + p.AuthAllowedDomains
 				}

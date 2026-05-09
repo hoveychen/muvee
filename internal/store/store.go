@@ -389,7 +389,7 @@ func (s *Store) ListPublicRunningProjects(ctx context.Context) ([]*PublicProject
 	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT ON (p.id)
 		       p.id, p.name, p.domain_prefix, p.description, p.icon, p.tags,
-		       p.auth_required, p.updated_at,
+		       p.auth_required, p.access_mode, p.updated_at,
 		       u.name AS owner_name, u.avatar_url AS owner_avatar_url
 		FROM projects p
 		JOIN deployments d ON d.project_id = p.id AND d.status = 'running'
@@ -405,7 +405,7 @@ func (s *Store) ListPublicRunningProjects(ctx context.Context) ([]*PublicProject
 		var info PublicProjectInfo
 		if err := rows.Scan(
 			&info.ID, &info.Name, &info.DomainPrefix, &info.Description, &info.Icon, &info.Tags,
-			&info.AuthRequired, &info.UpdatedAt,
+			&info.AuthRequired, &info.AccessMode, &info.UpdatedAt,
 			&info.OwnerName, &info.OwnerAvatarURL,
 		); err != nil {
 			return nil, err
@@ -441,7 +441,7 @@ func (s *Store) GetProjectByOwnerAndName(ctx context.Context, ownerID uuid.UUID,
 func (s *Store) ListPublicDomainOnlyProjects(ctx context.Context) ([]*PublicProjectInfo, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT p.id, p.name, p.domain_prefix, p.description, p.icon, p.tags,
-		       p.auth_required, p.updated_at,
+		       p.auth_required, p.access_mode, p.updated_at,
 		       u.name AS owner_name, u.avatar_url AS owner_avatar_url
 		FROM projects p
 		JOIN users u ON u.id = p.owner_id
@@ -457,7 +457,7 @@ func (s *Store) ListPublicDomainOnlyProjects(ctx context.Context) ([]*PublicProj
 		var info PublicProjectInfo
 		if err := rows.Scan(
 			&info.ID, &info.Name, &info.DomainPrefix, &info.Description, &info.Icon, &info.Tags,
-			&info.AuthRequired, &info.UpdatedAt,
+			&info.AuthRequired, &info.AccessMode, &info.UpdatedAt,
 			&info.OwnerName, &info.OwnerAvatarURL,
 		); err != nil {
 			return nil, err

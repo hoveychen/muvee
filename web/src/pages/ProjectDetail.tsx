@@ -221,6 +221,7 @@ export default function ProjectDetail() {
           ['traffic', Activity, t('projectDetail.tabs.traffic')],
           ['config', Settings, t('projectDetail.tabs.config')],
           ['auth', Shield, t('projectDetail.tabs.auth')],
+          ['users', Users, 'Users'],
           ['tokens', Key, t('projectDetail.tabs.tokens')],
         ] as const : [
           ['deploy', Rocket, t('projectDetail.tabs.deployments')],

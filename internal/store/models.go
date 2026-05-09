@@ -198,6 +198,7 @@ type PublicProjectInfo struct {
 	Icon           string    `db:"icon"            json:"icon"`
 	Tags           string    `db:"tags"            json:"tags"`
 	AuthRequired   bool      `db:"auth_required"   json:"auth_required"`
+	AccessMode     string    `db:"access_mode"     json:"access_mode"`
 	OwnerName      string    `db:"owner_name"      json:"owner_name"`
 	OwnerAvatarURL string    `db:"owner_avatar_url" json:"owner_avatar_url"`
 	UpdatedAt      time.Time `db:"updated_at"      json:"updated_at"`
