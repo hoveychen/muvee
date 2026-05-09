@@ -43,6 +43,22 @@ export default function Layout({ children }: { children?: ReactNode }) {
     }
   }, [user])
 
+  // Pending access-request badge — count of users waiting on this user (as
+  // project owner) to approve their access. Polled every 60s.
+  const [pendingCount, setPendingCount] = useState(0)
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const tick = () => {
+      api.accessRequests.pendingForOwner()
+        .then(reqs => { if (!cancelled) setPendingCount(reqs.length) })
+        .catch(() => {})
+    }
+    tick()
+    const id = setInterval(tick, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [user])
+
   const handleRequestAccess = async () => {
     setRequestingAccess(true)
     try {
@@ -133,7 +149,19 @@ export default function Layout({ children }: { children?: ReactNode }) {
           {userNavItems.map(({ to, icon: Icon, label }) => (
             <NavLink key={to} to={to} style={navLinkStyle}>
               <Icon size={18} />
-              {label}
+              <span style={{ flex: 1 }}>{label}</span>
+              {to === '/projects' && pendingCount > 0 && (
+                <span title={`${pendingCount} pending access request(s)`} style={{
+                  background: 'var(--accent-coral, #e07a5f)',
+                  color: '#fff',
+                  borderRadius: '999px',
+                  padding: '0 6px',
+                  fontSize: '0.6875rem',
+                  fontWeight: 600,
+                  minWidth: 18,
+                  textAlign: 'center',
+                }}>{pendingCount}</span>
+              )}
             </NavLink>
           ))}
 

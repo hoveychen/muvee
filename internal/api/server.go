@@ -64,6 +64,12 @@ type Server struct {
 	// placeholder page).
 	domainOnlyMu       sync.RWMutex
 	domainOnlyPrefixes map[string]bool
+
+	// visits buffers ForwardAuth allow events and flushes them to
+	// project_visits in batches. nil-safe: Push is a no-op on a nil
+	// recorder, so tests that construct a Server without StartBackgroundWorkers
+	// don't have to bother wiring this up.
+	visits *visitRecorder
 }
 
 type ServerConfig struct {
@@ -106,7 +112,15 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		serverVersion:      cfg.ServerVersion,
 		tunnels:            newTunnelRegistry(),
 		domainOnlyPrefixes: make(map[string]bool),
+		visits:             newVisitRecorder(st),
 	}
+}
+
+// StartBackgroundWorkers launches the server's long-running goroutines (visit
+// recorder batch flusher, etc.). Safe to skip in tests that don't exercise
+// those paths.
+func (s *Server) StartBackgroundWorkers(ctx context.Context) {
+	go s.visits.Run(ctx)
 }
 
 // refreshDomainOnlyCache replaces the in-memory set of domain_only project
@@ -162,15 +176,27 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, fmt.Errorf("invalid project_id"), 400)
 		return
 	}
-	allowed, mode, err := s.store.IsProjectAccessAllowedByEmail(r.Context(), email, projectID)
+	res, err := s.store.IsProjectAccessAllowedByEmail(r.Context(), email, projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
-	jsonOK(w, map[string]interface{}{
-		"allowed": allowed,
-		"mode":    mode,
-	})
+	resp := map[string]interface{}{
+		"allowed": res.Allowed,
+		"mode":    res.Mode,
+	}
+	if res.Allowed && !res.IsAdmin && res.UserID != uuid.Nil {
+		// Buffered batch UPSERT into project_visits; non-blocking.
+		s.visits.Push(projectID, res.UserID)
+	}
+	if !res.Allowed && res.UserID != uuid.Nil && s.baseDomain != "" {
+		// Tell muvee-authservice where to send the user to apply for access.
+		// authservice translates this into a 302 (or a meta-refresh fallback)
+		// when ForwardAuth denies the request. Empty baseDomain (test mode)
+		// suppresses the field; authservice then falls back to its 401 page.
+		resp["reject_redirect_url"] = "https://" + s.baseDomain + "/request-access?project=" + projectID.String()
+	}
+	jsonOK(w, resp)
 }
 
 // handleInternalAuthUpsert lets the standalone authservice (which terminates
@@ -387,6 +413,12 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/projects/{id}/access-users", s.listProjectAccessUsers)
 		r.Post("/api/projects/{id}/access-users", s.requireAuthorized(s.addProjectAccessUser))
 		r.Delete("/api/projects/{id}/access-users/{userId}", s.requireAuthorized(s.removeProjectAccessUser))
+		r.Get("/api/projects/{id}/visits", s.listProjectVisits)
+		r.Get("/api/projects/{id}/access-requests", s.listProjectAccessRequests)
+		r.Post("/api/projects/{id}/access-requests", s.createAccessRequest)
+		r.Get("/api/access-requests/pending", s.listPendingAccessRequestsForOwner)
+		r.Post("/api/access-requests/{id}/approve", s.requireAuthorized(s.approveAccessRequest))
+		r.Post("/api/access-requests/{id}/deny", s.requireAuthorized(s.denyAccessRequest))
 		r.Post("/api/projects/{id}/deploy", s.requireAuthorized(s.triggerDeploy))
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
 		r.Get("/api/projects/{id}/metrics", s.getProjectMetrics)
@@ -1649,6 +1681,184 @@ func (s *Server) removeProjectAccessUser(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// listProjectVisits returns recent unique visitors of a project's downstream
+// service, with allow-list membership noted per row. Visible to anyone who
+// can already see the project (owner, project_member, or platform admin).
+func (s *Server) listProjectVisits(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	visits, err := s.store.ListProjectVisits(r.Context(), id, limit)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, visits)
+}
+
+// listProjectAccessRequests returns the access-request inbox for one project.
+// Restricted to project owner / platform admin (the people who can decide).
+// Optional ?status=pending|approved|denied filters; default is pending.
+func (s *Server) listProjectAccessRequests(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	caller := auth.UserFromCtx(r.Context())
+	proj, err := s.store.GetProject(r.Context(), id)
+	if err != nil || proj == nil {
+		jsonErr(w, err, 404)
+		return
+	}
+	if caller.Role != store.UserRoleAdmin && proj.OwnerID != caller.ID {
+		jsonErr(w, fmt.Errorf("only the project owner or a system admin can view access requests"), 403)
+		return
+	}
+	statusFilter := store.ProjectAccessRequestStatus(strings.TrimSpace(r.URL.Query().Get("status")))
+	if statusFilter == "" {
+		statusFilter = store.ProjectAccessRequestPending
+	}
+	if statusFilter != store.ProjectAccessRequestPending &&
+		statusFilter != store.ProjectAccessRequestApproved &&
+		statusFilter != store.ProjectAccessRequestDenied &&
+		statusFilter != "all" {
+		jsonErr(w, fmt.Errorf("invalid status filter: %q", statusFilter), 400)
+		return
+	}
+	if statusFilter == "all" {
+		statusFilter = ""
+	}
+	reqs, err := s.store.ListAccessRequests(r.Context(), id, statusFilter)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, reqs)
+}
+
+// createAccessRequest is called by an authenticated user to request access to
+// a project's downstream service. The /request-access page POSTs here. The
+// caller must already be in the users table (i.e. have signed in once).
+// Body: {reason?}.
+func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	caller := auth.UserFromCtx(r.Context())
+	if caller == nil {
+		jsonErr(w, fmt.Errorf("authentication required"), 401)
+		return
+	}
+	proj, err := s.store.GetProject(r.Context(), id)
+	if err != nil || proj == nil {
+		jsonErr(w, err, 404)
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonErr(w, err, 400)
+			return
+		}
+	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	if len(body.Reason) > 1000 {
+		body.Reason = body.Reason[:1000]
+	}
+	req, err := s.store.CreateAccessRequest(r.Context(), id, caller.ID, body.Reason)
+	if err != nil {
+		if errors.Is(err, store.ErrAccessRequestAlreadyApproved) {
+			jsonErr(w, err, 400)
+			return
+		}
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, req)
+}
+
+// listPendingAccessRequestsForOwner returns pending requests across all
+// projects owned by the calling user. Used by the topbar badge / owner
+// dashboard. Anyone authenticated may call this; it just scopes to their
+// own projects (so non-owners get an empty list).
+func (s *Server) listPendingAccessRequestsForOwner(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	if user == nil {
+		jsonErr(w, fmt.Errorf("authentication required"), 401)
+		return
+	}
+	reqs, err := s.store.ListPendingRequestsForOwner(r.Context(), user.ID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, reqs)
+}
+
+func (s *Server) approveAccessRequest(w http.ResponseWriter, r *http.Request) {
+	s.decideAccessRequest(w, r, store.ProjectAccessRequestApproved)
+}
+
+func (s *Server) denyAccessRequest(w http.ResponseWriter, r *http.Request) {
+	s.decideAccessRequest(w, r, store.ProjectAccessRequestDenied)
+}
+
+// decideAccessRequest is the shared body of approve/deny. It looks up the
+// request, confirms the caller is the project owner (or a platform admin),
+// then transitions the row's status — approval also INSERTs into
+// project_access_users so the grant goes live immediately.
+func (s *Server) decideAccessRequest(w http.ResponseWriter, r *http.Request, decision store.ProjectAccessRequestStatus) {
+	requestID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	caller := auth.UserFromCtx(r.Context())
+	existing, err := s.store.GetAccessRequest(r.Context(), requestID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if existing == nil {
+		jsonErr(w, nil, 404)
+		return
+	}
+	proj, err := s.store.GetProject(r.Context(), existing.ProjectID)
+	if err != nil || proj == nil {
+		jsonErr(w, err, 404)
+		return
+	}
+	if caller.Role != store.UserRoleAdmin && proj.OwnerID != caller.ID {
+		jsonErr(w, fmt.Errorf("only the project owner or a system admin can decide this request"), 403)
+		return
+	}
+	updated, err := s.store.DecideAccessRequest(r.Context(), requestID, decision, caller.ID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if updated == nil {
+		jsonErr(w, nil, 404)
+		return
+	}
+	jsonOK(w, updated)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {

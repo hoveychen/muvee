@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Node as DeployNode, Project, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
@@ -1288,6 +1288,8 @@ function UsersTab({ projectId, form, onChange, onSave, saving, saveError, ownerN
       </div>
 
       <ProjectAccessUsersPanel projectId={projectId} disabled={!isPrivate} />
+      <PendingRequestsPanel projectId={projectId} />
+      <RecentVisitorsPanel projectId={projectId} isPrivate={isPrivate} />
     </div>
   )
 }
@@ -1405,6 +1407,167 @@ function ProjectAccessUsersPanel({ projectId, disabled }: { projectId: string; d
               >
                 Remove
               </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function PendingRequestsPanel({ projectId }: { projectId: string }) {
+  const [reqs, setReqs] = useState<ProjectAccessRequest[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [hidden, setHidden] = useState(false)
+
+  const refresh = () => {
+    api.projects.accessRequests(projectId, 'pending')
+      .then(setReqs)
+      .catch(e => {
+        // 403 from non-owner non-admin viewers — silently hide the panel.
+        if (/403|forbidden/i.test(e.message)) {
+          setHidden(true)
+        } else {
+          setError(e.message)
+        }
+      })
+  }
+  useEffect(refresh, [projectId])
+
+  const decide = async (id: string, decision: 'approve' | 'deny') => {
+    setBusy(true)
+    setError(null)
+    try {
+      if (decision === 'approve') await api.accessRequests.approve(id)
+      else await api.accessRequests.deny(id)
+      setReqs(prev => prev.filter(r => r.id !== id))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (hidden) return null
+  if (reqs.length === 0 && !error) return null
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+      <label className="form-label">Pending access requests</label>
+      <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
+        Users who hit the deny page asked for access. Approve to add them to the allow-list immediately.
+      </p>
+      {error && <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginBottom: '0.5rem' }}>{error}</p>}
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        {reqs.map(r => (
+          <li key={r.id} style={{
+            padding: '0.5rem 0.6rem',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+            marginBottom: '0.35rem',
+            background: 'var(--bg-elevated)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+                {r.user_avatar_url
+                  ? <img src={r.user_avatar_url} alt="" style={{ width: 24, height: 24, borderRadius: '50%' }} />
+                  : <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--border)' }} />}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>{r.user_name || r.user_email}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>{r.user_email}</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                <button type="button" className="btn-primary" disabled={busy}
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
+                  onClick={() => decide(r.id, 'approve')}>Approve</button>
+                <button type="button" className="btn-secondary" disabled={busy}
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
+                  onClick={() => decide(r.id, 'deny')}>Deny</button>
+              </div>
+            </div>
+            {r.reason && (
+              <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '0.4rem', fontStyle: 'italic' }}>
+                "{r.reason}"
+              </p>
+            )}
+            <p style={{ fontSize: '0.7rem', color: 'var(--fg-muted)', marginTop: '0.2rem' }}>
+              Requested {timeAgo(r.requested_at)}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function RecentVisitorsPanel({ projectId, isPrivate }: { projectId: string; isPrivate: boolean }) {
+  const [visits, setVisits] = useState<ProjectVisit[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const refresh = () => {
+    api.projects.visits(projectId)
+      .then(setVisits)
+      .catch(e => setError(e.message))
+  }
+  useEffect(refresh, [projectId])
+
+  const allow = async (userEmail: string, userId: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.projects.addAccessUser(projectId, userEmail)
+      setVisits(prev => prev.map(v => v.user_id === userId ? { ...v, in_allow_list: true } : v))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+      <label className="form-label">Recent visitors</label>
+      <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
+        Unique users who reached the deployed service.
+        {isPrivate && ' Add anyone here directly to the allow-list.'}
+      </p>
+      {error && <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginBottom: '0.5rem' }}>{error}</p>}
+      {visits.length === 0 ? (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', fontStyle: 'italic' }}>
+          No visitors recorded yet.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {visits.map(v => (
+            <li key={v.user_id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '0.5rem 0.6rem', borderRadius: '6px',
+              border: '1px solid var(--border)', marginBottom: '0.35rem',
+              background: 'var(--bg-elevated)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+                {v.avatar_url
+                  ? <img src={v.avatar_url} alt="" style={{ width: 24, height: 24, borderRadius: '50%' }} />
+                  : <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--border)' }} />}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>{v.name || v.email}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>
+                    {v.email} · {v.visit_count} visits · last {timeAgo(v.last_seen_at)}
+                  </div>
+                </div>
+              </div>
+              {isPrivate && (
+                v.in_allow_list ? (
+                  <span style={{ fontSize: '0.7rem', color: 'var(--fg-muted)' }}>Allowed</span>
+                ) : (
+                  <button type="button" className="btn-secondary" disabled={busy}
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
+                    onClick={() => allow(v.email, v.user_id)}>Allow</button>
+                )
+              )}
             </li>
           ))}
         </ul>

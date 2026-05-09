@@ -124,6 +124,7 @@ func runServer() {
 		ServerVersion:      version,
 	})
 	handler := srv.TunnelAwareHandler(mountFrontend(srv.Router()))
+	srv.StartBackgroundWorkers(ctx)
 
 	sched.SetImageWatchConfig(gitRepoBasePath, registryAddr, os.Getenv("REGISTRY_USER"), os.Getenv("REGISTRY_PASSWORD"))
 

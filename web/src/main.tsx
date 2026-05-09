@@ -19,6 +19,7 @@ import SettingsProfilePage from './pages/SettingsProfile'
 import OnboardPage from './pages/Onboard'
 import AdminSettingsPage from './pages/AdminSettings'
 import TunnelsPage from './pages/Tunnels'
+import RequestAccessPage from './pages/RequestAccess'
 import Layout, { NodesPage, UsersPage } from './components/Layout'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -53,6 +54,7 @@ function App() {
           <Route path="/" element={<RootRedirect />} />
           {/* Onboarding – requires auth but bypasses the normal layout */}
           <Route path="/onboard" element={<RequireAuth><OnboardPage /></RequireAuth>} />
+          <Route path="/request-access" element={<RequestAccessPage />} />
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route path="/portal" element={<PortalPage />} />
             <Route path="/projects" element={<Projects />} />

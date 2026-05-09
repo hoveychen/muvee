@@ -75,6 +75,36 @@ export interface ProjectAccessUser {
   avatar_url: string
 }
 
+export interface ProjectVisit {
+  project_id: string
+  user_id: string
+  first_seen_at: string
+  last_seen_at: string
+  visit_count: number
+  email: string
+  name: string
+  avatar_url: string
+  in_allow_list: boolean
+}
+
+export type ProjectAccessRequestStatus = 'pending' | 'approved' | 'denied'
+
+export interface ProjectAccessRequest {
+  id: string
+  project_id: string
+  user_id: string
+  reason: string
+  status: ProjectAccessRequestStatus
+  requested_at: string
+  decided_at?: string
+  decided_by?: string
+  user_email?: string
+  user_name?: string
+  user_avatar_url?: string
+  project_name?: string
+  project_domain_prefix?: string
+}
+
 export interface RepoTreeEntry {
   name: string
   type: 'blob' | 'tree'

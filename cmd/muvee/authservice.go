@@ -140,13 +140,20 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if projectID := r.URL.Query().Get("project_id"); projectID != "" {
-		allowed, err := checkProjectAccess(r.Context(), projectID, claims.Email)
+		check, err := checkProjectAccess(r.Context(), projectID, claims.Email)
 		if err != nil {
 			log.Printf("authservice: access check (project=%s email=%s): %v", projectID, claims.Email, err)
 			http.Error(w, "access check failed", http.StatusBadGateway)
 			return
 		}
-		if !allowed {
+		if !check.Allowed {
+			// If muvee-server pointed us at /request-access, send the user
+			// there via a 302 (Traefik ForwardAuth transparently forwards
+			// redirects). Otherwise fall back to a plain 403.
+			if check.RejectRedirectURL != "" {
+				http.Redirect(w, r, check.RejectRedirectURL, http.StatusFound)
+				return
+			}
 			http.Error(w, "access denied: not a member of this project", http.StatusForbidden)
 			return
 		}
@@ -193,36 +200,44 @@ func upsertUserUpstream(ctx context.Context, providerName, email, name, avatarUR
 	return fmt.Errorf("upstream identity upsert returned %d", resp.StatusCode)
 }
 
+// accessCheckResult is the structured result from muvee-server's
+// /api/internal/access/check endpoint. RejectRedirectURL is non-empty only
+// when the user was denied AND the server has somewhere meaningful to send
+// them (the platform's /request-access page); when set, ForwardAuth issues
+// a 302 instead of a 403 so the user lands on the request-access form.
+type accessCheckResult struct {
+	Allowed           bool   `json:"allowed"`
+	Mode              string `json:"mode"`
+	RejectRedirectURL string `json:"reject_redirect_url"`
+}
+
 // checkProjectAccess asks muvee-server whether the given email is permitted to
 // reach the project's downstream service. Public projects always return true;
 // private projects consult the per-project allow-list. Errors are propagated to
 // the caller so the proxy can fail closed (502) rather than silently allow.
-func checkProjectAccess(ctx context.Context, projectID, email string) (bool, error) {
+func checkProjectAccess(ctx context.Context, projectID, email string) (accessCheckResult, error) {
 	q := url.Values{}
 	q.Set("project_id", projectID)
 	q.Set("email", email)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		muveeServerURL+"/api/internal/access/check?"+q.Encode(), nil)
 	if err != nil {
-		return false, err
+		return accessCheckResult{}, err
 	}
 	req.Header.Set("X-Muvee-Internal-Key", internalKey)
 	resp, err := internalClient.Do(req)
 	if err != nil {
-		return false, err
+		return accessCheckResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("internal access check returned %d", resp.StatusCode)
+		return accessCheckResult{}, fmt.Errorf("internal access check returned %d", resp.StatusCode)
 	}
-	var body struct {
-		Allowed bool   `json:"allowed"`
-		Mode    string `json:"mode"`
-	}
+	var body accessCheckResult
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return false, err
+		return accessCheckResult{}, err
 	}
-	return body.Allowed, nil
+	return body, nil
 }
 
 // handleVerifyAdmin is the Traefik ForwardAuth endpoint restricted to admin emails.

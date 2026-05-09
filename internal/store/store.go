@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -662,45 +663,333 @@ func (s *Store) RemoveProjectAccessUser(ctx context.Context, projectID, userID u
 	return err
 }
 
+// AccessCheckResult is the full outcome of IsProjectAccessAllowedByEmail.
+// Mode is the project's access_mode (or "" if the user / project lookup
+// failed before reaching the project row). UserID is the looked-up user's
+// id when the lookup succeeded — even when Allowed is false, callers can
+// use it to record visit attempts or correlate logs. IsAdmin is true when
+// the user holds the platform admin role.
+type AccessCheckResult struct {
+	Allowed bool
+	Mode    string
+	UserID  uuid.UUID
+	IsAdmin bool
+}
+
 // IsProjectAccessAllowedByEmail decides whether a user (looked up by email)
 // is permitted to reach the project's downstream service via Traefik
 // ForwardAuth. Allow rules: admin users always pass; public projects pass any
 // registered user; private projects only pass the owner or users explicitly
-// listed in project_access_users. Returns the project's access_mode alongside
-// for logging purposes. Empty mode means lookup did not reach the project row.
-func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string, projectID uuid.UUID) (bool, string, error) {
-	var userID uuid.UUID
+// listed in project_access_users.
+func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string, projectID uuid.UUID) (AccessCheckResult, error) {
+	var res AccessCheckResult
 	var role UserRole
-	err := s.db.QueryRow(ctx, `SELECT id, role FROM users WHERE email = $1`, email).Scan(&userID, &role)
+	err := s.db.QueryRow(ctx, `SELECT id, role FROM users WHERE email = $1`, email).Scan(&res.UserID, &role)
 	if err == pgx.ErrNoRows {
-		return false, "", nil
+		return res, nil
 	}
 	if err != nil {
-		return false, "", err
+		return res, err
 	}
-	if role == UserRoleAdmin {
-		return true, "", nil
+	res.IsAdmin = role == UserRoleAdmin
+	if res.IsAdmin {
+		res.Allowed = true
+		return res, nil
 	}
-	var mode string
 	var ownerID uuid.UUID
-	err = s.db.QueryRow(ctx, `SELECT access_mode, owner_id FROM projects WHERE id = $1`, projectID).Scan(&mode, &ownerID)
+	err = s.db.QueryRow(ctx, `SELECT access_mode, owner_id FROM projects WHERE id = $1`, projectID).Scan(&res.Mode, &ownerID)
 	if err == pgx.ErrNoRows {
-		return false, "", nil
+		return res, nil
 	}
 	if err != nil {
-		return false, "", err
+		return res, err
 	}
-	if mode == ProjectAccessModePublic {
-		return true, mode, nil
+	if res.Mode == ProjectAccessModePublic {
+		res.Allowed = true
+		return res, nil
 	}
-	if ownerID == userID {
-		return true, mode, nil
+	if ownerID == res.UserID {
+		res.Allowed = true
+		return res, nil
 	}
 	var n int
-	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM project_access_users WHERE project_id=$1 AND user_id=$2`, projectID, userID).Scan(&n); err != nil {
-		return false, mode, err
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM project_access_users WHERE project_id=$1 AND user_id=$2`, projectID, res.UserID).Scan(&n); err != nil {
+		return res, err
 	}
-	return n > 0, mode, nil
+	res.Allowed = n > 0
+	return res, nil
+}
+
+// ─── Project Visits (downstream service hit counter) ─────────────────────────
+
+// RecordProjectVisitsBatch UPSERTs a batch of (project, user, seen_at) tuples
+// into project_visits in a single round-trip. visit_count is incremented and
+// last_seen_at is bumped to the maximum of the existing value and the new
+// sample (so out-of-order arrivals from a buffered channel can't move it
+// backwards). first_seen_at is set on insert and never updated.
+//
+// items[i].VisitCount is interpreted as the number of hits to add (typically
+// 1, but a debounced channel may aggregate). Other display fields on
+// ProjectVisit (Email/Name/etc) are ignored — this method writes raw counters
+// only.
+func (s *Store) RecordProjectVisitsBatch(ctx context.Context, items []ProjectVisit) error {
+	if len(items) == 0 {
+		return nil
+	}
+	const cols = 4
+	args := make([]interface{}, 0, len(items)*cols)
+	values := make([]string, 0, len(items))
+	for i, v := range items {
+		base := i*cols + 1
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d)", base, base+1, base+2, base+3))
+		incr := v.VisitCount
+		if incr <= 0 {
+			incr = 1
+		}
+		args = append(args, v.ProjectID, v.UserID, v.LastSeenAt, incr)
+	}
+	query := `
+		INSERT INTO project_visits (project_id, user_id, last_seen_at, visit_count)
+		VALUES ` + strings.Join(values, ", ") + `
+		ON CONFLICT (project_id, user_id) DO UPDATE
+		SET last_seen_at = GREATEST(project_visits.last_seen_at, EXCLUDED.last_seen_at),
+		    visit_count  = project_visits.visit_count + EXCLUDED.visit_count`
+	_, err := s.db.Exec(ctx, query, args...)
+	return err
+}
+
+// ListProjectVisits returns recent unique visitors of a project, joined with
+// users for display and LEFT-joined with project_access_users to mark whether
+// each visitor is in the allow-list (so the UI can hide / show the
+// "add to allow-list" button per row).
+func (s *Store) ListProjectVisits(ctx context.Context, projectID uuid.UUID, limit int) ([]*ProjectVisit, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT pv.project_id, pv.user_id, pv.first_seen_at, pv.last_seen_at, pv.visit_count,
+		       u.email, u.name, u.avatar_url,
+		       (pau.user_id IS NOT NULL) AS in_allow_list
+		FROM project_visits pv
+		JOIN users u ON u.id = pv.user_id
+		LEFT JOIN project_access_users pau
+		  ON pau.project_id = pv.project_id AND pau.user_id = pv.user_id
+		WHERE pv.project_id = $1
+		ORDER BY pv.last_seen_at DESC
+		LIMIT $2
+	`, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*ProjectVisit, 0)
+	for rows.Next() {
+		var v ProjectVisit
+		if err := rows.Scan(&v.ProjectID, &v.UserID, &v.FirstSeenAt, &v.LastSeenAt, &v.VisitCount,
+			&v.Email, &v.Name, &v.AvatarURL, &v.InAllowList); err != nil {
+			return nil, err
+		}
+		out = append(out, &v)
+	}
+	return out, nil
+}
+
+// ─── Project Access Requests (private-project request inbox) ─────────────────
+
+// ErrAccessRequestAlreadyApproved is returned by CreateAccessRequest when the
+// user is already in project_access_users for the project (so a request would
+// be redundant). Callers translate this to a 400 with a friendly message.
+var ErrAccessRequestAlreadyApproved = errors.New("user already has access to this project")
+
+// CreateAccessRequest inserts a pending request, or returns the existing
+// pending row if one already exists for the same (project, user). If the
+// user is already in project_access_users, returns ErrAccessRequestAlreadyApproved
+// without inserting (the partial unique index would have allowed the insert,
+// but it's a useless row).
+func (s *Store) CreateAccessRequest(ctx context.Context, projectID, userID uuid.UUID, reason string) (*ProjectAccessRequest, error) {
+	var alreadyAllowed bool
+	if err := s.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM project_access_users WHERE project_id=$1 AND user_id=$2)`,
+		projectID, userID).Scan(&alreadyAllowed); err != nil {
+		return nil, err
+	}
+	if alreadyAllowed {
+		return nil, ErrAccessRequestAlreadyApproved
+	}
+	var ownerID uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT owner_id FROM projects WHERE id=$1`, projectID).Scan(&ownerID); err != nil {
+		return nil, err
+	}
+	if ownerID == userID {
+		return nil, ErrAccessRequestAlreadyApproved
+	}
+	var existingID uuid.UUID
+	err := s.db.QueryRow(ctx,
+		`SELECT id FROM project_access_requests WHERE project_id=$1 AND user_id=$2 AND status='pending'`,
+		projectID, userID).Scan(&existingID)
+	if err == nil {
+		// Reuse: bump reason if the new submission has a non-empty reason.
+		if strings.TrimSpace(reason) != "" {
+			if _, err := s.db.Exec(ctx,
+				`UPDATE project_access_requests SET reason=$1, requested_at=NOW() WHERE id=$2`,
+				reason, existingID); err != nil {
+				return nil, err
+			}
+		}
+		return s.GetAccessRequest(ctx, existingID)
+	}
+	if err != pgx.ErrNoRows {
+		return nil, err
+	}
+	var req ProjectAccessRequest
+	err = s.db.QueryRow(ctx, `
+		INSERT INTO project_access_requests (project_id, user_id, reason, status, requested_at)
+		VALUES ($1, $2, $3, 'pending', NOW())
+		RETURNING id, project_id, user_id, reason, status, requested_at, decided_at, decided_by
+	`, projectID, userID, reason).Scan(&req.ID, &req.ProjectID, &req.UserID, &req.Reason, &req.Status,
+		&req.RequestedAt, &req.DecidedAt, &req.DecidedBy)
+	if err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
+// GetAccessRequest fetches a single request by id, joined with the requesting
+// user for display.
+func (s *Store) GetAccessRequest(ctx context.Context, id uuid.UUID) (*ProjectAccessRequest, error) {
+	var req ProjectAccessRequest
+	err := s.db.QueryRow(ctx, `
+		SELECT r.id, r.project_id, r.user_id, r.reason, r.status, r.requested_at, r.decided_at, r.decided_by,
+		       u.email, u.name, u.avatar_url
+		FROM project_access_requests r
+		JOIN users u ON u.id = r.user_id
+		WHERE r.id = $1
+	`, id).Scan(&req.ID, &req.ProjectID, &req.UserID, &req.Reason, &req.Status,
+		&req.RequestedAt, &req.DecidedAt, &req.DecidedBy,
+		&req.UserEmail, &req.UserName, &req.UserAvatarURL)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
+// ListAccessRequests returns requests for a project. statusFilter == "" means
+// all statuses; otherwise pass one of pending/approved/denied to filter.
+func (s *Store) ListAccessRequests(ctx context.Context, projectID uuid.UUID, statusFilter ProjectAccessRequestStatus) ([]*ProjectAccessRequest, error) {
+	query := `
+		SELECT r.id, r.project_id, r.user_id, r.reason, r.status, r.requested_at, r.decided_at, r.decided_by,
+		       u.email, u.name, u.avatar_url
+		FROM project_access_requests r
+		JOIN users u ON u.id = r.user_id
+		WHERE r.project_id = $1`
+	args := []interface{}{projectID}
+	if statusFilter != "" {
+		query += ` AND r.status = $2`
+		args = append(args, statusFilter)
+	}
+	query += ` ORDER BY r.requested_at DESC`
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*ProjectAccessRequest, 0)
+	for rows.Next() {
+		var r ProjectAccessRequest
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.UserID, &r.Reason, &r.Status,
+			&r.RequestedAt, &r.DecidedAt, &r.DecidedBy,
+			&r.UserEmail, &r.UserName, &r.UserAvatarURL); err != nil {
+			return nil, err
+		}
+		out = append(out, &r)
+	}
+	return out, nil
+}
+
+// ListPendingRequestsForOwner returns pending requests across all projects
+// owned by the given user, joined with project display fields. Used by the
+// owner-dashboard / topbar badge.
+func (s *Store) ListPendingRequestsForOwner(ctx context.Context, ownerID uuid.UUID) ([]*ProjectAccessRequest, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT r.id, r.project_id, r.user_id, r.reason, r.status, r.requested_at, r.decided_at, r.decided_by,
+		       u.email, u.name, u.avatar_url,
+		       p.name, p.domain_prefix
+		FROM project_access_requests r
+		JOIN projects p ON p.id = r.project_id
+		JOIN users    u ON u.id = r.user_id
+		WHERE p.owner_id = $1 AND r.status = 'pending'
+		ORDER BY r.requested_at DESC
+	`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*ProjectAccessRequest, 0)
+	for rows.Next() {
+		var r ProjectAccessRequest
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.UserID, &r.Reason, &r.Status,
+			&r.RequestedAt, &r.DecidedAt, &r.DecidedBy,
+			&r.UserEmail, &r.UserName, &r.UserAvatarURL,
+			&r.ProjectName, &r.ProjectDomainPrefix); err != nil {
+			return nil, err
+		}
+		out = append(out, &r)
+	}
+	return out, nil
+}
+
+// DecideAccessRequest moves a pending request to approved or denied. When
+// approving, the user is INSERTed into project_access_users in the same
+// transaction so the grant goes live atomically. Returns the updated request.
+// Returns nil, nil if the request id does not exist or has already been decided.
+func (s *Store) DecideAccessRequest(ctx context.Context, requestID uuid.UUID, status ProjectAccessRequestStatus, decidedBy uuid.UUID) (*ProjectAccessRequest, error) {
+	if status != ProjectAccessRequestApproved && status != ProjectAccessRequestDenied {
+		return nil, fmt.Errorf("invalid decision status: %q", status)
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var projectID, userID uuid.UUID
+	var curStatus ProjectAccessRequestStatus
+	err = tx.QueryRow(ctx,
+		`SELECT project_id, user_id, status FROM project_access_requests WHERE id=$1 FOR UPDATE`,
+		requestID).Scan(&projectID, &userID, &curStatus)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if curStatus != ProjectAccessRequestPending {
+		// Already decided — refuse to change. Return the current row so the
+		// caller can surface a clear "already decided" message.
+		return s.GetAccessRequest(ctx, requestID)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE project_access_requests
+		SET status=$1, decided_at=NOW(), decided_by=$2
+		WHERE id=$3
+	`, status, decidedBy, requestID); err != nil {
+		return nil, err
+	}
+	if status == ProjectAccessRequestApproved {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO project_access_users (project_id, user_id, added_by, added_at)
+			VALUES ($1, $2, $3, NOW())
+			ON CONFLICT (project_id, user_id) DO NOTHING
+		`, projectID, userID, decidedBy); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.GetAccessRequest(ctx, requestID)
 }
 
 // ─── Project Datasets ────────────────────────────────────────────────────────

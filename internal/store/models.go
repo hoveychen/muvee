@@ -175,6 +175,58 @@ type DatasetMember struct {
 	UserID    uuid.UUID `db:"user_id"`
 }
 
+// ProjectVisit is a per-(project, user) counter of ForwardAuth allow
+// decisions, used to give project owners visibility into who has been hitting
+// their downstream service. Updated by the in-process visit recorder
+// (see internal/api/visit_recorder.go) on every allow decision; not a
+// per-request audit log.
+type ProjectVisit struct {
+	ProjectID    uuid.UUID `db:"project_id"     json:"project_id"`
+	UserID       uuid.UUID `db:"user_id"        json:"user_id"`
+	FirstSeenAt  time.Time `db:"first_seen_at"  json:"first_seen_at"`
+	LastSeenAt   time.Time `db:"last_seen_at"   json:"last_seen_at"`
+	VisitCount   int64     `db:"visit_count"    json:"visit_count"`
+	// Joined display fields, populated by ListProjectVisits via JOIN users.
+	Email     string `db:"email"      json:"email"`
+	Name      string `db:"name"       json:"name"`
+	AvatarURL string `db:"avatar_url" json:"avatar_url"`
+	// InAllowList is TRUE when this user is in project_access_users for the
+	// same project. The UI uses this to show / hide a one-click "add to
+	// allow-list" button.
+	InAllowList bool `db:"in_allow_list" json:"in_allow_list"`
+}
+
+type ProjectAccessRequestStatus string
+
+const (
+	ProjectAccessRequestPending  ProjectAccessRequestStatus = "pending"
+	ProjectAccessRequestApproved ProjectAccessRequestStatus = "approved"
+	ProjectAccessRequestDenied   ProjectAccessRequestStatus = "denied"
+)
+
+// ProjectAccessRequest is a user's request to be added to a private project's
+// allow-list. Created by the user from the /request-access page; decided by
+// the project owner (or a platform admin). Approval is a transactional
+// INSERT into project_access_users, so the actual grant lives in one place.
+type ProjectAccessRequest struct {
+	ID           uuid.UUID                  `db:"id"            json:"id"`
+	ProjectID    uuid.UUID                  `db:"project_id"    json:"project_id"`
+	UserID       uuid.UUID                  `db:"user_id"       json:"user_id"`
+	Reason       string                     `db:"reason"        json:"reason"`
+	Status       ProjectAccessRequestStatus `db:"status"        json:"status"`
+	RequestedAt  time.Time                  `db:"requested_at"  json:"requested_at"`
+	DecidedAt    *time.Time                 `db:"decided_at"    json:"decided_at,omitempty"`
+	DecidedBy    *uuid.UUID                 `db:"decided_by"    json:"decided_by,omitempty"`
+	// Joined user display fields, populated by list helpers via JOIN users.
+	UserEmail     string `db:"user_email"      json:"user_email,omitempty"`
+	UserName      string `db:"user_name"       json:"user_name,omitempty"`
+	UserAvatarURL string `db:"user_avatar_url" json:"user_avatar_url,omitempty"`
+	// Joined project display fields, populated by ListPendingRequestsForOwner
+	// (the owner-dashboard view, where requests for several projects are mixed).
+	ProjectName         string `db:"project_name"          json:"project_name,omitempty"`
+	ProjectDomainPrefix string `db:"project_domain_prefix" json:"project_domain_prefix,omitempty"`
+}
+
 type DeploymentStatus string
 
 const (

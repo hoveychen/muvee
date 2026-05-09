@@ -95,6 +95,28 @@ export const api = {
       }),
     removeAccessUser: (id: string, userId: string) =>
       request(`/api/projects/${id}/access-users/${userId}`, { method: 'DELETE' }),
+
+    // Per-project visit log (recent unique visitors of the downstream service).
+    visits: (id: string, limit = 100) =>
+      request<import('./types').ProjectVisit[]>(`/api/projects/${id}/visits?limit=${limit}`),
+
+    // Access requests (private-project request inbox).
+    accessRequests: (id: string, status: 'pending' | 'approved' | 'denied' | 'all' = 'pending') =>
+      request<import('./types').ProjectAccessRequest[]>(`/api/projects/${id}/access-requests?status=${status}`),
+    submitAccessRequest: (id: string, reason?: string) =>
+      request<import('./types').ProjectAccessRequest>(`/api/projects/${id}/access-requests`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: reason ?? '' }),
+      }),
+  },
+
+  accessRequests: {
+    pendingForOwner: () =>
+      request<import('./types').ProjectAccessRequest[]>('/api/access-requests/pending'),
+    approve: (id: string) =>
+      request<import('./types').ProjectAccessRequest>(`/api/access-requests/${id}/approve`, { method: 'POST' }),
+    deny: (id: string) =>
+      request<import('./types').ProjectAccessRequest>(`/api/access-requests/${id}/deny`, { method: 'POST' }),
   },
 
   datasets: {
