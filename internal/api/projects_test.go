@@ -474,22 +474,81 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	// OAuth-bypass router should also exist for auth-protected deployments: it
 	// must cover the whole /_oauth namespace so logout / userinfo / device flow
 	// all reach the authservice on project subdomains.
-	dfRouter, ok := cfg.HTTP.Routers["myapp-device-flow"]
-	if !ok {
+	if _, ok := cfg.HTTP.Routers["myapp-device-flow"]; !ok {
 		t.Fatal("oauth-bypass router myapp-device-flow not found — addDeviceFlowRouter was not called for auth-protected deployment")
 	}
-	wantDFRule := "Host(`myapp.example.com`) && PathPrefix(`/_oauth`)"
-	if dfRouter.Rule != wantDFRule {
-		t.Errorf("oauth-bypass rule = %q, want %q", dfRouter.Rule, wantDFRule)
+}
+
+// TestTraefikConfig_DeviceFlowRouter_PublicProject locks in the fact that
+// /_oauth/* must route to authservice on EVERY project subdomain, not only
+// auth-protected ones. The @muvee/auth SDK calls /_oauth/providers and
+// /_oauth/login-token relative to the project host; if those paths fall
+// through to the project's own backend (nginx serving a SPA, in the demo's
+// case), the SDK gets HTML instead of JSON and sign-in is broken.
+//
+// Red-light evidence before the fix: `curl
+// https://auth-sdk-demo.muveeai.com/_oauth/providers` returned the demo's
+// index.html via nginx's SPA fallback because Traefik had no /_oauth router
+// registered for the public deployment. This test mirrors the handler's
+// post-fix structure (addDeviceFlowRouter called unconditionally) so a future
+// regression that nests the call back under `if needsForwardAuth` fails here.
+func TestTraefikConfig_DeviceFlowRouter_PublicProject(t *testing.T) {
+	s := &Server{
+		baseDomain:     "example.com",
+		authServiceURL: "http://authservice:4181",
+	}
+	dep := &store.RunningDeploymentInfo{
+		DomainPrefix: "auth-sdk-demo",
+		AuthRequired: false,
+		AccessMode:   store.ProjectAccessModePublic,
+		HostIP:       "10.0.0.1",
+		HostPort:     8080,
+	}
+
+	cfg := traefikDynamicConfig{
+		HTTP: traefikHTTP{
+			Routers:  make(map[string]traefikRouter),
+			Services: make(map[string]traefikService),
+		},
+	}
+	name := dep.DomainPrefix
+	host := fmt.Sprintf("%s.%s", dep.DomainPrefix, s.baseDomain)
+
+	httpsRouter := traefikRouter{
+		Rule:        fmt.Sprintf("Host(`%s`)", host),
+		EntryPoints: []string{"websecure"},
+		Service:     name,
+		TLS: &traefikTLS{
+			CertResolver: "letsencrypt",
+			Domains:      []traefikTLSDomain{{Main: host}},
+		},
+	}
+
+	// Post-fix invariant: addDeviceFlowRouter runs regardless of auth mode.
+	needsForwardAuth := dep.AuthRequired || dep.AccessMode == store.ProjectAccessModePrivate
+	if needsForwardAuth {
+		t.Fatalf("test setup error: needsForwardAuth should be false for a public + auth_required=false deployment")
+	}
+	addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
+
+	cfg.HTTP.Routers[name] = httpsRouter
+
+	dfRouter, ok := cfg.HTTP.Routers["auth-sdk-demo-device-flow"]
+	if !ok {
+		t.Fatal("device-flow router not found on public project — @muvee/auth SDK would 404 on /_oauth/providers")
+	}
+	wantRule := "Host(`auth-sdk-demo.example.com`) && PathPrefix(`/_oauth`)"
+	if dfRouter.Rule != wantRule {
+		t.Errorf("device-flow rule = %q, want %q", dfRouter.Rule, wantRule)
 	}
 	if dfRouter.Service != deviceFlowServiceName {
-		t.Errorf("oauth-bypass service = %q, want %q", dfRouter.Service, deviceFlowServiceName)
+		t.Errorf("device-flow service = %q, want %q", dfRouter.Service, deviceFlowServiceName)
 	}
 	if dfRouter.Priority < 200 {
-		t.Errorf("oauth-bypass priority should be >= 200, got %d", dfRouter.Priority)
+		t.Errorf("device-flow priority should be >= 200, got %d", dfRouter.Priority)
 	}
 	if len(dfRouter.Middlewares) != 0 {
-		t.Errorf("oauth-bypass router should have NO middlewares (bypasses ForwardAuth), got %v", dfRouter.Middlewares)
+		t.Errorf("device-flow router should have NO middlewares (bypasses ForwardAuth), got %v", dfRouter.Middlewares)
 	}
 }
 

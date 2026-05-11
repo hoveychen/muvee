@@ -3466,10 +3466,15 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			if dep.AuthBypassPaths != "" {
 				addBypassRouters(&cfg, name, host, httpsRouter.TLS, dep.AuthBypassPaths)
 			}
-
-			// Expose /_oauth/device/* on this subdomain for CLI device-flow auth.
-			addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
 		}
+
+		// Expose the /_oauth/* namespace on EVERY project subdomain so the
+		// @muvee/auth SDK can call /_oauth/providers, /_oauth/login-token,
+		// /_oauth/userinfo, etc. relative to the project host. Public projects
+		// without ForwardAuth need this just as much — without it Traefik
+		// falls through to the project's own backend (e.g. an nginx SPA), the
+		// SDK sees HTML instead of JSON, and sign-in is broken.
+		addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
 
 		attachEmbedBridge(&httpsRouter)
 		cfg.HTTP.Routers[name] = httpsRouter
@@ -3535,10 +3540,12 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				if hasProj && proj.AuthBypassPaths != "" {
 					addBypassRouters(&cfg, name, host, router.TLS, proj.AuthBypassPaths)
 				}
-
-				// Expose /_oauth/device/* on this subdomain for CLI device-flow auth.
-				addDeviceFlowRouter(&cfg, name, host, router.TLS)
 			}
+
+			// /_oauth/* always routes to authservice — applies even to
+			// public, no-auth tunnels so the SDK can call /_oauth/providers
+			// etc. from a project's frontend.
+			addDeviceFlowRouter(&cfg, name, host, router.TLS)
 
 			attachEmbedBridge(&router)
 			cfg.HTTP.Routers[name] = router
@@ -3599,10 +3606,11 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				if p.AuthBypassPaths != "" {
 					addBypassRouters(&cfg, name, host, domainRouter.TLS, p.AuthBypassPaths)
 				}
-
-				// Expose /_oauth/device/* on this subdomain for CLI device-flow auth.
-				addDeviceFlowRouter(&cfg, name, host, domainRouter.TLS)
 			}
+
+			// /_oauth/* always routes to authservice — public domain-only
+			// projects with a connected tunnel still need it for SDK calls.
+			addDeviceFlowRouter(&cfg, name, host, domainRouter.TLS)
 
 			attachEmbedBridge(&domainRouter)
 			cfg.HTTP.Routers[name] = domainRouter
