@@ -28,6 +28,17 @@ type User struct {
 	AvatarOverridden bool `db:"avatar_overridden" json:"avatar_overridden"`
 }
 
+// OAuthAccount binds a (provider, provider_user_id) tuple from an external
+// identity provider to a local users.id. Created by EnsureUserByOAuth on
+// first sign-in for social providers (Discord / Apple / Facebook / Twitter)
+// where the IdP may not surface an email.
+type OAuthAccount struct {
+	Provider       string    `db:"provider"         json:"provider"`
+	ProviderUserID string    `db:"provider_user_id" json:"provider_user_id"`
+	UserID         uuid.UUID `db:"user_id"          json:"user_id"`
+	CreatedAt      time.Time `db:"created_at"       json:"created_at"`
+}
+
 // PlatformMember records a user's authorization to use the muvee admin plane
 // (the "muvee platform" itself, as distinct from any project deployed on it).
 // Subdomain auth users land in `users` for identity but not here, unless they

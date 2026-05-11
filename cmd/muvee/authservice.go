@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,15 +34,125 @@ type authClaims struct {
 }
 
 var (
-	fwdProviders   map[string]auth.Provider
-	jwtSecret      []byte
-	adminEmails    map[string]struct{}
-	cookieDomain   string
-	forwardAuthBase string // e.g. "https://example.com"
-	muveeServerURL string // internal URL for /api/internal/access/check
-	internalKey    string // sha256(JWT_SECRET) — shared with muvee-server
-	internalClient = &http.Client{Timeout: 5 * time.Second}
+	// fwdProvidersAtomic is the source-of-truth for the active provider set.
+	// Replaced atomically by reloadProviders so /_oauth/internal/reload can
+	// pick up social-provider config changes without restarting the
+	// container. Read via the providers() accessor; never read the pointer
+	// field directly.
+	fwdProvidersAtomic atomic.Pointer[map[string]auth.Provider]
+	jwtSecret          []byte
+	adminEmails        map[string]struct{}
+	cookieDomain       string
+	forwardAuthBase    string // e.g. "https://example.com"
+	muveeServerURL     string // internal URL for /api/internal/access/check
+	internalKey        string // sha256(JWT_SECRET) — shared with muvee-server
+	internalClient     = &http.Client{Timeout: 5 * time.Second}
 )
+
+// providers returns a snapshot of the current provider map. Safe for
+// concurrent reads while reloadProviders is swapping the pointer.
+func providers() map[string]auth.Provider {
+	if p := fwdProvidersAtomic.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// reloadProviders rebuilds the provider set: platform providers from env
+// vars, then social providers from muvee-server's
+// /api/internal/oauth/social-providers. Called once at startup and again on
+// every /_oauth/internal/reload (POSTed by muvee-server after PUT
+// /api/admin/settings touches any social_* key). Any error keeps the
+// previous provider set in place so a malformed setting cannot lock all
+// users out.
+func reloadProviders(ctx context.Context) error {
+	platform, err := auth.NewForwardAuthProviders(forwardAuthBase)
+	if err != nil {
+		return fmt.Errorf("platform providers: %w", err)
+	}
+	social, err := fetchSocialConfigs(ctx)
+	if err != nil {
+		log.Printf("authservice: fetch social configs failed (continuing with platform only): %v", err)
+		social = auth.SocialConfigs{}
+	}
+	socialProviders, err := auth.BuildSocialProviders(social)
+	if err != nil {
+		return fmt.Errorf("build social providers: %w", err)
+	}
+	merged := make(map[string]auth.Provider, len(platform)+len(socialProviders))
+	for k, v := range platform {
+		merged[k] = v
+	}
+	for k, v := range socialProviders {
+		merged[k] = v
+	}
+	fwdProvidersAtomic.Store(&merged)
+	return nil
+}
+
+// fetchSocialConfigs reads social-OAuth provider configs from muvee-server.
+// Returns an empty SocialConfigs (no error) if the server returns 401 to
+// guard against half-configured environments where INTERNAL_KEY drifts; the
+// log line in reloadProviders surfaces the situation to operators.
+func fetchSocialConfigs(ctx context.Context) (auth.SocialConfigs, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		muveeServerURL+"/api/internal/oauth/social-providers", nil)
+	if err != nil {
+		return auth.SocialConfigs{}, err
+	}
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return auth.SocialConfigs{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return auth.SocialConfigs{}, fmt.Errorf("social-providers endpoint returned %d", resp.StatusCode)
+	}
+	var wrapper struct {
+		Data auth.SocialConfigs `json:"data"`
+	}
+	body, err := readResponseBody(resp)
+	if err != nil {
+		return auth.SocialConfigs{}, err
+	}
+	if err := json.Unmarshal(body, &wrapper); err != nil {
+		// jsonOK wraps in {"data": ...}; some routes return raw. Try raw.
+		var raw auth.SocialConfigs
+		if err2 := json.Unmarshal(body, &raw); err2 == nil {
+			return raw, nil
+		}
+		return auth.SocialConfigs{}, fmt.Errorf("decode social configs: %w", err)
+	}
+	return wrapper.Data, nil
+}
+
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// handleInternalReload re-fetches social-OAuth configs from muvee-server
+// and atomically swaps the provider set. Authenticated with
+// X-Muvee-Internal-Key (the same shared secret used for the /verify ←→
+// /access/check internal channel).
+func handleInternalReload(w http.ResponseWriter, r *http.Request) {
+	expected := internalKey
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := reloadProviders(r.Context()); err != nil {
+		log.Printf("authservice: reload failed: %v", err)
+		http.Error(w, "reload failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
 
 func runAuthservice() {
 	baseURL := os.Getenv("FORWARD_AUTH_BASE_URL")
@@ -77,13 +190,11 @@ func runAuthservice() {
 		}
 	}
 
-	var err error
-	fwdProviders, err = auth.NewForwardAuthProviders(baseURL)
-	if err != nil {
+	if err := reloadProviders(context.Background()); err != nil {
 		log.Fatalf("init auth providers: %v", err)
 	}
-	if len(fwdProviders) == 0 {
-		log.Fatal("no auth providers configured; set at least one of GOOGLE_CLIENT_ID, FEISHU_APP_ID, WECOM_CORP_ID, DINGTALK_CLIENT_ID")
+	if len(providers()) == 0 {
+		log.Fatal("no auth providers configured; set at least one of GOOGLE_CLIENT_ID, FEISHU_APP_ID, WECOM_CORP_ID, DINGTALK_CLIENT_ID, or enable a social provider via admin/settings")
 	}
 
 	r := chi.NewRouter()
@@ -99,6 +210,9 @@ func runAuthservice() {
 	r.Get("/_oauth/login", handleLoginPage)
 	r.Get("/_oauth/request-access", handleRequestAccessPage)
 	r.Post("/_oauth/request-access", handleRequestAccessSubmit)
+	// Internal reload endpoint (muvee-server posts here after PUT /admin/settings
+	// touches a social_* key, see settings.go).
+	r.Post("/_oauth/internal/reload", handleInternalReload)
 	// {provider} catch-all must come after the more specific /_oauth/* routes
 	// above; chi matches in registration order for static segments.
 	r.Get("/_oauth/{provider}", handleOAuthCallback)
@@ -113,7 +227,7 @@ func runAuthservice() {
 		port = "4181"
 	}
 	var names []string
-	for n := range fwdProviders {
+	for n := range providers() {
 		names = append(names, n)
 	}
 	log.Printf("muvee authservice listening on :%s (providers: %s)", port, strings.Join(names, ", "))
@@ -398,10 +512,15 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	type providerItem struct {
 		Name        string
 		DisplayName string
+		Icon        template.HTML
 	}
 	var items []providerItem
 	for name, p := range allowed {
-		items = append(items, providerItem{Name: name, DisplayName: p.DisplayName()})
+		items = append(items, providerItem{
+			Name:        name,
+			DisplayName: p.DisplayName(),
+			Icon:        providerIcons[name],
+		})
 	}
 
 	const pageTmpl = `<!DOCTYPE html>
@@ -414,14 +533,15 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
   body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
   .card{background:#fff;border-radius:12px;padding:2.5rem 3rem;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;min-width:280px}
   h1{font-size:1.3rem;margin:0 0 1.5rem;color:#111}
-  a.btn{display:block;margin:.6rem 0;padding:.75rem 1.5rem;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none;font-size:.95rem;transition:background .15s}
+  a.btn{display:flex;align-items:center;justify-content:center;margin:.6rem 0;padding:.75rem 1.5rem;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none;font-size:.95rem;transition:background .15s}
   a.btn:hover{background:#4338ca}
+  a.btn .icon{display:inline-flex;margin-right:8px}
 </style>
 </head>
 <body>
 <div class="card">
   <h1>Sign in to continue</h1>
-  {{range .}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{.DisplayName}}</a>{{end}}
+  {{range .}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{.DisplayName}}</a>{{end}}
 </div>
 </body>
 </html>`
@@ -431,11 +551,22 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	_ = t.Execute(w, items)
 }
 
+// providerIcons holds inline SVG marks for the social providers added in
+// migration 038 (oauth_accounts). Platform-side providers omit icons --
+// they keep their text-only buttons. The values are template.HTML so Go's
+// html/template does not escape the `<svg>` markup.
+var providerIcons = map[string]template.HTML{
+	"discord":  template.HTML(`<svg viewBox="0 -28.5 256 256" width="18" height="18"><path fill="currentColor" d="M216.856 16.597A208.502 208.502 0 0 0 164.042 0c-2.275 4.113-4.933 9.645-6.766 14.046-19.692-2.961-39.203-2.961-58.533 0-1.832-4.4-4.55-9.933-6.846-14.046a207.809 207.809 0 0 0-52.855 16.638C5.618 67.147-3.443 116.4 1.087 164.956c22.169 16.555 43.653 26.612 64.775 33.193A161.094 161.094 0 0 0 79.735 175.3a136.413 136.413 0 0 1-21.846-10.632 108.636 108.636 0 0 0 5.355-4.237c42.122 19.702 87.89 19.702 129.51 0a131.66 131.66 0 0 0 5.355 4.237 136.07 136.07 0 0 1-21.886 10.653c4.006 8.02 8.638 15.67 13.873 22.848 21.142-6.58 42.646-16.637 64.815-33.213 5.316-56.288-9.08-105.09-38.056-148.36ZM85.474 135.095c-12.645 0-23.015-11.805-23.015-26.18s10.149-26.2 23.015-26.2c12.867 0 23.236 11.805 23.015 26.2.02 14.375-10.148 26.18-23.015 26.18Zm85.051 0c-12.645 0-23.014-11.805-23.014-26.18s10.148-26.2 23.014-26.2c12.867 0 23.236 11.805 23.015 26.2 0 14.375-10.148 26.18-23.015 26.18Z"/></svg>`),
+	"apple":    template.HTML(`<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>`),
+	"facebook": template.HTML(`<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.412c0-3.007 1.792-4.668 4.533-4.668 1.313 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.926-1.956 1.874v2.252h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>`),
+	"twitter":  template.HTML(`<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`),
+}
+
 // handleOAuthCallback handles the OAuth redirect back from each provider.
 func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	providerName := chi.URLParam(r, "provider")
-	p, ok := fwdProviders[providerName]
+	p, ok := providers()[providerName]
 	if !ok {
 		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return
@@ -617,7 +748,7 @@ func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
 	// a provider was selected or there's only one provider configured.
 	if codeParam != "" {
 		if _, ok := deviceByUser.Load(codeParam); ok {
-			if providerParam != "" || len(fwdProviders) == 1 {
+			if providerParam != "" || len(providers()) == 1 {
 				startDeviceOAuth(w, r, codeParam, providerParam)
 				return
 			}
@@ -683,9 +814,9 @@ function go(){
 		Name        string
 		DisplayName string
 	}
-	var providers []providerItem
-	for name, p := range fwdProviders {
-		providers = append(providers, providerItem{Name: name, DisplayName: p.DisplayName()})
+	var items []providerItem
+	for name, p := range providers() {
+		items = append(items, providerItem{Name: name, DisplayName: p.DisplayName()})
 	}
 
 	formatted := ""
@@ -698,7 +829,7 @@ function go(){
 	_ = t.Execute(w, struct {
 		Code      string
 		Providers []providerItem
-	}{Code: formatted, Providers: providers})
+	}{Code: formatted, Providers: items})
 	return
 }
 
@@ -709,14 +840,15 @@ func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, provider
 		http.Error(w, "invalid or expired code", http.StatusBadRequest)
 		return
 	}
+	current := providers()
 	if providerName == "" {
 		// Pick the first (only) provider.
-		for name := range fwdProviders {
+		for name := range current {
 			providerName = name
 			break
 		}
 	}
-	p, ok := fwdProviders[providerName]
+	p, ok := current[providerName]
 	if !ok {
 		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return
@@ -927,16 +1059,17 @@ func projectEnabledFwdProviders(enabledProviders string) []auth.Provider {
 		allow = func(name string) bool { return set[name] }
 	}
 	// Preserve the canonical display order used elsewhere (google, feishu, ...).
+	current := providers()
 	order := []string{"google", "feishu", "wecom", "dingtalk"}
-	out := make([]auth.Provider, 0, len(fwdProviders))
+	out := make([]auth.Provider, 0, len(current))
 	seen := make(map[string]bool)
 	for _, name := range order {
-		if p, ok := fwdProviders[name]; ok && allow(name) {
+		if p, ok := current[name]; ok && allow(name) {
 			out = append(out, p)
 			seen[name] = true
 		}
 	}
-	for name, p := range fwdProviders {
+	for name, p := range current {
 		if !seen[name] && allow(name) {
 			out = append(out, p)
 		}
@@ -945,16 +1078,16 @@ func projectEnabledFwdProviders(enabledProviders string) []auth.Provider {
 }
 
 // projectEnabledFwdProvidersByHost returns the providers allowed for the
-// project mapped to host. Falls back to the global fwdProviders set when host
+// project mapped to host. Falls back to the global provider set when host
 // is empty or the muvee-server lookup fails / returns no match — that keeps
 // non-project flows (apex domain, platform login) working unchanged.
 func projectEnabledFwdProvidersByHost(ctx context.Context, host string) map[string]auth.Provider {
 	if host == "" {
-		return fwdProviders
+		return providers()
 	}
 	cfg, err := fetchProjectAuthConfigByHost(ctx, host)
 	if err != nil || cfg == nil {
-		return fwdProviders
+		return providers()
 	}
 	out := make(map[string]auth.Provider)
 	for _, p := range projectEnabledFwdProviders(cfg.EnabledProviders) {

@@ -203,6 +203,26 @@ func (s *Service) EnsureIdentity(ctx context.Context, email, name, avatarURL str
 	return user, nil
 }
 
+// EnsureIdentityFromOAuth is the social-login counterpart to EnsureIdentity:
+// it keys identity on (providerName, providerUserID) via
+// store.EnsureUserByOAuth so providers whose IdP does not surface an email
+// (Discord, Twitter free tier, Apple Hide-My-Email never-shared) can still
+// resolve to a stable users row. The users.email column stays NULL for
+// these users; downstream code paths that rely on email (e.g.
+// IsProjectAccessAllowedByEmail) will not find them — they must be granted
+// access via the user_id-keyed project_access_users table.
+//
+// Identity-only: never writes platform_members. Used by the subdomain
+// ForwardAuth handler when the provider is one of the configured social
+// providers.
+func (s *Service) EnsureIdentityFromOAuth(ctx context.Context, providerName, providerUserID, name, avatarURL string) (*store.User, error) {
+	user, _, err := s.store.EnsureUserByOAuth(ctx, providerName, providerUserID, name, avatarURL)
+	if err != nil {
+		return nil, fmt.Errorf("ensure user by oauth: %w", err)
+	}
+	return user, nil
+}
+
 // EnsurePlatformMember runs the full set of post-OAuth platform-side policy
 // rules on an already-verified (email, name, avatarURL) triple: domain
 // restrictions for non-org-scoped providers, invite-mode gating, request-mode

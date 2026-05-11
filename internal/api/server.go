@@ -442,6 +442,58 @@ func (s *Server) handleInternalAuthIdentityUpsert(w http.ResponseWriter, r *http
 	})
 }
 
+// handleInternalOAuthSocialProviders returns the social provider configs
+// (Discord / Apple / Facebook / Twitter) read from system_settings. Used by
+// muvee-authservice at startup and on /_oauth/internal/reload so admins can
+// configure social providers at runtime via /admin/settings instead of env
+// vars. Body contains client secrets + Apple .p8 PEM, so X-Muvee-Internal-Key
+// authentication is mandatory.
+func (s *Server) handleInternalOAuthSocialProviders(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	settings, err := s.store.GetAllSettings(r.Context())
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	var cfg auth.SocialConfigs
+	if settings["discord_enabled"] == "true" {
+		cfg.Discord = &auth.DiscordConfig{
+			ClientID:     settings["discord_client_id"],
+			ClientSecret: settings["discord_client_secret"],
+			RedirectURL:  settings["discord_redirect_url"],
+		}
+	}
+	if settings["facebook_enabled"] == "true" {
+		cfg.Facebook = &auth.FacebookConfig{
+			ClientID:     settings["facebook_client_id"],
+			ClientSecret: settings["facebook_client_secret"],
+			RedirectURL:  settings["facebook_redirect_url"],
+		}
+	}
+	if settings["twitter_enabled"] == "true" {
+		cfg.Twitter = &auth.TwitterConfig{
+			ClientID:     settings["twitter_client_id"],
+			ClientSecret: settings["twitter_client_secret"],
+			RedirectURL:  settings["twitter_redirect_url"],
+		}
+	}
+	if settings["apple_enabled"] == "true" {
+		cfg.Apple = &auth.AppleConfig{
+			ClientID:      settings["apple_client_id"],
+			TeamID:        settings["apple_team_id"],
+			KeyID:         settings["apple_key_id"],
+			PrivateKeyPEM: settings["apple_private_key_p8"],
+			RedirectURL:   settings["apple_redirect_url"],
+		}
+	}
+	jsonOK(w, cfg)
+}
+
 // agentSecretMiddleware rejects requests that do not carry the correct X-Agent-Secret header.
 // When no secret is configured the middleware passes all requests through (dev/test mode).
 func (s *Server) agentSecretMiddleware(next http.Handler) http.Handler {
@@ -505,6 +557,10 @@ func (s *Server) Router() http.Handler {
 	// means no domain check, no invite gate, no platform_members row — those
 	// are platform-side concerns that subdomain users should not inherit.
 	r.Post("/api/internal/auth/identity-upsert", s.handleInternalAuthIdentityUpsert)
+	// Internal endpoint: returns the current social-OAuth provider configs
+	// (Discord / Apple / Facebook / Twitter) for authservice to instantiate.
+	// Body contains secrets, so X-Muvee-Internal-Key is mandatory.
+	r.Get("/api/internal/oauth/social-providers", s.handleInternalOAuthSocialProviders)
 	// Legacy upsert endpoint kept for rolling-upgrade compatibility with
 	// older authservice binaries that still call this path. New code should
 	// not depend on it; remove once everything is on identity-upsert.

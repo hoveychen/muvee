@@ -21,6 +21,19 @@ func (p fakeProvider) UserInfo(context.Context, string) (string, string, string,
 }
 func (p fakeProvider) OrgScoped() bool { return p.orgScoped }
 
+// fakeSubjectProvider embeds fakeProvider and also implements SubjectProvider.
+type fakeSubjectProvider struct {
+	fakeProvider
+	sub       string
+	email     string
+	name      string
+	avatarURL string
+}
+
+func (p fakeSubjectProvider) UserInfoWithSubject(context.Context, string, string) (string, string, string, string, error) {
+	return p.sub, p.email, p.name, p.avatarURL, nil
+}
+
 func TestIsOrgScopedProvider(t *testing.T) {
 	registered := map[string]Provider{
 		"google": fakeProvider{name: "google", orgScoped: false},
@@ -49,6 +62,46 @@ func TestIsOrgScopedProvider(t *testing.T) {
 				t.Errorf("isOrgScopedProvider(%q) = %v, want %v", c.provider, got, c.want)
 			}
 		})
+	}
+}
+
+// TestSubjectProviderOptional verifies that the SubjectProvider optional
+// interface contract holds: a plain Provider must NOT accidentally satisfy
+// SubjectProvider, and an implementor must return its subject through the
+// type-asserted call. The auth callback handler relies on this assertion to
+// decide between the email-keyed path (UpsertUser) and the (provider, sub)
+// path (EnsureUserByOAuth).
+func TestSubjectProviderOptional(t *testing.T) {
+	var plain Provider = fakeProvider{name: "legacy", orgScoped: false}
+	if _, ok := plain.(SubjectProvider); ok {
+		t.Errorf("plain Provider must NOT satisfy SubjectProvider")
+	}
+	var social Provider = fakeSubjectProvider{
+		fakeProvider: fakeProvider{name: "discord"},
+		sub:          "987654321",
+		email:        "",
+		name:         "alice",
+		avatarURL:    "https://cdn.discord/x.png",
+	}
+	sp, ok := social.(SubjectProvider)
+	if !ok {
+		t.Fatalf("fakeSubjectProvider must satisfy SubjectProvider")
+	}
+	gotSub, gotEmail, gotName, gotAvatar, err := sp.UserInfoWithSubject(context.Background(), "code", "state")
+	if err != nil {
+		t.Fatalf("UserInfoWithSubject error: %v", err)
+	}
+	if gotSub != "987654321" {
+		t.Errorf("sub = %q, want %q", gotSub, "987654321")
+	}
+	if gotEmail != "" {
+		t.Errorf("email should stay empty for IdP that did not surface one, got %q", gotEmail)
+	}
+	if gotName != "alice" {
+		t.Errorf("name = %q, want %q", gotName, "alice")
+	}
+	if gotAvatar == "" {
+		t.Errorf("avatar should propagate through, got empty")
 	}
 }
 

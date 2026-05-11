@@ -39,7 +39,11 @@ func (s *Store) DB() *pgxpool.Pool {
 
 // userColumns is the canonical SELECT list for users. Keep it in lockstep with
 // scanUser so all User reads pick up new columns at once.
-const userColumns = `id, email, name, avatar_url, role, authorized, created_at, name_overridden, avatar_overridden`
+// users.email is nullable since migration 039 to accommodate social-login
+// users that do not surface an email (Discord, Twitter free tier, Apple
+// Hide-My-Email never-shared). COALESCE keeps the scan target as plain
+// string -- callers see "" for NULL emails.
+const userColumns = `id, COALESCE(email, '') AS email, name, avatar_url, role, authorized, created_at, name_overridden, avatar_overridden`
 
 func scanUser(scanner interface {
 	Scan(dest ...interface{}) error
@@ -66,6 +70,72 @@ func (s *Store) UpsertUser(ctx context.Context, email, name, avatarURL string, a
 		&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.Role, &u.Authorized,
 		&u.CreatedAt, &u.NameOverridden, &u.AvatarOverridden, &inserted)
 	return &u, inserted, err
+}
+
+// EnsureUserByOAuth resolves a (provider, providerUserID) pair to a local
+// user, creating both the user row and the oauth_accounts binding on first
+// sign-in. Unlike UpsertUser this path NEVER writes to users.email -- it
+// inserts NULL, so the UNIQUE constraint on email is preserved without
+// collapsing multiple email-less rows onto a single empty-string key. Used
+// by social providers (Discord / Apple / Facebook / Twitter) whose IdP may
+// not surface an email at all.
+//
+// On subsequent sign-ins the same tuple returns the existing user and
+// refreshes name/avatar (honoring the _overridden flags just like UpsertUser).
+// The second return value reports whether the user row was newly created.
+//
+// NOTE: identity-only -- writes users but never platform_members, matching
+// the contract established by auth.EnsureIdentity for downstream auth.
+func (s *Store) EnsureUserByOAuth(ctx context.Context, provider, providerUserID, name, avatarURL string) (*User, bool, error) {
+	if provider == "" || providerUserID == "" {
+		return nil, false, fmt.Errorf("provider and providerUserID required")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var userID uuid.UUID
+	err = tx.QueryRow(ctx,
+		`SELECT user_id FROM oauth_accounts WHERE provider = $1 AND provider_user_id = $2`,
+		provider, providerUserID).Scan(&userID)
+	if err == pgx.ErrNoRows {
+		userID = uuid.New()
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO users (id, email, name, avatar_url, role, authorized, created_at)
+			VALUES ($1, NULL, $2, $3, 'member', TRUE, NOW())
+		`, userID, name, avatarURL); err != nil {
+			return nil, false, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO oauth_accounts (provider, provider_user_id, user_id, created_at)
+			VALUES ($1, $2, $3, NOW())
+		`, provider, providerUserID, userID); err != nil {
+			return nil, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, err
+		}
+		u, err := s.GetUserByID(ctx, userID)
+		return u, true, err
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE users SET
+			name       = CASE WHEN name_overridden   THEN name       ELSE $2 END,
+			avatar_url = CASE WHEN avatar_overridden THEN avatar_url ELSE $3 END
+		WHERE id = $1
+	`, userID, name, avatarURL); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	u, err := s.GetUserByID(ctx, userID)
+	return u, false, err
 }
 
 // GetUserByEmail returns the user with the given email, or (nil, nil) when
@@ -226,7 +296,7 @@ func (s *Store) ListPlatformMemberUsers(ctx context.Context, scope string) ([]*P
 	if scope == "platform" {
 		join = `JOIN`
 	}
-	q := `SELECT u.id, u.email, u.name, u.avatar_url, u.role, u.authorized,
+	q := `SELECT u.id, COALESCE(u.email, '') AS email, u.name, u.avatar_url, u.role, u.authorized,
 	             u.created_at, u.name_overridden, u.avatar_overridden,
 	             pm.user_id, pm.role, pm.authorized, pm.created_at
 	      FROM users u ` + join + ` platform_members pm ON pm.user_id = u.id ` + where + `
@@ -628,7 +698,7 @@ func (s *Store) CanAccessProject(ctx context.Context, userID, projectID uuid.UUI
 func (s *Store) ListProjectAccessUsers(ctx context.Context, projectID uuid.UUID) ([]*ProjectAccessUser, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT pau.project_id, pau.user_id, pau.added_by, pau.added_at,
-		       u.email, u.name, u.avatar_url
+		       COALESCE(u.email, '') AS email, u.name, u.avatar_url
 		FROM project_access_users pau
 		JOIN users u ON u.id = pau.user_id
 		WHERE pau.project_id = $1
@@ -768,7 +838,7 @@ func (s *Store) ListProjectVisits(ctx context.Context, projectID uuid.UUID, limi
 	}
 	rows, err := s.db.Query(ctx, `
 		SELECT pv.project_id, pv.user_id, pv.first_seen_at, pv.last_seen_at, pv.visit_count,
-		       u.email, u.name, u.avatar_url,
+		       COALESCE(u.email, '') AS email, u.name, u.avatar_url,
 		       (pau.user_id IS NOT NULL) AS in_allow_list
 		FROM project_visits pv
 		JOIN users u ON u.id = pv.user_id
@@ -860,7 +930,7 @@ func (s *Store) GetAccessRequest(ctx context.Context, id uuid.UUID) (*ProjectAcc
 	var req ProjectAccessRequest
 	err := s.db.QueryRow(ctx, `
 		SELECT r.id, r.project_id, r.user_id, r.reason, r.status, r.requested_at, r.decided_at, r.decided_by,
-		       u.email, u.name, u.avatar_url
+		       COALESCE(u.email, '') AS email, u.name, u.avatar_url
 		FROM project_access_requests r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.id = $1
@@ -881,7 +951,7 @@ func (s *Store) GetAccessRequest(ctx context.Context, id uuid.UUID) (*ProjectAcc
 func (s *Store) ListAccessRequests(ctx context.Context, projectID uuid.UUID, statusFilter ProjectAccessRequestStatus) ([]*ProjectAccessRequest, error) {
 	query := `
 		SELECT r.id, r.project_id, r.user_id, r.reason, r.status, r.requested_at, r.decided_at, r.decided_by,
-		       u.email, u.name, u.avatar_url
+		       COALESCE(u.email, '') AS email, u.name, u.avatar_url
 		FROM project_access_requests r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.project_id = $1`
@@ -915,7 +985,7 @@ func (s *Store) ListAccessRequests(ctx context.Context, projectID uuid.UUID, sta
 func (s *Store) ListPendingRequestsForOwner(ctx context.Context, ownerID uuid.UUID) ([]*ProjectAccessRequest, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT r.id, r.project_id, r.user_id, r.reason, r.status, r.requested_at, r.decided_at, r.decided_by,
-		       u.email, u.name, u.avatar_url,
+		       COALESCE(u.email, '') AS email, u.name, u.avatar_url,
 		       p.name, p.domain_prefix
 		FROM project_access_requests r
 		JOIN projects p ON p.id = r.project_id
@@ -2155,7 +2225,7 @@ func (s *Store) GetAuthorizationRequestByUser(ctx context.Context, userID uuid.U
 func (s *Store) ListPendingAuthorizationRequests(ctx context.Context) ([]*AuthorizationRequest, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT ar.id, ar.user_id, ar.status, ar.reviewed_by, ar.created_at, ar.updated_at,
-		       u.name, u.email, u.avatar_url
+		       u.name, COALESCE(u.email, '') AS email, u.avatar_url
 		FROM authorization_requests ar
 		JOIN users u ON u.id = ar.user_id
 		WHERE ar.status = 'pending'

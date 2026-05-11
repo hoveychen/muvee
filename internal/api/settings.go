@@ -1,10 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/hoveychen/muvee/internal/store"
 )
@@ -50,20 +54,47 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 
 	// Allowed keys (extend as needed)
 	allowed := map[string]bool{
-		"onboarded":                         true,
-		"site_name":                         true,
-		"logo_url":                          true,
-		"favicon_url":                       true,
-		"access_mode":                       true,
+		"onboarded":                                true,
+		"site_name":                                true,
+		"logo_url":                                 true,
+		"favicon_url":                              true,
+		"access_mode":                              true,
 		"auto_deploy_master_enabled":               true,
 		"auto_deploy_poll_interval_seconds":        true,
 		"auto_deploy_image_watch_interval_seconds": true,
+		// Social OAuth providers (downstream / ForwardAuth only). All
+		// values stored as plain strings; "true"/"false" for the
+		// *_enabled toggles. ClientSecret + apple_private_key_p8 are
+		// sensitive but stored unencrypted at rest -- same threat model
+		// as muvee's existing platform-provider env-var path.
+		"discord_enabled":         true,
+		"discord_client_id":       true,
+		"discord_client_secret":   true,
+		"discord_redirect_url":    true,
+		"facebook_enabled":        true,
+		"facebook_client_id":      true,
+		"facebook_client_secret":  true,
+		"facebook_redirect_url":   true,
+		"twitter_enabled":         true,
+		"twitter_client_id":       true,
+		"twitter_client_secret":   true,
+		"twitter_redirect_url":    true,
+		"apple_enabled":           true,
+		"apple_client_id":         true, // Apple "Services ID"
+		"apple_team_id":           true,
+		"apple_key_id":            true,
+		"apple_private_key_p8":    true, // raw .p8 PEM contents
+		"apple_redirect_url":      true,
 	}
 
 	ctx := r.Context()
+	socialChanged := false
 	for k, v := range body {
 		if !allowed[k] {
 			continue
+		}
+		if isSocialOAuthSettingKey(k) {
+			socialChanged = true
 		}
 		if k == "access_mode" {
 			switch store.AccessMode(v) {
@@ -73,8 +104,8 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
-		if k == "auto_deploy_master_enabled" && v != "true" && v != "false" {
-			jsonErr(w, fmt.Errorf("auto_deploy_master_enabled must be 'true' or 'false'"), http.StatusBadRequest)
+		if strings.HasSuffix(k, "_enabled") && v != "true" && v != "false" {
+			jsonErr(w, fmt.Errorf("%s must be 'true' or 'false'", k), http.StatusBadRequest)
 			return
 		}
 		if k == "auto_deploy_poll_interval_seconds" {
@@ -102,6 +133,13 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	if socialChanged {
+		// Async: muvee-server already committed the change; failing to notify
+		// authservice means it serves stale configs until restart, not a
+		// data-loss situation, so we don't block the admin response on it.
+		go s.notifyAuthserviceReload()
+	}
+
 	// Return the updated public view
 	all, err := s.store.GetAllSettings(ctx)
 	if err != nil {
@@ -109,4 +147,44 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	jsonOK(w, all)
+}
+
+// isSocialOAuthSettingKey is the predicate for keys that, when changed,
+// require muvee-authservice to re-read its provider set via the /_oauth/
+// internal/reload endpoint. Listed by prefix so adding new social
+// providers to the allowlist does not require touching this function.
+func isSocialOAuthSettingKey(k string) bool {
+	return strings.HasPrefix(k, "discord_") ||
+		strings.HasPrefix(k, "facebook_") ||
+		strings.HasPrefix(k, "twitter_") ||
+		strings.HasPrefix(k, "apple_")
+}
+
+// notifyAuthserviceReload POSTs to muvee-authservice's
+// /_oauth/internal/reload endpoint so a fresh fetch of social-OAuth
+// configs replaces the cached provider set. Fire-and-forget: failures are
+// logged but never surfaced to the admin -- the change persists in the DB
+// either way and the next authservice restart will pick it up.
+func (s *Server) notifyAuthserviceReload() {
+	if s.authServiceURL == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(s.authServiceURL, "/")+"/_oauth/internal/reload", nil)
+	if err != nil {
+		log.Printf("notifyAuthserviceReload: build request: %v", err)
+		return
+	}
+	req.Header.Set("X-Muvee-Internal-Key", internalAPIKey())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("notifyAuthserviceReload: post: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("notifyAuthserviceReload: authservice returned %d", resp.StatusCode)
+	}
 }

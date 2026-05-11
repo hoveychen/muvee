@@ -84,7 +84,7 @@ func handleLoginTokenCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provider required", http.StatusBadRequest)
 		return
 	}
-	p, ok := fwdProviders[providerName]
+	p, ok := providers()[providerName]
 	if !ok {
 		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return

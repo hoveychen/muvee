@@ -296,6 +296,29 @@ export interface SystemSettings {
   favicon_url: string
   // 'open' (anyone in the org), 'invite' (white-list), 'request' (request-access flow).
   access_mode: AccessMode | ''
+  // ─── Social OAuth providers (downstream ForwardAuth only) ────────────
+  // Configured at runtime via /admin/settings. Empty string = not set;
+  // *_enabled is the string 'true' | 'false' to mirror the kv store wire
+  // format. ApplyChanges triggers a live reload of muvee-authservice's
+  // provider set.
+  discord_enabled?: string
+  discord_client_id?: string
+  discord_client_secret?: string
+  discord_redirect_url?: string
+  facebook_enabled?: string
+  facebook_client_id?: string
+  facebook_client_secret?: string
+  facebook_redirect_url?: string
+  twitter_enabled?: string
+  twitter_client_id?: string
+  twitter_client_secret?: string
+  twitter_redirect_url?: string
+  apple_enabled?: string
+  apple_client_id?: string
+  apple_team_id?: string
+  apple_key_id?: string
+  apple_private_key_p8?: string
+  apple_redirect_url?: string
 }
 
 export interface AuthorizationRequest {
