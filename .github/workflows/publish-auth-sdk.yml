@@ -1,0 +1,63 @@
+name: Publish @muvee/auth
+
+# Tag-driven publishes for sdk/auth-ts. Tag pattern `auth-sdk-v*` is namespaced
+# so it doesn't collide with the project-wide `v*.*.*` release tags consumed
+# by release.yml. Bump sdk/auth-ts/package.json's "version", commit, then:
+#
+#     git tag auth-sdk-v0.2.0
+#     git push --tags
+#
+# Requires repository secret NPM_TOKEN — a granular access token with:
+#   - Bypass 2FA for publish: enabled
+#   - Packages and scopes: read+write on the `muvee` scope only
+
+on:
+  push:
+    tags:
+      - 'auth-sdk-v*'
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: sdk/auth-ts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          # actions/setup-node writes the token into a project-local .npmrc
+          # so the publish step doesn't have to touch ~/.npmrc.
+          scope: '@muvee'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify package.json version matches tag
+        run: |
+          tag="${GITHUB_REF_NAME#auth-sdk-v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME → expected version $tag but package.json has $pkg"
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
