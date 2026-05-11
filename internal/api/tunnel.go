@@ -552,6 +552,16 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// tunnel → browser
+	//
+	// The CLI writes frameData(response) then frameClose in immediate sequence.
+	// On the server, serveConn pushes the data into stream.inbox and then
+	// closes stream.closed. By the time we re-enter select after a previous
+	// inbox drain, both cases can be ready simultaneously — and Go picks one
+	// at random. If select picks <-stream.closed while inbox still holds the
+	// tail of the response, we return mid-body, defer closes the hijacked
+	// conn, and Traefik upstream returns 500 with "unexpected EOF during body
+	// copy". So when the close signal fires, we must drain whatever frames
+	// arrived just before it before returning.
 	for {
 		select {
 		case data := <-stream.inbox:
@@ -560,7 +570,16 @@ func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-stream.closed:
-			return
+			for {
+				select {
+				case data := <-stream.inbox:
+					if _, err := conn.Write(data); err != nil {
+						return
+					}
+				default:
+					return
+				}
+			}
 		case <-clientDone:
 			_ = tc.writeFrame(frameClose, stream.id, nil)
 			return

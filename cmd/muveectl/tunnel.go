@@ -356,6 +356,14 @@ func tunnelSession(ctx context.Context, wsURL string, header http.Header, localA
 
 			// tunnel → local: dedicated per-stream writer so a stalled
 			// c.Write does not freeze the WS read loop for other streams.
+			//
+			// When the server sends frameData(request bytes) immediately
+			// followed by frameClose, the read loop pushes data into inbox
+			// and then closes done. Once both cases are ready, Go's select
+			// picks randomly — if it picks <-done while inbox still holds
+			// tail bytes, the request reaching the local service is
+			// truncated. Drain inbox before exiting so the local service
+			// always sees the complete request.
 			go func(s *cliStream, sid uint32) {
 				for {
 					select {
@@ -366,7 +374,16 @@ func tunnelSession(ctx context.Context, wsURL string, header http.Header, localA
 							return
 						}
 					case <-s.done:
-						return
+						for {
+							select {
+							case data := <-s.inbox:
+								if _, err := s.conn.Write(data); err != nil {
+									return
+								}
+							default:
+								return
+							}
+						}
 					}
 				}
 			}(s, sid)
