@@ -55,6 +55,10 @@ export interface Project {
   //   'public'  — any authenticated muvee user (default, legacy behaviour)
   //   'private' — only project owner, system admins, and explicitly allowed users
   access_mode: 'public' | 'private'
+  // Comma-separated whitelist of OAuth provider names this project's
+  // downstream sign-in flow may use (e.g. "google,feishu"). Empty = inherit
+  // the globally-configured set.
+  enabled_providers: string
   // Admin-only fixed-port binding. When both are set, the project is forced
   // onto fixed_node_id and its container's port is published on
   // fixed_host_port (instead of an ephemeral host port). null/undefined means

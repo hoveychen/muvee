@@ -113,6 +113,11 @@ type Project struct {
 	FixedNodeID   *uuid.UUID `db:"fixed_node_id"        json:"fixed_node_id,omitempty"`
 	CreatedAt     time.Time  `db:"created_at"           json:"created_at"`
 	UpdatedAt     time.Time  `db:"updated_at"           json:"updated_at"`
+	// EnabledProviders is a comma-separated whitelist of OAuth provider names
+	// (e.g. "google,feishu") this project's downstream sign-in flow may use.
+	// Empty = inherit the globally-configured set; the SDK and ForwardAuth
+	// login pages both honour this column.
+	EnabledProviders string `db:"enabled_providers"    json:"enabled_providers"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 	// Owner display fields, populated by ListProjectsForUser / GetProject via LEFT JOIN users.

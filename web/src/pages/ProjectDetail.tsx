@@ -1188,6 +1188,11 @@ function AuthTab({ form, onChange, onSave, saving, saveError }: {
         </>
       )}
 
+      <EnabledProvidersField
+        value={(form.enabled_providers ?? '') as string}
+        onChange={v => onChange({ ...form, enabled_providers: v })}
+      />
+
       {saveError && (
         <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
       )}
@@ -1202,6 +1207,75 @@ function AuthTab({ form, onChange, onSave, saving, saveError }: {
           {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
         </button>
       </div>
+    </div>
+  )
+}
+
+interface GlobalProvider {
+  id: string
+  display_name: string
+}
+
+function parseProviderSet(raw: string): Set<string> {
+  const out = new Set<string>()
+  for (const tok of raw.split(',')) {
+    const t = tok.trim().toLowerCase()
+    if (t) out.add(t)
+  }
+  return out
+}
+
+function EnabledProvidersField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [globals, setGlobals] = useState<GlobalProvider[] | null>(null)
+  useEffect(() => {
+    fetch('/api/auth/providers')
+      .then(r => r.json())
+      .then((data: GlobalProvider[]) => setGlobals(data))
+      .catch(() => setGlobals([]))
+  }, [])
+
+  if (globals === null) return null
+  if (globals.length === 0) return null
+
+  const selected = parseProviderSet(value)
+  const isAll = selected.size === 0
+
+  const toggle = (id: string) => {
+    // Materialise the current set first — if value is empty (== all), expand
+    // to the full list so the user can deselect individual entries without
+    // first being forced to "select all" manually.
+    const base = isAll ? new Set(globals.map(g => g.id)) : new Set(selected)
+    if (base.has(id)) base.delete(id)
+    else base.add(id)
+    if (base.size === globals.length) {
+      onChange('') // back to "inherit all" sentinel
+      return
+    }
+    onChange(Array.from(base).sort().join(','))
+  }
+
+  return (
+    <div>
+      <label className="form-label">SIGN-IN PROVIDERS</label>
+      <div className="flex flex-col gap-2" style={{ marginTop: '0.4rem' }}>
+        {globals.map(g => {
+          const checked = isAll || selected.has(g.id)
+          return (
+            <label key={g.id} className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.9rem' }}>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => toggle(g.id)}
+              />
+              <span>{g.display_name}</span>
+              <span style={{ color: 'var(--fg-muted)', fontFamily: MONO, fontSize: '0.75rem' }}>{g.id}</span>
+            </label>
+          )
+        })}
+      </div>
+      <p style={{ fontSize: '0.8125rem', marginTop: '0.4rem', color: 'var(--fg-muted)' }}>
+        Checked = available to the downstream sign-in flow (SDK + ForwardAuth login page). Leaving every provider checked stores the empty inherit-all sentinel.
+      </p>
     </div>
   )
 }

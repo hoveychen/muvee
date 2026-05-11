@@ -90,6 +90,11 @@ func runAuthservice() {
 	r.Get("/verify", handleVerify)
 	r.Get("/verify-admin", handleVerifyAdmin)
 	r.Get("/_oauth/userinfo", handleUserInfo)
+	r.Get("/_oauth/providers", handleProviders)
+	r.Post("/_oauth/login-token", handleLoginTokenCreate)
+	r.Options("/_oauth/login-token", handleOAuthOptionsPreflight)
+	r.Post("/_oauth/login-token/poll", handleLoginTokenPoll)
+	r.Options("/_oauth/login-token/poll", handleOAuthOptionsPreflight)
 	r.Get("/_oauth/logout", handleFwdLogout)
 	r.Get("/_oauth/login", handleLoginPage)
 	r.Get("/_oauth/request-access", handleRequestAccessPage)
@@ -360,10 +365,15 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 // it kicks off the OAuth flow for that specific provider.
 func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	providerName := r.URL.Query().Get("provider")
+	// Filter providers by the inbound project's enabled_providers whitelist.
+	// Falls back to the global fwdProviders set when the host doesn't map to a
+	// project, so flows that hit /_oauth/login outside a project context (e.g.
+	// platform-domain logins) keep their existing behaviour.
+	allowed := projectEnabledFwdProvidersByHost(r.Context(), inboundHost(r))
 	if providerName != "" {
-		p, ok := fwdProviders[providerName]
+		p, ok := allowed[providerName]
 		if !ok {
-			http.Error(w, "unknown provider", http.StatusBadRequest)
+			http.Error(w, "unknown or disabled provider", http.StatusBadRequest)
 			return
 		}
 		state := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -377,8 +387,8 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auto-redirect when only one provider is configured.
-	if len(fwdProviders) == 1 {
-		for name := range fwdProviders {
+	if len(allowed) == 1 {
+		for name := range allowed {
 			http.Redirect(w, r, "/_oauth/login?provider="+name, http.StatusFound)
 			return
 		}
@@ -390,7 +400,7 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		DisplayName string
 	}
 	var items []providerItem
-	for name, p := range fwdProviders {
+	for name, p := range allowed {
 		items = append(items, providerItem{Name: name, DisplayName: p.DisplayName()})
 	}
 
@@ -431,8 +441,20 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	queryState := r.URL.Query().Get("state")
+
+	// SDK-initiated login-token flow uses HMAC-signed structured state instead
+	// of the cookie-based anti-CSRF — the SDK and the OAuth window may live in
+	// different browsing contexts (separate tab, Tauri shell, RN external
+	// browser), so the cookie is unreliable. The HMAC signature alone is
+	// sufficient because login-token state binds to a server-side map entry.
+	if sc, err := verifyState(queryState); err == nil && sc.Mode == "login-token" {
+		handleLoginTokenCallback(w, r, p, providerName, sc.LoginToken)
+		return
+	}
+
 	stateCookie, err := r.Cookie("fwd_oauth_state")
-	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
+	if err != nil || stateCookie.Value != queryState {
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
@@ -838,6 +860,141 @@ func fetchProjectInfoInternal(ctx context.Context, projectID string) (*projectMi
 		return nil, err
 	}
 	return &info, nil
+}
+
+// projectAuthConfig mirrors muvee-server's /api/internal/projects/by-host
+// response shape — everything authservice needs to decide which providers a
+// project's downstream sign-in flow may use.
+type projectAuthConfig struct {
+	ProjectID        string `json:"project_id"`
+	DomainPrefix     string `json:"domain_prefix"`
+	EnabledProviders string `json:"enabled_providers"`
+	AuthRequired     bool   `json:"auth_required"`
+	AccessMode       string `json:"access_mode"`
+}
+
+func fetchProjectAuthConfigByHost(ctx context.Context, host string) (*projectAuthConfig, error) {
+	q := url.Values{}
+	q.Set("host", host)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		muveeServerURL+"/api/internal/projects/by-host?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("internal project-by-host returned %d", resp.StatusCode)
+	}
+	var cfg projectAuthConfig
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// inboundHost returns the user-visible host for this request. Behind Traefik
+// the original Host arrives in X-Forwarded-Host; bare requests fall back to
+// r.Host.
+func inboundHost(r *http.Request) string {
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		return strings.ToLower(strings.TrimSpace(h))
+	}
+	return strings.ToLower(strings.TrimSpace(r.Host))
+}
+
+// projectEnabledFwdProviders intersects a project's enabled_providers whitelist
+// with the providers actually loaded by this authservice process. Empty
+// enabled_providers means "inherit the full fwdProviders set" so existing
+// projects keep working with no backfill.
+func projectEnabledFwdProviders(enabledProviders string) []auth.Provider {
+	allow := func(string) bool { return true }
+	if strings.TrimSpace(enabledProviders) != "" {
+		set := make(map[string]bool)
+		for _, tok := range strings.Split(enabledProviders, ",") {
+			name := strings.ToLower(strings.TrimSpace(tok))
+			if name != "" {
+				set[name] = true
+			}
+		}
+		allow = func(name string) bool { return set[name] }
+	}
+	// Preserve the canonical display order used elsewhere (google, feishu, ...).
+	order := []string{"google", "feishu", "wecom", "dingtalk"}
+	out := make([]auth.Provider, 0, len(fwdProviders))
+	seen := make(map[string]bool)
+	for _, name := range order {
+		if p, ok := fwdProviders[name]; ok && allow(name) {
+			out = append(out, p)
+			seen[name] = true
+		}
+	}
+	for name, p := range fwdProviders {
+		if !seen[name] && allow(name) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// projectEnabledFwdProvidersByHost returns the providers allowed for the
+// project mapped to host. Falls back to the global fwdProviders set when host
+// is empty or the muvee-server lookup fails / returns no match — that keeps
+// non-project flows (apex domain, platform login) working unchanged.
+func projectEnabledFwdProvidersByHost(ctx context.Context, host string) map[string]auth.Provider {
+	if host == "" {
+		return fwdProviders
+	}
+	cfg, err := fetchProjectAuthConfigByHost(ctx, host)
+	if err != nil || cfg == nil {
+		return fwdProviders
+	}
+	out := make(map[string]auth.Provider)
+	for _, p := range projectEnabledFwdProviders(cfg.EnabledProviders) {
+		out[p.Name()] = p
+	}
+	return out
+}
+
+// handleProviders returns the OAuth providers the SDK should render for the
+// inbound project subdomain. Cross-origin friendly (same policy as
+// /_oauth/userinfo) so SPAs hosted on the project domain can call this from
+// the browser.
+func handleProviders(w http.ResponseWriter, r *http.Request) {
+	applyUserInfoCORS(w, r)
+	host := inboundHost(r)
+	if host == "" {
+		http.Error(w, "missing host", http.StatusBadRequest)
+		return
+	}
+	cfg, err := fetchProjectAuthConfigByHost(r.Context(), host)
+	if err != nil {
+		log.Printf("authservice: project-by-host(%s): %v", host, err)
+		http.Error(w, "providers lookup failed", http.StatusBadGateway)
+		return
+	}
+	if cfg == nil {
+		http.Error(w, "no project for host", http.StatusNotFound)
+		return
+	}
+	type item struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
+	}
+	providers := projectEnabledFwdProviders(cfg.EnabledProviders)
+	out := make([]item, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, item{Name: p.Name(), DisplayName: p.DisplayName()})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 type submitAccessRequestResult struct {

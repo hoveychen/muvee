@@ -1,0 +1,49 @@
+{
+  "name": "@muvee/auth",
+  "version": "0.1.0",
+  "description": "Sign-in SDK for muvee projects. Polled login_token flow over OAuth; works in web SPAs, Tauri, Electron, and React Native.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hoveychen/muvee",
+    "directory": "sdk/auth-ts"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.2",
+    "typescript": "^5.3.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "muvee",
+    "oauth",
+    "auth",
+    "sign-in",
+    "sdk"
+  ]
+}

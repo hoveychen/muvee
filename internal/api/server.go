@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,6 +224,52 @@ func (s *Server) handleInternalProjectInfo(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	jsonOK(w, projectMinimalInfo(p))
+}
+
+// handleInternalProjectByHost resolves a project from an inbound Host header
+// and returns the auth-relevant configuration. Used by authservice for
+// endpoints that only know the subdomain (e.g. /_oauth/providers,
+// /_oauth/login-token) — the request never carries a project_id.
+func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	host := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("host")))
+	if host == "" {
+		jsonErr(w, fmt.Errorf("host param required"), http.StatusBadRequest)
+		return
+	}
+	base := strings.ToLower(s.baseDomain)
+	var prefix string
+	switch {
+	case base != "" && strings.HasSuffix(host, "."+base):
+		prefix = strings.TrimSuffix(host, "."+base)
+	case host == base:
+		jsonErr(w, fmt.Errorf("apex host carries no project"), http.StatusNotFound)
+		return
+	default:
+		jsonErr(w, fmt.Errorf("host %q is not under base domain", host), http.StatusBadRequest)
+		return
+	}
+	p, err := s.store.GetProjectByDomainPrefix(r.Context(), prefix)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonErr(w, nil, http.StatusNotFound)
+		return
+	}
+	jsonOK(w, map[string]any{
+		"project_id":        p.ID.String(),
+		"domain_prefix":     p.DomainPrefix,
+		"enabled_providers": p.EnabledProviders,
+		"auth_required":     p.AuthRequired,
+		"access_mode":       p.AccessMode,
+	})
 }
 
 // handleInternalSubmitAccessRequest is called by muvee-authservice when a user
@@ -447,6 +494,10 @@ func (s *Server) Router() http.Handler {
 	// muvee-authservice to render and process the request-access page directly
 	// on the project subdomain (no platform-domain hop needed).
 	r.Get("/api/internal/projects/{id}", s.handleInternalProjectInfo)
+	// Lookup variant keyed by Host header — used by SDK / authservice endpoints
+	// that only have the inbound subdomain (no project_id query param), e.g.
+	// /_oauth/providers and /_oauth/login-token.
+	r.Get("/api/internal/projects/by-host", s.handleInternalProjectByHost)
 	r.Post("/api/internal/access/submit-request", s.handleInternalSubmitAccessRequest)
 	// Internal identity-only user upsert called by muvee-authservice after a
 	// per-subdomain OAuth callback completes, so server's users table stays in
@@ -1261,6 +1312,48 @@ func (s *Server) checkFixedNodeAndPortFree(ctx context.Context, nodeID uuid.UUID
 	return 0, nil
 }
 
+// knownProviderIDs returns the set of currently-registered OAuth provider IDs
+// (e.g. "google", "feishu") used to validate per-project enabled_providers
+// writes. Built fresh on each call since the provider set is fixed at server
+// boot — there is no hot-reload to invalidate a cached map.
+func (s *Server) knownProviderIDs() map[string]bool {
+	infos := s.auth.ListProviders()
+	out := make(map[string]bool, len(infos))
+	for _, p := range infos {
+		out[p.ID] = true
+	}
+	return out
+}
+
+// normaliseEnabledProviders validates and canonicalises a comma-separated
+// provider whitelist. Empty input is allowed and returns "" — that means
+// "inherit the globally-configured set" (the SDK / login pages fall back to
+// every registered provider). Non-empty input is split, trimmed, lower-cased,
+// deduplicated, and sorted; every token must be a key in knownIDs.
+func normaliseEnabledProviders(raw string, knownIDs map[string]bool) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	seen := make(map[string]bool)
+	var names []string
+	for _, tok := range strings.Split(raw, ",") {
+		name := strings.ToLower(strings.TrimSpace(tok))
+		if name == "" {
+			continue
+		}
+		if !knownIDs[name] {
+			return "", fmt.Errorf("enabled_providers contains unknown provider %q", name)
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ","), nil
+}
+
 func validateProject(p *store.Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("project name must not be empty")
@@ -1485,6 +1578,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
+	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs()); err != nil {
+		jsonErr(w, err, 400)
+		return
+	} else {
+		p.EnabledProviders = normalised
+	}
 	if existing, err := s.store.GetProjectByDomainPrefix(r.Context(), p.DomainPrefix); err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -1642,6 +1741,12 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	if err := validateProject(p); err != nil {
 		jsonErr(w, err, 400)
 		return
+	}
+	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs()); err != nil {
+		jsonErr(w, err, 400)
+		return
+	} else {
+		p.EnabledProviders = normalised
 	}
 	if byPrefix, err := s.store.GetProjectByDomainPrefix(r.Context(), p.DomainPrefix); err != nil {
 		jsonErr(w, err, 500)
