@@ -1,3 +1,9 @@
+---
+id: spa-auth-sdk
+title: SPA Auth SDK
+sidebar_position: 5
+---
+
 # SPA Auth SDK (`@muvee/auth`)
 
 Sign-in SDK for **project downstream users** — the people who use the apps you
