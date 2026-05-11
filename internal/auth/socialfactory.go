@@ -9,6 +9,7 @@ import "fmt"
 //
 // nil fields mean "not configured / disabled" -- callers skip those.
 type SocialConfigs struct {
+	Google   *GoogleConfig   `json:"google,omitempty"`
 	Discord  *DiscordConfig  `json:"discord,omitempty"`
 	Apple    *AppleConfig    `json:"apple,omitempty"`
 	Facebook *FacebookConfig `json:"facebook,omitempty"`
@@ -22,6 +23,15 @@ type SocialConfigs struct {
 // aborts the whole build so misconfiguration is loud, not silent.
 func BuildSocialProviders(cfg SocialConfigs) (map[string]Provider, error) {
 	out := make(map[string]Provider)
+	if cfg.Google != nil {
+		p, err := newGoogleProviderFromConfig(*cfg.Google)
+		if err != nil {
+			return nil, fmt.Errorf("google: %w", err)
+		}
+		if p != nil {
+			out[p.Name()] = p
+		}
+	}
 	if cfg.Discord != nil {
 		p, err := newDiscordProvider(*cfg.Discord)
 		if err != nil {

@@ -301,6 +301,14 @@ export interface SystemSettings {
   // *_enabled is the string 'true' | 'false' to mirror the kv store wire
   // format. ApplyChanges triggers a live reload of muvee-authservice's
   // provider set.
+  //
+  // google_* is a downstream-only Google OAuth app, distinct from the
+  // platform-side env GOOGLE_CLIENT_ID. When unset, downstream falls
+  // back to the env-configured Google app.
+  google_enabled?: string
+  google_client_id?: string
+  google_client_secret?: string
+  google_redirect_url?: string
   discord_enabled?: string
   discord_client_id?: string
   discord_client_secret?: string

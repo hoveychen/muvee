@@ -27,7 +27,32 @@ func newGoogleProvider(redirectURL string) (*googleProvider, error) {
 	if redirectURL == "" {
 		redirectURL = "http://localhost:8080/auth/google/callback"
 	}
+	return newGoogleProviderFromConfig(GoogleConfig{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirectURL,
+	})
+}
 
+// GoogleConfig holds an admin-configured Google OAuth app, used by the
+// downstream ForwardAuth path so subdomains can sign users in with a
+// Google Cloud project distinct from the platform-side env-var app.
+// Returned by muvee-server's /api/internal/oauth/social-providers when
+// `google_enabled` = true in system_settings.
+type GoogleConfig struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+}
+
+// newGoogleProviderFromConfig constructs a Google provider from an
+// explicit config, bypassing the env-var lookup. Returns (nil, nil) when
+// ClientID/ClientSecret is empty so callers can treat that as "not
+// configured" and fall back to the env path or another provider.
+func newGoogleProviderFromConfig(cfg GoogleConfig) (*googleProvider, error) {
+	if cfg.ClientID == "" || cfg.ClientSecret == "" {
+		return nil, nil
+	}
 	ctx := context.Background()
 	oidcProvider, err := gooidc.NewProvider(ctx, "https://accounts.google.com")
 	if err != nil {
@@ -35,13 +60,13 @@ func newGoogleProvider(redirectURL string) (*googleProvider, error) {
 	}
 	return &googleProvider{
 		config: &oauth2.Config{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			RedirectURL:  redirectURL,
+			ClientID:     cfg.ClientID,
+			ClientSecret: cfg.ClientSecret,
+			RedirectURL:  cfg.RedirectURL,
 			Endpoint:     google.Endpoint,
 			Scopes:       []string{gooidc.ScopeOpenID, "email", "profile"},
 		},
-		verifier: oidcProvider.Verifier(&gooidc.Config{ClientID: clientID}),
+		verifier: oidcProvider.Verifier(&gooidc.Config{ClientID: cfg.ClientID}),
 	}, nil
 }
 

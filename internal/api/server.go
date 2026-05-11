@@ -461,6 +461,13 @@ func (s *Server) handleInternalOAuthSocialProviders(w http.ResponseWriter, r *ht
 		return
 	}
 	var cfg auth.SocialConfigs
+	if settings["google_enabled"] == "true" {
+		cfg.Google = &auth.GoogleConfig{
+			ClientID:     settings["google_client_id"],
+			ClientSecret: settings["google_client_secret"],
+			RedirectURL:  settings["google_redirect_url"],
+		}
+	}
 	if settings["discord_enabled"] == "true" {
 		cfg.Discord = &auth.DiscordConfig{
 			ClientID:     settings["discord_client_id"],

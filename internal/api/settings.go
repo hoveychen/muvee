@@ -67,6 +67,15 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		// *_enabled toggles. ClientSecret + apple_private_key_p8 are
 		// sensitive but stored unencrypted at rest -- same threat model
 		// as muvee's existing platform-provider env-var path.
+		//
+		// google_* lets admins configure a downstream-only Google OAuth
+		// app distinct from the platform-side env GOOGLE_CLIENT_ID. When
+		// google_enabled = "true", reloadProviders merges this config
+		// over the env-derived Google provider in the authservice map.
+		"google_enabled":          true,
+		"google_client_id":        true,
+		"google_client_secret":    true,
+		"google_redirect_url":     true,
 		"discord_enabled":         true,
 		"discord_client_id":       true,
 		"discord_client_secret":   true,
@@ -154,7 +163,8 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 // internal/reload endpoint. Listed by prefix so adding new social
 // providers to the allowlist does not require touching this function.
 func isSocialOAuthSettingKey(k string) bool {
-	return strings.HasPrefix(k, "discord_") ||
+	return strings.HasPrefix(k, "google_") ||
+		strings.HasPrefix(k, "discord_") ||
 		strings.HasPrefix(k, "facebook_") ||
 		strings.HasPrefix(k, "twitter_") ||
 		strings.HasPrefix(k, "apple_")

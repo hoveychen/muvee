@@ -197,6 +197,7 @@ function CertRow({ cert, t }: { cert: CertStatus; t: (key: string, opts?: Record
 // ─── Social OAuth Providers section ───────────────────────────────────────────
 
 type SocialState = {
+  google_enabled: string; google_client_id: string; google_client_secret: string; google_redirect_url: string
   discord_enabled: string; discord_client_id: string; discord_client_secret: string; discord_redirect_url: string
   facebook_enabled: string; facebook_client_id: string; facebook_client_secret: string; facebook_redirect_url: string
   twitter_enabled: string; twitter_client_id: string; twitter_client_secret: string; twitter_redirect_url: string
@@ -204,13 +205,14 @@ type SocialState = {
 }
 
 const blankSocial: SocialState = {
+  google_enabled: 'false', google_client_id: '', google_client_secret: '', google_redirect_url: '',
   discord_enabled: 'false', discord_client_id: '', discord_client_secret: '', discord_redirect_url: '',
   facebook_enabled: 'false', facebook_client_id: '', facebook_client_secret: '', facebook_redirect_url: '',
   twitter_enabled: 'false', twitter_client_id: '', twitter_client_secret: '', twitter_redirect_url: '',
   apple_enabled: 'false', apple_client_id: '', apple_team_id: '', apple_key_id: '', apple_private_key_p8: '', apple_redirect_url: '',
 }
 
-type ProviderID = 'discord' | 'facebook' | 'twitter' | 'apple'
+type ProviderID = 'google' | 'discord' | 'facebook' | 'twitter' | 'apple'
 
 function pickProviderPatch(p: ProviderID, s: SocialState): Partial<SystemSettings> {
   const out: Record<string, string> = {}
@@ -223,7 +225,7 @@ function pickProviderPatch(p: ProviderID, s: SocialState): Partial<SystemSetting
 function ProviderCard({
   id, displayName, social, setSocial, onSave, saving, saved,
 }: {
-  id: 'discord' | 'facebook' | 'twitter'
+  id: 'google' | 'discord' | 'facebook' | 'twitter'
   displayName: string
   social: SocialState
   setSocial: (next: SocialState) => void
@@ -328,6 +330,10 @@ function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: st
   void t // reserved for future i18n keys
   const [social, setSocial] = useState<SocialState>(() => ({
     ...blankSocial,
+    google_enabled: initial.google_enabled || 'false',
+    google_client_id: initial.google_client_id || '',
+    google_client_secret: initial.google_client_secret || '',
+    google_redirect_url: initial.google_redirect_url || '',
     discord_enabled: initial.discord_enabled || 'false',
     discord_client_id: initial.discord_client_id || '',
     discord_client_secret: initial.discord_client_secret || '',
@@ -371,7 +377,13 @@ function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: st
           These providers are exposed only on project subdomains (ForwardAuth login pages), not on the muvee platform itself.
           Changes apply live: muvee-server reloads the authservice provider set immediately after save.
         </p>
+        <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: 16, lineHeight: 1.6 }}>
+          Google is special: leaving it disabled means downstream falls back to the env-configured platform Google app
+          (shared client_id). Enable + fill below to give downstream subdomains a Google Cloud project of their own.
+        </p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+          <ProviderCard id="google" displayName="Google" social={social} setSocial={setSocial}
+            onSave={save} saving={savingFor === 'google'} saved={savedFor === 'google'} />
           <ProviderCard id="discord" displayName="Discord" social={social} setSocial={setSocial}
             onSave={save} saving={savingFor === 'discord'} saved={savedFor === 'discord'} />
           <ProviderCard id="facebook" displayName="Facebook" social={social} setSocial={setSocial}
