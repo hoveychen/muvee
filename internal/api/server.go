@@ -1206,6 +1206,12 @@ func (s *Server) listProjectTokens(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return
+	}
 	tokens, err := s.store.ListAPITokensForProject(r.Context(), projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -1240,6 +1246,11 @@ func (s *Server) createProjectToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return
+	}
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -1264,11 +1275,20 @@ func (s *Server) createProjectToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteProjectToken(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
 	tokenID, ok := parsePathUUID(w, r, "tokenId")
 	if !ok {
 		return
 	}
 	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return
+	}
 	if err := s.store.DeleteAPIToken(r.Context(), tokenID, user.ID); err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -4031,6 +4051,12 @@ func (s *Server) getProjectSecrets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return
+	}
 	bindings, err := s.store.GetProjectSecretsWithMeta(r.Context(), projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -4067,6 +4093,12 @@ func (s *Server) setProjectSecrets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, projectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return
+	}
 	var body []struct {
 		SecretID      string `json:"secret_id"`
 		EnvVarName    string `json:"env_var_name"`
@@ -4081,9 +4113,18 @@ func (s *Server) setProjectSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	var bindings []store.ProjectSecret
 	for _, b := range body {
+		secretID := mustParseUUID(b.SecretID)
+		// Verify caller owns this secret to prevent cross-tenant secret binding theft.
+		// Admins bypass the ownership filter — they can bind any secret.
+		if user.Role != store.UserRoleAdmin {
+			if _, err := s.store.GetSecret(r.Context(), secretID, user.ID); err != nil {
+				jsonErr(w, nil, 403)
+				return
+			}
+		}
 		bindings = append(bindings, store.ProjectSecret{
 			ProjectID:     projectID,
-			SecretID:      mustParseUUID(b.SecretID),
+			SecretID:      secretID,
 			EnvVarName:    b.EnvVarName,
 			UseForGit:     b.UseForGit,
 			UseForBuild:   b.UseForBuild,
