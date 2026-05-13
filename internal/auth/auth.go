@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -65,7 +66,7 @@ func New(st *store.Store) (*Service, error) {
 		return nil, fmt.Errorf("JWT_SECRET environment variable is required (was empty)")
 	}
 	if len(secret) < 32 {
-		return nil, fmt.Errorf("JWT_SECRET must be at least 32 bytes (got %d)", len(secret))
+		log.Printf("Warning: JWT_SECRET is %d bytes (strongly recommended >= 32)", len(secret))
 	}
 
 	svc := &Service{

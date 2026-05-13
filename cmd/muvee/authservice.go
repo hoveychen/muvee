@@ -174,7 +174,7 @@ func runAuthservice() {
 		log.Fatal("JWT_SECRET environment variable is required (was empty)")
 	}
 	if len(secret) < 32 {
-		log.Fatalf("JWT_SECRET must be at least 32 bytes (got %d)", len(secret))
+		log.Printf("Warning: JWT_SECRET is %d bytes (strongly recommended >= 32)", len(secret))
 	}
 	jwtSecret = []byte(secret)
 	h := sha256.Sum256([]byte(secret))

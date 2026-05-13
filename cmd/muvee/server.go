@@ -61,7 +61,7 @@ func runServer() {
 		log.Fatal("AGENT_SECRET environment variable is required (was empty)")
 	}
 	if len(agentSecret) < 32 {
-		log.Fatalf("AGENT_SECRET must be at least 32 bytes (got %d)", len(agentSecret))
+		log.Printf("Warning: AGENT_SECRET is %d bytes (strongly recommended >= 32)", len(agentSecret))
 	}
 
 	sched := scheduler.New(st)
