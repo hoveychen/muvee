@@ -1,7 +1,7 @@
 ---
 name: muveectl
-version: 5
-description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, port-forward, curl), datasets (create, scan, delete, file ops), and API tokens. Use when the user wants to interact with their Muvee server from the command line, trigger deployments, hit auth-protected services from the terminal, manage infrastructure resources, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
+version: 6
+description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, port-forward, curl), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
 ---
 
 # muveectl – Muvee CLI
@@ -52,6 +52,45 @@ muveectl whoami
 ```
 
 Config is saved at `~/.config/muveectl/config.json`. All subsequent commands use the stored server and token automatically.
+
+## Profiles (multiple environments)
+
+Profiles let you keep credentials for several Muvee servers (e.g. `dev`, `staging`, `prod`) in one config file and switch between them kubectl-style. A legacy single-credential config is auto-migrated into a `default` profile on first read.
+
+```bash
+# Add a profile (server is required, token via login)
+muveectl profile add prod --server https://prod.example.com
+muveectl login --profile prod
+
+# Add a profile that already has a token (e.g. from teammate)
+muveectl profile add ci --server https://ci.example.com --token sk-...
+
+# List profiles (active one marked with *)
+muveectl profile list
+
+# Switch active profile
+muveectl profile use prod
+
+# Inspect (current active, or named)
+muveectl profile current
+muveectl profile show
+muveectl profile show prod
+
+# Remove a profile
+muveectl profile rm dev
+```
+
+One-shot overrides (do not change the active profile):
+
+```bash
+# Per-command flag
+muveectl --profile prod projects list
+
+# Environment variable
+MUVEECTL_PROFILE=prod muveectl projects list
+```
+
+Precedence for profile selection: `--profile` flag > `MUVEECTL_PROFILE` env > active profile in config. The existing `--server` / `--token` flags and `MUVEECTL_SERVER` / `MUVEECTL_TOKEN` env vars still override the per-profile credentials.
 
 ## Projects
 

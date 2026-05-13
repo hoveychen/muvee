@@ -8,8 +8,9 @@ import (
 )
 
 func newTestClient(server string) *client {
+	cfg := singleProfileConfig(strings.TrimRight(server, "/"), "test-token")
 	return &client{
-		cfg:    &Config{Server: server, Token: "test-token"},
+		cfg:    &cfg,
 		server: strings.TrimRight(server, "/"),
 		token:  "test-token",
 	}

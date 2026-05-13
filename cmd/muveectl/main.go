@@ -26,18 +26,24 @@ var version = "dev"
 // ─── Global state ────────────────────────────────────────────────────────────
 
 var (
-	serverOverride string
-	tokenOverride  string
-	jsonMode       bool
-	cfg            *Config
-	cl             *client
+	serverOverride  string
+	tokenOverride   string
+	profileOverride string
+	jsonMode        bool
+	cfg             *Config
+	cl              *client
 )
 
 // Env var names for credential injection (flag > env > config).
 const (
-	envServer = "MUVEECTL_SERVER"
-	envToken  = "MUVEECTL_TOKEN"
+	envServer  = "MUVEECTL_SERVER"
+	envToken   = "MUVEECTL_TOKEN"
+	envProfile = "MUVEECTL_PROFILE"
 )
+
+// defaultProfile is the name used when migrating legacy single-profile configs
+// and as the fallback when no profile is selected anywhere.
+const defaultProfile = "default"
 
 // ─── Root command ────────────────────────────────────────────────────────────
 
@@ -47,7 +53,7 @@ var rootCmd = &cobra.Command{
 	Long:  "muveectl is the command-line interface for the Muvee self-hosted PaaS.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		cfg, _ = loadConfig()
-		cl = newClient(cfg, serverOverride, tokenOverride, jsonMode)
+		cl = newClient(cfg, profileOverride, serverOverride, tokenOverride, jsonMode)
 		printNotices()
 	},
 	SilenceUsage:  true,
@@ -57,6 +63,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringVar(&serverOverride, "server", "", "Override the configured server URL (also via MUVEECTL_SERVER)")
 	rootCmd.PersistentFlags().StringVar(&tokenOverride, "token", "", "Override the API token (also via MUVEECTL_TOKEN)")
+	rootCmd.PersistentFlags().StringVar(&profileOverride, "profile", "", "Use a specific profile for this command (also via MUVEECTL_PROFILE)")
 	rootCmd.PersistentFlags().BoolVar(&jsonMode, "json", false, "Output raw JSON")
 }
 
@@ -76,10 +83,18 @@ func requireAuth() error {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-// Config holds the CLI authentication state.
-type Config struct {
+// Profile holds the credentials for one named environment.
+type Profile struct {
 	Server string `json:"server"`
 	Token  string `json:"token"`
+}
+
+// Config holds the CLI authentication state. It supports multiple named
+// profiles (kubectl-style); legacy single-profile configs ({server, token})
+// are auto-migrated on load.
+type Config struct {
+	CurrentProfile string             `json:"current_profile"`
+	Profiles       map[string]Profile `json:"profiles"`
 }
 
 func configPath() string {
@@ -87,22 +102,47 @@ func configPath() string {
 	return filepath.Join(home, ".config", "muveectl", "config.json")
 }
 
+// parseConfig decodes a config payload, transparently migrating the legacy
+// flat {server, token} shape into the multi-profile shape with a single
+// "default" profile.
+func parseConfig(data []byte) *Config {
+	var raw struct {
+		Server         string             `json:"server"`
+		Token          string             `json:"token"`
+		CurrentProfile string             `json:"current_profile"`
+		Profiles       map[string]Profile `json:"profiles"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return &Config{Profiles: map[string]Profile{}}
+	}
+	c := &Config{CurrentProfile: raw.CurrentProfile, Profiles: raw.Profiles}
+	if c.Profiles == nil {
+		c.Profiles = map[string]Profile{}
+	}
+	if len(raw.Profiles) == 0 && (raw.Server != "" || raw.Token != "") {
+		c.Profiles[defaultProfile] = Profile{Server: raw.Server, Token: raw.Token}
+		if c.CurrentProfile == "" {
+			c.CurrentProfile = defaultProfile
+		}
+	}
+	return c
+}
+
 func loadConfig() (*Config, error) {
 	data, err := os.ReadFile(configPath())
 	if err != nil {
-		return &Config{}, nil
+		return &Config{Profiles: map[string]Profile{}}, nil
 	}
-	var c Config
-	if err := json.Unmarshal(data, &c); err != nil {
-		return &Config{}, nil
-	}
-	return &c, nil
+	return parseConfig(data), nil
 }
 
 func saveConfig(c *Config) error {
 	path := configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
+	}
+	if c.Profiles == nil {
+		c.Profiles = map[string]Profile{}
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -120,10 +160,28 @@ type client struct {
 	json   bool
 }
 
+// resolveProfile picks the active profile name. Precedence: --profile flag,
+// MUVEECTL_PROFILE env, Config.CurrentProfile. Returns "" when nothing is set
+// (no implicit "default" — that decision belongs to the caller).
+func resolveProfile(cfg *Config, profileOverride string, getenv func(string) string) string {
+	if profileOverride != "" {
+		return profileOverride
+	}
+	if v := getenv(envProfile); v != "" {
+		return v
+	}
+	return cfg.CurrentProfile
+}
+
 // resolveCreds applies the flag > env > config precedence for server and token.
+// The selected profile (when present) supplies the baseline credentials.
 // Pass os.Getenv for production; tests inject a fake lookup.
-func resolveCreds(cfg *Config, serverOverride, tokenOverride string, getenv func(string) string) (server, token string) {
-	server = cfg.Server
+func resolveCreds(cfg *Config, profileOverride, serverOverride, tokenOverride string, getenv func(string) string) (server, token string) {
+	name := resolveProfile(cfg, profileOverride, getenv)
+	if p, ok := cfg.Profiles[name]; ok {
+		server = p.Server
+		token = p.Token
+	}
 	if v := getenv(envServer); v != "" {
 		server = v
 	}
@@ -132,7 +190,6 @@ func resolveCreds(cfg *Config, serverOverride, tokenOverride string, getenv func
 	}
 	server = strings.TrimRight(server, "/")
 
-	token = cfg.Token
 	if v := getenv(envToken); v != "" {
 		token = v
 	}
@@ -142,8 +199,8 @@ func resolveCreds(cfg *Config, serverOverride, tokenOverride string, getenv func
 	return server, token
 }
 
-func newClient(cfg *Config, serverOverride, tokenOverride string, jsonMode bool) *client {
-	s, t := resolveCreds(cfg, serverOverride, tokenOverride, os.Getenv)
+func newClient(cfg *Config, profileOverride, serverOverride, tokenOverride string, jsonMode bool) *client {
+	s, t := resolveCreds(cfg, profileOverride, serverOverride, tokenOverride, os.Getenv)
 	return &client{cfg: cfg, server: s, token: t, json: jsonMode}
 }
 

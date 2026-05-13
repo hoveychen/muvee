@@ -19,6 +19,8 @@ import (
 
 // ─── Login ───────────────────────────────────────────────────────────────────
 
+var loginProfileFlag string
+
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate via browser (OAuth)",
@@ -28,22 +30,45 @@ var loginCmd = &cobra.Command{
 }
 
 func init() {
+	loginCmd.Flags().StringVar(&loginProfileFlag, "profile", "", "Save credentials under this profile name (defaults to active profile or 'default')")
 	rootCmd.AddCommand(loginCmd)
 }
 
+// loginTargetProfile picks the profile name to write credentials into:
+// --profile on `login` wins, then the global --profile flag, then
+// MUVEECTL_PROFILE, then the active CurrentProfile, then "default".
+func loginTargetProfile(cfg *Config) string {
+	if loginProfileFlag != "" {
+		return loginProfileFlag
+	}
+	if profileOverride != "" {
+		return profileOverride
+	}
+	if v := os.Getenv(envProfile); v != "" {
+		return v
+	}
+	if cfg.CurrentProfile != "" {
+		return cfg.CurrentProfile
+	}
+	return defaultProfile
+}
+
 func cmdLogin(cfg *Config) error {
+	profileName := loginTargetProfile(cfg)
+	existing := cfg.Profiles[profileName]
+	server := existing.Server
 	if serverOverride != "" {
-		cfg.Server = strings.TrimRight(serverOverride, "/")
-	} else if cfg.Server == "" {
+		server = strings.TrimRight(serverOverride, "/")
+	} else if server == "" {
 		if v := os.Getenv(envServer); v != "" {
-			cfg.Server = strings.TrimRight(v, "/")
+			server = strings.TrimRight(v, "/")
 		}
 	}
-	if cfg.Server == "" {
+	if server == "" {
 		fmt.Print("Enter Muvee server URL (e.g. https://www.example.com): ")
 		var s string
 		fmt.Scanln(&s)
-		cfg.Server = strings.TrimRight(s, "/")
+		server = strings.TrimRight(s, "/")
 	}
 
 	// Start a local HTTP server to receive the token callback
@@ -57,7 +82,7 @@ func cmdLogin(cfg *Config) error {
 	// Include the local hostname so the server can label the issued API token
 	// (e.g. "CLI Token (my-laptop)") — this makes it easy to identify which
 	// machine a token belongs to on the tokens management page.
-	loginURL := fmt.Sprintf("%s/login?port=%d", cfg.Server, port)
+	loginURL := fmt.Sprintf("%s/login?port=%d", server, port)
 	if h, err := os.Hostname(); err == nil {
 		if h = strings.TrimSpace(h); h != "" {
 			loginURL += "&hostname=" + url.QueryEscape(h)
@@ -103,12 +128,16 @@ func cmdLogin(cfg *Config) error {
 
 	select {
 	case token := <-tokenCh:
-		cfg.Token = token
 		_ = srv.Shutdown(context.Background())
+		if cfg.Profiles == nil {
+			cfg.Profiles = map[string]Profile{}
+		}
+		cfg.Profiles[profileName] = Profile{Server: server, Token: token}
+		cfg.CurrentProfile = profileName
 		if err := saveConfig(cfg); err != nil {
 			return fmt.Errorf("save config: %w", err)
 		}
-		fmt.Println("\nLogged in successfully. Token saved to", configPath())
+		fmt.Printf("\nLogged in successfully as profile %q. Token saved to %s\n", profileName, configPath())
 		return nil
 	case <-ctx.Done():
 		_ = srv.Shutdown(context.Background())
