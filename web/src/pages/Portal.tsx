@@ -176,10 +176,20 @@ function AppIcon({ project }: { project: PublicProject }) {
 
   const icon = project.icon?.trim()
 
-  // SVG content
+  // SVG content — serve as a data: URL inside an <img> so the browser does
+  // not execute embedded <script>/event handlers (SVG loaded via <img> runs
+  // in a script-disabled context). Avoids same-origin stored-XSS through
+  // user-controlled project.icon. See security review C3.
   if (icon && icon.startsWith('<svg')) {
+    const dataURL = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(icon)))}`
     return (
-      <div style={style} dangerouslySetInnerHTML={{ __html: icon }} />
+      <div style={style}>
+        <img
+          src={dataURL}
+          alt={project.name}
+          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+        />
+      </div>
     )
   }
 

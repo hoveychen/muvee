@@ -316,6 +316,18 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 	// By default tunnels require ForwardAuth; the CLI sends noauth=1 to opt out.
 	authRequired := r.URL.Query().Get("noauth") != "1"
 
+	// Opting out of ForwardAuth publishes an unauthenticated service on the
+	// platform's apex domain. For ephemeral t-* prefixes (no associated project)
+	// this requires admin — otherwise any authorized user could phish under
+	// the platform's TLS/reputation. Project-scoped tunnels are fine because
+	// the project lookup above already proved ownership.
+	if !authRequired && boundProject == "" && user.Role != store.UserRoleAdmin {
+		log.Printf("tunnel: connect reject user=%q reason=noauth_requires_admin domain=%q",
+			user.Email, domain)
+		http.Error(w, "noauth ephemeral tunnels require admin role", http.StatusForbidden)
+		return
+	}
+
 	// First-come-first-served: reject early before the WS upgrade so the
 	// second client gets a proper HTTP 409 instead of a surprise WS close.
 	if existing := s.tunnels.get(domain); existing != nil {

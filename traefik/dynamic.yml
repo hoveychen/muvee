@@ -35,3 +35,24 @@ http:
       plugin:
         embed-bridge:
           scriptPath: /_embed-bridge.js
+
+    # Strip X-Muvee-Internal-Key from inbound requests so a client coming
+    # through the public Traefik entrypoint cannot impersonate the internal
+    # service-to-service auth. The internal endpoints use sha256(JWT_SECRET)
+    # as a shared key; muvee-authservice → muvee-server calls go directly
+    # via the docker network and bypass this proxy, so they keep the header.
+    # See security review C9.
+    strip-internal-key:
+      headers:
+        customRequestHeaders:
+          X-Muvee-Internal-Key: ""
+
+    # Rewrite any public-Traefik request to /api/internal/* onto a sentinel
+    # path muvee-server's chi router does not register, so the upstream
+    # returns 404. Combined with strip-internal-key this gives belt-and-
+    # suspenders defense even if a future endpoint forgets to enforce the
+    # key check. Direct localhost:8080 access (intra-host) is unaffected.
+    block-internal-api:
+      replacePathRegex:
+        regex: "^/api/internal/(.*)$"
+        replacement: "/__blocked_by_edge__/$1"

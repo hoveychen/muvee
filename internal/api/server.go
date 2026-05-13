@@ -513,12 +513,43 @@ func (s *Server) agentSecretMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// allowedOrigin reports whether origin should be allowed by the chi-cors
+// middleware. The previous setting was `AllowedOrigins: ["*"] + AllowCredentials: true`
+// which (in PAT-bearer flows that aren't subject to the browser's credentialed
+// wildcard rejection) effectively let any third-party site read authenticated
+// API responses. We now allow only the platform's own base domain. The
+// per-subdomain user-info endpoint has its own dedicated middleware
+// (applyUserInfoCORS) that mirrors any *.baseDomain origin — that path is
+// intentional and unaffected by this restriction.
+func (s *Server) allowedOrigin(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSpace(s.baseDomain))
+	if base == "" {
+		return false
+	}
+	// Local dev shorthand: baseDomain may include a port (e.g. "localhost:8080").
+	if base == "localhost" || strings.HasPrefix(base, "localhost:") || strings.HasPrefix(base, "127.0.0.1:") {
+		// Permit any localhost / 127.0.0.1 origin (http/https, any port) during local dev.
+		lo := strings.ToLower(origin)
+		if strings.HasPrefix(lo, "http://localhost") ||
+			strings.HasPrefix(lo, "https://localhost") ||
+			strings.HasPrefix(lo, "http://127.0.0.1") ||
+			strings.HasPrefix(lo, "https://127.0.0.1") {
+			return true
+		}
+	}
+	// Strict: only the canonical https://${baseDomain} origin is allowed.
+	return strings.EqualFold(origin, "https://"+base)
+}
+
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowOriginFunc:  func(_ *http.Request, origin string) bool { return s.allowedOrigin(origin) },
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: true,
@@ -654,8 +685,12 @@ func (s *Server) Router() http.Handler {
 		r.HandleFunc("/api/projects/{id}/proxy", s.handleProjectProxy)
 		r.HandleFunc("/api/projects/{id}/proxy/*", s.handleProjectProxy)
 
-		// Adhoc tunnel – WebSocket endpoint for CLI tunnel connections
-		r.Get("/api/tunnel/connect", s.handleTunnelConnect)
+		// Adhoc tunnel – WebSocket endpoint for CLI tunnel connections.
+		// Gated on requireAuthorized: publishing on the platform's apex domain
+		// (even ephemeral t-* prefixes) requires the same authorization a deploy
+		// does. Otherwise an unprivileged user under invite/request access mode
+		// could host arbitrary content under the platform's TLS/reputation.
+		r.Get("/api/tunnel/connect", s.requireAuthorized(s.handleTunnelConnect))
 
 		// Hosted git repository browser
 		r.Get("/api/projects/{id}/repo/tree", s.repoTree)
@@ -1437,9 +1472,26 @@ func normaliseEnabledProviders(raw string, knownIDs map[string]bool) (string, er
 	return strings.Join(names, ","), nil
 }
 
+// dangerousIconPattern matches icon strings that, if rendered inline as HTML,
+// would execute JavaScript in viewers' browsers (same-origin stored XSS).
+// Defense in depth — the Portal also renders SVG icons via <img src=data:>,
+// which browsers run in a script-disabled context, but this server-side
+// check prevents the dangerous payload from ever entering the database.
+var dangerousIconPattern = regexp.MustCompile(`(?i)<script\b|<iframe\b|<object\b|<embed\b|<foreignObject\b|\son[a-z]+\s*=|javascript:|<!--`)
+
+func validateIcon(icon string) error {
+	if dangerousIconPattern.MatchString(icon) {
+		return fmt.Errorf("icon contains disallowed markup (script/iframe/event handler/javascript: URL)")
+	}
+	return nil
+}
+
 func validateProject(p *store.Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("project name must not be empty")
+	}
+	if err := validateIcon(p.Icon); err != nil {
+		return err
 	}
 	if p.ProjectType == "" {
 		p.ProjectType = store.ProjectTypeDeployment

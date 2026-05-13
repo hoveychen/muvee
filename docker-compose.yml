@@ -136,6 +136,7 @@ services:
       - "traefik.http.routers.muvee.entrypoints=websecure"
       - "traefik.http.routers.muvee.tls.certresolver=letsencrypt"
       - "traefik.http.routers.muvee.tls.domains[0].main=${BASE_DOMAIN}"
+      - "traefik.http.routers.muvee.middlewares=strip-internal-key@file,block-internal-api@file"
       - "traefik.http.services.muvee.loadbalancer.server.port=8080"
       - "com.centurylinklabs.watchtower.enable=true"
 
