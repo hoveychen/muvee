@@ -62,7 +62,10 @@ func New(st *store.Store) (*Service, error) {
 	}
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		secret = "change-me-in-production"
+		return nil, fmt.Errorf("JWT_SECRET environment variable is required (was empty)")
+	}
+	if len(secret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET must be at least 32 bytes (got %d)", len(secret))
 	}
 
 	svc := &Service{

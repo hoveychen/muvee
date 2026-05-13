@@ -171,7 +171,10 @@ func runAuthservice() {
 	cookieDomain = os.Getenv("BASE_DOMAIN")
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		secret = "change-me-in-production"
+		log.Fatal("JWT_SECRET environment variable is required (was empty)")
+	}
+	if len(secret) < 32 {
+		log.Fatalf("JWT_SECRET must be at least 32 bytes (got %d)", len(secret))
 	}
 	jwtSecret = []byte(secret)
 	h := sha256.Sum256([]byte(secret))

@@ -58,7 +58,10 @@ func runServer() {
 	}
 	agentSecret := os.Getenv("AGENT_SECRET")
 	if agentSecret == "" {
-		log.Println("Warning: AGENT_SECRET is not set; agent endpoints are unauthenticated")
+		log.Fatal("AGENT_SECRET environment variable is required (was empty)")
+	}
+	if len(agentSecret) < 32 {
+		log.Fatalf("AGENT_SECRET must be at least 32 bytes (got %d)", len(agentSecret))
 	}
 
 	sched := scheduler.New(st)

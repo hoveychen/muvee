@@ -502,10 +502,12 @@ func (s *Server) handleInternalOAuthSocialProviders(w http.ResponseWriter, r *ht
 }
 
 // agentSecretMiddleware rejects requests that do not carry the correct X-Agent-Secret header.
-// When no secret is configured the middleware passes all requests through (dev/test mode).
+// Fails closed when no secret is configured (the server refuses to start without one,
+// so this branch is defense-in-depth) and uses constant-time comparison.
 func (s *Server) agentSecretMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.agentSecret != "" && r.Header.Get("X-Agent-Secret") != s.agentSecret {
+		got := r.Header.Get("X-Agent-Secret")
+		if s.agentSecret == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.agentSecret)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -4462,8 +4464,9 @@ func (s *Server) gitHTTPAuth(r *http.Request, projectID uuid.UUID) error {
 		return fmt.Errorf("basic auth required")
 	}
 
-	// Allow agent secret for builder cloning.
-	if s.agentSecret != "" && password == s.agentSecret {
+	// Allow agent secret for builder cloning. Constant-time comparison guards
+	// against timing-based recovery of the shared secret across many probes.
+	if s.agentSecret != "" && subtle.ConstantTimeCompare([]byte(password), []byte(s.agentSecret)) == 1 {
 		return nil
 	}
 
