@@ -164,6 +164,37 @@ func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stopp
 	return err
 }
 
+// DispatchRuntimeLogs creates a runtime_logs task on the node where the given
+// deployment is running. The agent will run `docker logs --tail N --since T`
+// against the deployment's container and write the captured output back into
+// the task's Result field via the existing /api/agent/tasks/{id}/complete path.
+// Returns the new task ID so the CLI can poll for completion.
+//
+// tail < 1 is treated as "no tail limit" (the agent will still cap the output
+// size to avoid blowing up the DB column). since may be empty.
+func (s *Scheduler) DispatchRuntimeLogs(ctx context.Context, nodeID uuid.UUID, deployment *store.Deployment, domainPrefix string, tail int, since string) (uuid.UUID, error) {
+	payload := map[string]interface{}{
+		"domain_prefix": domainPrefix,
+	}
+	if tail > 0 {
+		payload["tail"] = tail
+	}
+	if since != "" {
+		payload["since"] = since
+	}
+	task := &store.Task{
+		Type:         store.TaskTypeRuntimeLogs,
+		NodeID:       &nodeID,
+		DeploymentID: deployment.ID,
+		Payload:      payload,
+	}
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
+}
+
 // DispatchComposeCleanup tears down a compose project on its pinned node,
 // including its docker named volumes. Used when a compose project is deleted.
 // deploymentID is optional — if zero, the cleanup is not tied to a specific

@@ -676,6 +676,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/access-requests/{id}/deny", s.requireAuthorized(s.denyAccessRequest))
 		r.Post("/api/projects/{id}/deploy", s.requireAuthorized(s.triggerDeploy))
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
+		r.Post("/api/projects/{id}/runtime-logs", s.requireAuthorized(s.triggerRuntimeLogs))
+		r.Get("/api/tasks/{id}", s.getTaskStatus)
 		r.Get("/api/projects/{id}/metrics", s.getProjectMetrics)
 		r.Get("/api/projects/{id}/traffic", s.getProjectTraffic)
 		r.Get("/api/projects/{id}/workspace", s.workspaceList)
@@ -2383,6 +2385,87 @@ func (s *Server) listDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, deployments)
+}
+
+// triggerRuntimeLogs dispatches a runtime_logs task to the deploy node where
+// the project's current running deployment lives. The agent picks the task up,
+// runs `docker logs --tail N --since T` against the container, and writes the
+// captured output back into the task's Result field. The CLI then polls
+// GET /api/tasks/{id} for completion.
+func (s *Server) triggerRuntimeLogs(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+
+	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	since := strings.TrimSpace(r.URL.Query().Get("since"))
+
+	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if running == nil {
+		jsonErr(w, fmt.Errorf("project has no running deployment"), 409)
+		return
+	}
+	deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
+	if err != nil || deployment == nil || deployment.NodeID == nil {
+		jsonErr(w, fmt.Errorf("deployment node unknown"), 409)
+		return
+	}
+	taskID, err := s.sched.DispatchRuntimeLogs(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix, tail, since)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"task_id": taskID.String(), "deployment_id": deployment.ID.String()})
+}
+
+// getTaskStatus is the CLI-side polling endpoint for tasks the user has
+// dispatched (currently only runtime_logs). Returns 404 for unknown tasks and
+// 403 when the caller doesn't have access to the task's underlying project.
+// Only runtime_logs tasks are exposed via this endpoint — build/deploy/cleanup
+// status is still surfaced through the deployment-centric endpoints.
+func (s *Server) getTaskStatus(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	task, err := s.store.GetTask(r.Context(), id)
+	if err != nil || task == nil {
+		jsonErr(w, fmt.Errorf("task not found"), 404)
+		return
+	}
+	if task.Type != store.TaskTypeRuntimeLogs {
+		jsonErr(w, fmt.Errorf("task not accessible"), 403)
+		return
+	}
+	deployment, err := s.store.GetDeployment(r.Context(), task.DeploymentID)
+	if err != nil || deployment == nil {
+		jsonErr(w, fmt.Errorf("task not found"), 404)
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, deployment.ProjectID, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"id":            task.ID.String(),
+		"type":          string(task.Type),
+		"status":        string(task.Status),
+		"result":        task.Result,
+		"deployment_id": task.DeploymentID.String(),
+	})
 }
 
 // ─── Datasets ────────────────────────────────────────────────────────────────

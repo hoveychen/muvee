@@ -445,9 +445,10 @@ type DatasetFileHistory struct {
 type TaskType string
 
 const (
-	TaskTypeBuild   TaskType = "build"
-	TaskTypeDeploy  TaskType = "deploy"
-	TaskTypeCleanup TaskType = "cleanup"
+	TaskTypeBuild        TaskType = "build"
+	TaskTypeDeploy       TaskType = "deploy"
+	TaskTypeCleanup      TaskType = "cleanup"
+	TaskTypeRuntimeLogs  TaskType = "runtime_logs"
 )
 
 type TaskStatus string

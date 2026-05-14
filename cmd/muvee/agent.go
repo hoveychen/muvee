@@ -282,6 +282,11 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 
 	case store.TaskTypeCleanup:
 		taskErr = runCleanup(ctx, task)
+
+	case store.TaskTypeRuntimeLogs:
+		out, err := runRuntimeLogs(ctx, task)
+		taskErr = err
+		extra["result"] = out
 	}
 
 	if taskErr != nil {
@@ -458,6 +463,49 @@ func agentPost(url, secret, contentType string, body io.Reader) (*http.Response,
 		req.Header.Set("X-Agent-Secret", secret)
 	}
 	return http.DefaultClient.Do(req)
+}
+
+// runRuntimeLogs handles a runtime_logs task: it runs `docker logs` against the
+// project's container and returns the combined stdout+stderr. Output is capped
+// at runtimeLogsMaxBytes so the task.Result column doesn't balloon when the
+// container has been chatty.
+//
+// taskErr is returned non-nil only for real execution failures (docker missing,
+// permission denied). A "No such container" condition is reported as a normal
+// completion with an explanatory body so the CLI can still print something
+// useful — the user usually wants to know "the container isn't running" too.
+const runtimeLogsMaxBytes = 1 << 20 // 1 MiB
+
+func runRuntimeLogs(ctx context.Context, task *store.Task) (string, error) {
+	domainPrefix := str(task.Payload, "domain_prefix")
+	if domainPrefix == "" {
+		return "", fmt.Errorf("runtime_logs task missing domain_prefix")
+	}
+	containerName := "muvee-" + domainPrefix
+
+	args := []string{"logs"}
+	if tail := intVal(task.Payload, "tail"); tail > 0 {
+		args = append(args, "--tail", fmt.Sprintf("%d", tail))
+	}
+	if since := str(task.Payload, "since"); since != "" {
+		args = append(args, "--since", since)
+	}
+	args = append(args, containerName)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// "No such container" is a normal "the app isn't running right now" case,
+		// not an agent-side failure. Surface docker's message as the result.
+		if strings.Contains(string(out), "No such container") {
+			return strings.TrimSpace(string(out)), nil
+		}
+		return "", fmt.Errorf("docker logs %s: %w: %s", containerName, err, strings.TrimSpace(string(out)))
+	}
+	if len(out) > runtimeLogsMaxBytes {
+		out = append(out[:runtimeLogsMaxBytes], []byte("\n[truncated]\n")...)
+	}
+	return string(out), nil
 }
 
 func runCleanup(ctx context.Context, task *store.Task) error {

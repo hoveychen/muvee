@@ -6,8 +6,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -75,6 +79,7 @@ func init() {
 	projectsCmd.AddCommand(projectsDeployCmd)
 	projectsCmd.AddCommand(projectsDeploymentsCmd)
 	projectsCmd.AddCommand(projectsLogsCmd)
+	projectsCmd.AddCommand(projectsRuntimeLogsCmd)
 	projectsCmd.AddCommand(projectsMetricsCmd)
 	projectsCmd.AddCommand(projectsPortForwardCmd)
 	projectsCmd.AddCommand(projectsCurlCmd)
@@ -88,6 +93,12 @@ func init() {
 
 	// projects logs flags
 	projectsLogsCmd.Flags().String("deployment", "", "Specific deployment ID (defaults to latest)")
+
+	// projects runtime-logs flags
+	projectsRuntimeLogsCmd.Flags().Int("tail", 200, "Number of log lines to fetch (0 = no limit, capped at 1 MiB server-side)")
+	projectsRuntimeLogsCmd.Flags().String("since", "", "Only return logs since this time (e.g. 1h, 10m, 2026-05-14T08:00:00)")
+	projectsRuntimeLogsCmd.Flags().BoolP("follow", "f", false, "Stream new lines (poll every 5 s; Ctrl-C to stop)")
+	projectsRuntimeLogsCmd.Flags().Duration("poll-timeout", 60*time.Second, "Max wait for a single snapshot before giving up")
 
 	// projects metrics flags
 	projectsMetricsCmd.Flags().Int("limit", 60, "Number of metric samples")
@@ -528,6 +539,144 @@ var projectsLogsCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// ─── Runtime logs ────────────────────────────────────────────────────────────
+
+var projectsRuntimeLogsCmd = &cobra.Command{
+	Use:   "runtime-logs ID-OR-NAME",
+	Short: "Show container stdout/stderr from the running deployment (for crash / restart debugging)",
+	Long: `Fetch the live container stdout/stderr from the deploy node where the
+project's current deployment is running. Unlike "projects logs" (which shows
+the build/deploy phase output captured during ` + "`docker build`" + ` / ` + "`docker run`" + `),
+this command runs ` + "`docker logs`" + ` against the container itself, so it surfaces
+panics, restart reasons, and runtime errors.
+
+Requires a running deployment on a deploy node; returns 409 otherwise.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := requireAuth(); err != nil {
+			return err
+		}
+		tail, _ := cmd.Flags().GetInt("tail")
+		since, _ := cmd.Flags().GetString("since")
+		follow, _ := cmd.Flags().GetBool("follow")
+		pollTimeout, _ := cmd.Flags().GetDuration("poll-timeout")
+
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+
+		if !follow {
+			out, err := fetchRuntimeLogsSnapshot(cl, id, tail, since, pollTimeout)
+			if err != nil {
+				return err
+			}
+			fmt.Print(out)
+			if !strings.HasSuffix(out, "\n") {
+				fmt.Println()
+			}
+			return nil
+		}
+
+		// Follow mode: print initial snapshot, then loop polling for new lines.
+		// We advance the "since" cursor by walking it forward each iteration.
+		// Docker accepts both RFC3339 timestamps and relative durations; we use
+		// RFC3339 (UTC) once we have an anchor so subsequent calls don't re-fetch
+		// the whole window each time.
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		initialSince := since
+		if initialSince == "" {
+			initialSince = "1h"
+		}
+		out, err := fetchRuntimeLogsSnapshot(cl, id, tail, initialSince, pollTimeout)
+		if err != nil {
+			return err
+		}
+		fmt.Print(out)
+		if !strings.HasSuffix(out, "\n") {
+			fmt.Println()
+		}
+
+		// Subsequent polls use an RFC3339 timestamp anchored at "now" before
+		// each request. This intentionally trades a small overlap risk (lines
+		// emitted between the agent's docker-logs call and our cursor update
+		// could be skipped) for not re-printing the entire window. For a debug
+		// tool this is acceptable; users who need full fidelity can rerun
+		// without --follow.
+		cursor := time.Now().UTC().Format(time.RFC3339)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				nextCursor := time.Now().UTC().Format(time.RFC3339)
+				chunk, err := fetchRuntimeLogsSnapshot(cl, id, 0, cursor, pollTimeout)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "poll error: %v\n", err)
+					continue
+				}
+				if strings.TrimSpace(chunk) != "" {
+					fmt.Print(chunk)
+					if !strings.HasSuffix(chunk, "\n") {
+						fmt.Println()
+					}
+				}
+				cursor = nextCursor
+			}
+		}
+	},
+}
+
+// fetchRuntimeLogsSnapshot dispatches a runtime_logs task to the control plane
+// and polls /api/tasks/{id} until it completes or pollTimeout elapses.
+func fetchRuntimeLogsSnapshot(c *client, projectID string, tail int, since string, pollTimeout time.Duration) (string, error) {
+	q := url.Values{}
+	if tail > 0 {
+		q.Set("tail", fmt.Sprintf("%d", tail))
+	}
+	if since != "" {
+		q.Set("since", since)
+	}
+	path := "/api/projects/" + projectID + "/runtime-logs"
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	resp, err := c.do("POST", path, nil)
+	if err != nil {
+		return "", err
+	}
+	taskID := str(resp, "task_id")
+	if taskID == "" {
+		return "", fmt.Errorf("server did not return task_id")
+	}
+
+	deadline := time.Now().Add(pollTimeout)
+	for {
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timed out waiting for runtime logs task %s", taskID)
+		}
+		task, err := c.do("GET", "/api/tasks/"+taskID, nil)
+		if err != nil {
+			return "", err
+		}
+		switch str(task, "status") {
+		case "completed":
+			return str(task, "result"), nil
+		case "failed":
+			result := str(task, "result")
+			if result == "" {
+				result = "(no error message)"
+			}
+			return "", fmt.Errorf("runtime logs task failed: %s", result)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // ─── Metrics ─────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 ---
 name: muveectl
-version: 6
-description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, port-forward, curl), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
+version: 7
+description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, port-forward, curl, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, debug container crashes and restarts, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
 ---
 
 # muveectl – Muvee CLI
@@ -141,6 +141,10 @@ muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-au
   [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
+# Build/deploy phase logs (captured during `docker build` / `docker run`):
+muveectl projects logs PROJECT_ID [--deployment DEPLOYMENT_ID]
+# Runtime container stdout/stderr (debug crash / restart reasons):
+muveectl projects runtime-logs PROJECT_ID [--tail 200] [--since 1h] [--follow]
 muveectl projects metrics PROJECT_ID [--limit N]
 muveectl projects port-forward PROJECT_ID [--port PORT]
 muveectl projects curl PROJECT_ID [PATH] [-X METHOD] [-d BODY] [--data-stdin] \
@@ -216,6 +220,32 @@ muveectl projects update PROJECT_ID \
 - Draw a simple SVG icon that represents the project's purpose (e.g. a chart for analytics, a robot for AI, a globe for web apps)
 - Use `viewBox="0 0 24 24"` and `stroke="currentColor"` so it adapts to light/dark themes
 - Keep the SVG under ~500 characters for readability in CLI output
+
+### Logs (build vs. runtime)
+
+There are two log surfaces and they capture different things — picking the wrong one is the #1 reason "I can't see why my container died" debugging stalls.
+
+```bash
+# Build/deploy phase logs — what the agent printed while running
+#   `docker build` and `docker run` for a specific deployment.
+# Use this for: build failures, push failures, image pull errors, port-bind errors.
+muveectl projects logs PROJECT_ID
+muveectl projects logs PROJECT_ID --deployment DEPLOYMENT_ID   # any past deployment
+muveectl projects deployments PROJECT_ID                       # list deployment IDs
+
+# Runtime container stdout/stderr — `docker logs muvee-<domain_prefix>` on
+# the deploy node. Captures what your application itself printed (panics,
+# request errors, restart reasons, OOM stack traces).
+# Use this for: crash debugging, restart-loop investigation, "why is my app silent".
+muveectl projects runtime-logs PROJECT_ID                      # last 200 lines
+muveectl projects runtime-logs PROJECT_ID --tail 1000 --since 30m
+muveectl projects runtime-logs PROJECT_ID --follow             # poll every 5 s, Ctrl-C to stop
+```
+
+Limits and caveats:
+- `runtime-logs` requires the project to have a running deployment (returns 409 otherwise — if the container has been removed entirely, use `projects logs` to see why the deploy failed).
+- Output is capped at 1 MiB per snapshot server-side; pair `--tail` and `--since` to narrow the window.
+- `--follow` is a 5-second poll loop, not a true stream — small overlap/gap risk at the boundary. Re-run without `--follow` for full fidelity on a fixed window.
 
 ### Container Metrics
 
