@@ -328,6 +328,52 @@ func TestUpdateProject_PartialPayloadPreservesAuth(t *testing.T) {
 	}
 }
 
+// TestUpdateProject_BrandingFieldsMerge verifies that per-project branding
+// fields (added in migration 040) round-trip through mergeProjectUpdate the
+// same way other config fields do: present keys overwrite, absent keys keep
+// the existing value. This locks in the contract that project owners can
+// edit branding from the Config tab without zeroing out other branding keys
+// they did not touch in the same save.
+func TestUpdateProject_BrandingFieldsMerge(t *testing.T) {
+	existing := &store.Project{
+		Name:                 "myapp",
+		ProjectType:          store.ProjectTypeDeployment,
+		DomainPrefix:         "myapp",
+		BrandingSiteName:     "Old Site",
+		BrandingLogoURL:      "https://example.com/old.png",
+		BrandingPrimaryColor: "#000000",
+		BrandingTagline:      "old tagline",
+	}
+
+	// Partial save: only updates site name + logo. The other two existing
+	// branding fields must survive.
+	body := `{"name":"myapp","domain_prefix":"myapp","branding_site_name":"New Site","branding_logo_url":"https://example.com/new.png","branding_sidebar_bg":"#222","branding_description":"a description"}`
+
+	merged, err := mergeProjectUpdate(existing, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("mergeProjectUpdate error: %v", err)
+	}
+
+	if merged.BrandingSiteName != "New Site" {
+		t.Errorf("branding_site_name not updated; got %q", merged.BrandingSiteName)
+	}
+	if merged.BrandingLogoURL != "https://example.com/new.png" {
+		t.Errorf("branding_logo_url not updated; got %q", merged.BrandingLogoURL)
+	}
+	if merged.BrandingSidebarBg != "#222" {
+		t.Errorf("branding_sidebar_bg not set; got %q", merged.BrandingSidebarBg)
+	}
+	if merged.BrandingDescription != "a description" {
+		t.Errorf("branding_description not set; got %q", merged.BrandingDescription)
+	}
+	if merged.BrandingPrimaryColor != "#000000" {
+		t.Errorf("branding_primary_color lost; got %q", merged.BrandingPrimaryColor)
+	}
+	if merged.BrandingTagline != "old tagline" {
+		t.Errorf("branding_tagline lost; got %q", merged.BrandingTagline)
+	}
+}
+
 // TestUpdateProject_ExplicitFalseOverrides verifies that explicitly sending
 // auth_required:false DOES disable auth (it's not ignored by the merge).
 func TestUpdateProject_ExplicitFalseOverrides(t *testing.T) {

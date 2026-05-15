@@ -129,6 +129,19 @@ type Project struct {
 	// Empty = inherit the globally-configured set; the SDK and ForwardAuth
 	// login pages both honour this column.
 	EnabledProviders string `db:"enabled_providers"    json:"enabled_providers"`
+	// Branding fields drive the visual of the forward-auth login page served
+	// on this project's downstream subdomain. Empty = fall back to the
+	// platform-wide system_settings (and then to built-in defaults). See
+	// migration 040 for the rationale.
+	BrandingSiteName     string `db:"branding_site_name"     json:"branding_site_name"`
+	BrandingLogoURL      string `db:"branding_logo_url"      json:"branding_logo_url"`
+	BrandingFaviconURL   string `db:"branding_favicon_url"   json:"branding_favicon_url"`
+	BrandingPrimaryColor string `db:"branding_primary_color" json:"branding_primary_color"`
+	BrandingSidebarBg    string `db:"branding_sidebar_bg"    json:"branding_sidebar_bg"`
+	BrandingTagline      string `db:"branding_tagline"       json:"branding_tagline"`
+	BrandingDescription  string `db:"branding_description"   json:"branding_description"`
+	BrandingFooterText   string `db:"branding_footer_text"   json:"branding_footer_text"`
+	BrandingTrustText    string `db:"branding_trust_text"    json:"branding_trust_text"`
 	// GitPushURL is computed at API response time for hosted projects; not stored in DB.
 	GitPushURL string `db:"-" json:"git_push_url,omitempty"`
 	// Owner display fields, populated by ListProjectsForUser / GetProject via LEFT JOIN users.

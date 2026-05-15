@@ -263,12 +263,34 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, nil, http.StatusNotFound)
 		return
 	}
+	// Per-project branding columns drive the forward-auth login page visual.
+	// Empty values fall back to platform-wide system_settings (read here so
+	// authservice doesn't need a separate roundtrip), and finally to built-in
+	// defaults baked into the Go template.
+	platformSiteName, _ := s.store.GetSetting(r.Context(), "site_name")
+	platformLogoURL, _ := s.store.GetSetting(r.Context(), "logo_url")
+	platformFaviconURL, _ := s.store.GetSetting(r.Context(), "favicon_url")
 	jsonOK(w, map[string]any{
 		"project_id":        p.ID.String(),
+		"project_name":      p.Name,
 		"domain_prefix":     p.DomainPrefix,
 		"enabled_providers": p.EnabledProviders,
 		"auth_required":     p.AuthRequired,
 		"access_mode":       p.AccessMode,
+		"branding": map[string]any{
+			"site_name":            p.BrandingSiteName,
+			"logo_url":             p.BrandingLogoURL,
+			"favicon_url":          p.BrandingFaviconURL,
+			"primary_color":        p.BrandingPrimaryColor,
+			"sidebar_bg":           p.BrandingSidebarBg,
+			"tagline":              p.BrandingTagline,
+			"description":          p.BrandingDescription,
+			"footer_text":          p.BrandingFooterText,
+			"trust_text":           p.BrandingTrustText,
+			"platform_site_name":   platformSiteName,
+			"platform_logo_url":    platformLogoURL,
+			"platform_favicon_url": platformFaviconURL,
+		},
 	})
 }
 

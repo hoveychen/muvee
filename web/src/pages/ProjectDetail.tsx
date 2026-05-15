@@ -921,6 +921,9 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
         </p>
       </div>
 
+      {/* Branding — drives the forward-auth login page on this project's subdomain. */}
+      <BrandingSection form={form} onChange={onChange} />
+
       {/* Build / runtime fields — deployment only. Compose uses image: directives, no Dockerfile. */}
       {!isCompose && !isImage && !isTunnelType && field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
       {/* Memory + volume mount path: shared by deployment and image projects. */}
@@ -983,6 +986,90 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
           <Trash2 size={13} /> {t('projectDetail.config.delete')}
         </button>
       </div>
+    </div>
+  )
+}
+
+function BrandingSection({ form, onChange }: {
+  form: Partial<Project>
+  onChange: (f: Partial<Project>) => void
+}) {
+  const { t } = useTranslation()
+  const textField = (label: string, hint: string, key: keyof Project) => (
+    <div>
+      <label className="form-label">{label.toUpperCase()}</label>
+      <input
+        type="text"
+        value={(form[key] ?? '') as string}
+        onChange={e => onChange({ ...form, [key]: e.target.value })}
+        className="form-input w-full"
+        style={{ fontFamily: MONO }}
+      />
+      <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+        {hint}
+      </p>
+    </div>
+  )
+  const colorField = (label: string, hint: string, key: keyof Project) => {
+    const raw = ((form[key] ?? '') as string).trim()
+    const isHex = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(raw)
+    return (
+      <div>
+        <label className="form-label">{label.toUpperCase()}</label>
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            value={isHex ? raw.slice(0, 7) : '#000000'}
+            onChange={e => onChange({ ...form, [key]: e.target.value })}
+            style={{ width: '40px', height: '36px', padding: 0, border: '1px solid var(--border)', borderRadius: '6px', background: 'transparent' }}
+            aria-label={label}
+          />
+          <input
+            type="text"
+            value={raw}
+            placeholder="#4f46e5"
+            onChange={e => onChange({ ...form, [key]: e.target.value })}
+            className="form-input flex-1"
+            style={{ fontFamily: MONO }}
+          />
+        </div>
+        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+          {hint}
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-4" style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+      <div>
+        <h3 style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', margin: 0 }}>
+          {t('projectDetail.config.brandingHeading')}
+        </h3>
+        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+          {t('projectDetail.config.brandingHint')}
+        </p>
+      </div>
+      {textField(t('projectDetail.config.brandingSiteName'), t('projectDetail.config.brandingSiteNameHint'), 'branding_site_name')}
+      {textField(t('projectDetail.config.brandingLogoUrl'), t('projectDetail.config.brandingLogoUrlHint'), 'branding_logo_url')}
+      {textField(t('projectDetail.config.brandingFaviconUrl'), t('projectDetail.config.brandingFaviconUrlHint'), 'branding_favicon_url')}
+      {colorField(t('projectDetail.config.brandingPrimaryColor'), t('projectDetail.config.brandingPrimaryColorHint'), 'branding_primary_color')}
+      {colorField(t('projectDetail.config.brandingSidebarBg'), t('projectDetail.config.brandingSidebarBgHint'), 'branding_sidebar_bg')}
+      {textField(t('projectDetail.config.brandingTagline'), t('projectDetail.config.brandingTaglineHint'), 'branding_tagline')}
+      <div>
+        <label className="form-label">{t('projectDetail.config.brandingDescription').toUpperCase()}</label>
+        <textarea
+          value={(form.branding_description ?? '') as string}
+          onChange={e => onChange({ ...form, branding_description: e.target.value })}
+          rows={3}
+          className="form-input w-full"
+          style={{ resize: 'vertical' }}
+        />
+        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+          {t('projectDetail.config.brandingDescriptionHint')}
+        </p>
+      </div>
+      {textField(t('projectDetail.config.brandingFooterText'), t('projectDetail.config.brandingFooterTextHint'), 'branding_footer_text')}
+      {textField(t('projectDetail.config.brandingTrustText'), t('projectDetail.config.brandingTrustTextHint'), 'branding_trust_text')}
     </div>
   )
 }
