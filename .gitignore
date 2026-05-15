@@ -68,6 +68,10 @@ tmp/
 # Fleet PRD scratch state
 TASKS.md
 
+# patchright-cli / playwright-cli session storage
+.patchright-cli/
+.playwright-cli/
+
 # Go build/test cache
 .gocache/
 
