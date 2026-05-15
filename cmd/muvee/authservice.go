@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -479,14 +480,18 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 
 // handleLoginPage either auto-redirects (single provider) or shows a
 // provider-selection page (multiple providers).  When ?provider=X is present
-// it kicks off the OAuth flow for that specific provider.
+// it kicks off the OAuth flow for that specific provider. The selection
+// page is rendered with the project's branding (or platform / built-in
+// fallbacks) so downstream end-users see a coherent visual instead of the
+// generic indigo card the page used to show.
 func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	providerName := r.URL.Query().Get("provider")
-	// Filter providers by the inbound project's enabled_providers whitelist.
-	// Falls back to the global fwdProviders set when the host doesn't map to a
-	// project, so flows that hit /_oauth/login outside a project context (e.g.
-	// platform-domain logins) keep their existing behaviour.
-	allowed := projectEnabledFwdProvidersByHost(r.Context(), inboundHost(r))
+	// Fetch the project's auth config (providers + branding) for the
+	// inbound host. cfg is nil for hosts that don't map to a project
+	// (apex / platform), in which case we fall back to the global
+	// provider set and built-in branding defaults.
+	cfg, _ := fetchProjectAuthConfigByHost(r.Context(), inboundHost(r))
+	allowed := allowedProvidersFromConfig(cfg)
 	if providerName != "" {
 		p, ok := allowed[providerName]
 		if !ok {
@@ -511,48 +516,227 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Multiple providers: render a simple selection page.
-	type providerItem struct {
-		Name        string
-		DisplayName string
-		Icon        template.HTML
+	data := buildLoginPageData(cfg, allowed)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = loginPageTmpl.Execute(w, data)
+}
+
+// allowedProvidersFromConfig returns the provider map honoured by this
+// inbound host. When cfg is nil (apex / unmapped host) the global provider
+// set is returned unchanged.
+func allowedProvidersFromConfig(cfg *projectAuthConfig) map[string]auth.Provider {
+	if cfg == nil {
+		return providers()
 	}
-	var items []providerItem
+	out := make(map[string]auth.Provider)
+	for _, p := range projectEnabledFwdProviders(cfg.EnabledProviders) {
+		out[p.Name()] = p
+	}
+	return out
+}
+
+// loginPageData is the template payload for the forward-auth login page.
+// All fields are pre-resolved to their final display values (project ->
+// platform -> built-in fallback chain) so the template stays declarative.
+type loginPageData struct {
+	SiteName     string
+	LogoURL      string
+	FaviconURL   string
+	Tagline      string
+	Description  string
+	FooterText   string
+	TrustItems   []string
+	PrimaryColor template.CSS
+	SidebarBg    template.CSS
+	Providers    []loginProviderItem
+}
+
+type loginProviderItem struct {
+	Name        string
+	DisplayName string
+	Icon        template.HTML
+}
+
+// hexColorRe matches #RGB, #RRGGBB, and #RRGGBBAA. We intentionally do not
+// accept rgb()/hsl()/named colours: branding values flow into a <style>
+// block and a permissive parser would let an admin smuggle CSS or markup
+// into the inlined stylesheet.
+var hexColorRe = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+
+func safeColor(value, fallback string) template.CSS {
+	if hexColorRe.MatchString(value) {
+		return template.CSS(value)
+	}
+	return template.CSS(fallback)
+}
+
+// buildLoginPageData resolves the project / platform / built-in fallback
+// chain for every visible branding field and produces the template payload.
+// Exported variables — colours and the provider list — go through their
+// safety wrappers so a malicious branding value cannot escape into raw
+// HTML or CSS.
+func buildLoginPageData(cfg *projectAuthConfig, allowed map[string]auth.Provider) loginPageData {
+	b := projectBranding{}
+	if cfg != nil {
+		b = cfg.Branding
+	}
+	// siteName intentionally stays empty when nothing in the fallback chain
+	// has a value — the template branches on emptiness (e.g. "Sign in to
+	// Acme" vs the bare "Sign in") rather than coercing in a placeholder
+	// like "Sign in" that would render as the nonsensical "Sign in to
+	// Sign in" when interpolated into the heading.
+	siteName := firstNonEmpty(b.SiteName, b.PlatformSiteName)
+	if siteName == "" && cfg != nil {
+		siteName = cfg.ProjectName
+	}
+	// logoURL fallback: project branding wins, then platform-wide logo.
+	logoURL := firstNonEmpty(b.LogoURL, b.PlatformLogoURL)
+	// faviconURL: same fallback chain; empty = template omits the <link>.
+	faviconURL := firstNonEmpty(b.FaviconURL, b.PlatformFaviconURL)
+
+	// Default primary uses the same indigo the legacy template used so
+	// projects without branding stay visually familiar.
+	primary := safeColor(b.PrimaryColor, "#4f46e5")
+	// Sidebar defaults to a deep slate so the white logo / tagline pop;
+	// projects that only set primary_color get a sidebar tinted with their
+	// brand colour for free.
+	sidebarFallback := "#0f172a"
+	if hexColorRe.MatchString(b.PrimaryColor) {
+		sidebarFallback = b.PrimaryColor
+	}
+	sidebar := safeColor(b.SidebarBg, sidebarFallback)
+
+	// Provider ordering: same canonical order as elsewhere in authservice
+	// so the visual stays stable across renders (map iteration in Go is
+	// randomised).
+	order := []string{"google", "feishu", "wecom", "dingtalk", "discord", "apple", "facebook", "twitter"}
+	seen := make(map[string]bool)
+	items := make([]loginProviderItem, 0, len(allowed))
+	for _, name := range order {
+		if p, ok := allowed[name]; ok {
+			items = append(items, loginProviderItem{Name: name, DisplayName: p.DisplayName(), Icon: providerIcons[name]})
+			seen[name] = true
+		}
+	}
 	for name, p := range allowed {
-		items = append(items, providerItem{
-			Name:        name,
-			DisplayName: p.DisplayName(),
-			Icon:        providerIcons[name],
-		})
+		if seen[name] {
+			continue
+		}
+		items = append(items, loginProviderItem{Name: name, DisplayName: p.DisplayName(), Icon: providerIcons[name]})
 	}
 
-	const pageTmpl = `<!DOCTYPE html>
+	return loginPageData{
+		SiteName:     siteName,
+		LogoURL:      logoURL,    // empty = template hides the <img>
+		FaviconURL:   faviconURL, // empty = template omits the <link rel="icon">
+		Tagline:      b.Tagline,
+		Description:  b.Description,
+		FooterText:   b.FooterText, // empty = template hides the sidebar footer
+		TrustItems:   parseTrustItems(b.TrustText),
+		PrimaryColor: primary,
+		SidebarBg:    sidebar,
+		Providers:    items,
+	}
+}
+
+// parseTrustItems converts a comma-separated branding_trust_text value into
+// the (up to 3) trust-row entries rendered under the provider buttons.
+// Empty input returns nil so the template skips the entire trust row —
+// project owners "blow it away" by leaving the field blank. Owners who
+// want the technical defaults must spell them out explicitly (e.g.
+// "Encrypted,SSO,OAuth verified"), and compliance-focused tenants pick
+// their own (e.g. "SOC 2,GDPR,HIPAA"). Excess entries past 3 are dropped
+// so an over-eager value can't blow out the card layout.
+func parseTrustItems(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	for _, tok := range strings.Split(raw, ",") {
+		s := strings.TrimSpace(tok)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+		if len(out) == 3 {
+			break
+		}
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in</title>
+<title>{{if .SiteName}}{{.SiteName}} — Sign in{{else}}Sign in{{end}}</title>
+{{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}">{{end}}
 <style>
-  body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
-  .card{background:#fff;border-radius:12px;padding:2.5rem 3rem;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;min-width:280px}
-  h1{font-size:1.3rem;margin:0 0 1.5rem;color:#111}
-  a.btn{display:flex;align-items:center;justify-content:center;margin:.6rem 0;padding:.75rem 1.5rem;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none;font-size:.95rem;transition:background .15s}
-  a.btn:hover{background:#4338ca}
-  a.btn .icon{display:inline-flex;margin-right:8px}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f8fafc;color:#0f172a;min-height:100vh}
+  .page{display:flex;min-height:100vh}
+  .sidebar{display:none;flex-direction:column;justify-content:space-between;width:50%;padding:4rem;background:{{.SidebarBg}};color:#fff;position:relative;overflow:hidden}
+  .sidebar .tagline{font-size:.8125rem;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.7)}
+  .sidebar .brand{font-size:5rem;font-weight:700;line-height:1;letter-spacing:-.02em;margin:0}
+  .sidebar .brand img{height:80px;object-fit:contain;display:block}
+  .sidebar .desc{margin-top:1.5rem;font-size:1rem;line-height:1.7;color:rgba(255,255,255,.85);max-width:24rem;white-space:pre-line}
+  .sidebar .footer{display:flex;gap:1rem;font-size:.875rem;color:rgba(255,255,255,.75)}
+  .sidebar .footer .sep{color:rgba(255,255,255,.4)}
+  .panel{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem}
+  .card{width:100%;max-width:22rem;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:2rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .mobile-brand{margin-bottom:2.5rem;text-align:center}
+  .mobile-brand img{height:48px;object-fit:contain}
+  .mobile-brand h1{margin:0;font-size:2.25rem;font-weight:700;color:#0f172a}
+  .card h2{margin:0 0 .25rem;font-size:1.25rem;font-weight:600;color:#0f172a}
+  .card .sub{margin:0 0 2rem;font-size:.875rem;color:#64748b}
+  .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:10px 16px;margin-top:.75rem;border:1px solid #e2e8f0;border-radius:8px;background:#fff;color:#0f172a;font-size:.875rem;font-weight:500;text-decoration:none;transition:border-color .15s,background .15s}
+  .btn:first-of-type{margin-top:0}
+  .btn:hover{border-color:{{.PrimaryColor}};background:#f8fafc}
+  .btn .icon{display:inline-flex;color:#475569}
+  .trust{margin-top:1.25rem;display:flex;align-items:center;justify-content:center;gap:1rem;font-size:.75rem;color:#94a3b8}
+  .trust span{display:inline-flex;align-items:center;gap:.35rem}
+  .trust svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  @media(min-width:1024px){.sidebar{display:flex}.mobile-brand{display:none}}
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>Sign in to continue</h1>
-  {{range .}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{.DisplayName}}</a>{{end}}
+<div class="page">
+  <aside class="sidebar">
+    <div class="tagline">{{if .Tagline}}{{.Tagline}}{{else}}Welcome{{end}}</div>
+    <div>
+      {{if .LogoURL}}<img class="brand" src="{{.LogoURL}}" alt="{{.SiteName}}">{{else if .SiteName}}<h1 class="brand">{{.SiteName}}</h1>{{else}}<h1 class="brand">Sign in</h1>{{end}}
+      {{if .Description}}<p class="desc">{{.Description}}</p>{{end}}
+    </div>
+    {{if .FooterText}}<div class="footer"><span>{{.FooterText}}</span></div>{{end}}
+  </aside>
+  <main class="panel">
+    <div>
+      <div class="mobile-brand">
+        {{if .LogoURL}}<img src="{{.LogoURL}}" alt="{{.SiteName}}">{{else if .SiteName}}<h1>{{.SiteName}}</h1>{{else}}<h1>Sign in</h1>{{end}}
+      </div>
+      <div class="card">
+        <h2>{{if .SiteName}}Sign in to {{.SiteName}}{{else}}Sign in{{end}}</h2>
+        <p class="sub">Choose your sign-in method below.</p>
+        {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}Continue with {{.DisplayName}}</a>{{end}}
+      </div>
+      {{if .TrustItems}}<div class="trust">
+        {{range .TrustItems}}<span><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>{{.}}</span>{{end}}
+      </div>{{end}}
+    </div>
+  </main>
 </div>
 </body>
-</html>`
-
-	t := template.Must(template.New("login").Parse(pageTmpl))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = t.Execute(w, items)
-}
+</html>`))
 
 // providerIcons holds inline SVG marks for the social providers added in
 // migration 038 (oauth_accounts). Platform-side providers omit icons --
@@ -1007,13 +1191,33 @@ func fetchProjectInfoInternal(ctx context.Context, projectID string) (*projectMi
 
 // projectAuthConfig mirrors muvee-server's /api/internal/projects/by-host
 // response shape — everything authservice needs to decide which providers a
-// project's downstream sign-in flow may use.
+// project's downstream sign-in flow may use, plus the branding fields that
+// drive the forward-auth login page visual.
 type projectAuthConfig struct {
-	ProjectID        string `json:"project_id"`
-	DomainPrefix     string `json:"domain_prefix"`
-	EnabledProviders string `json:"enabled_providers"`
-	AuthRequired     bool   `json:"auth_required"`
-	AccessMode       string `json:"access_mode"`
+	ProjectID        string           `json:"project_id"`
+	ProjectName      string           `json:"project_name"`
+	DomainPrefix     string           `json:"domain_prefix"`
+	EnabledProviders string           `json:"enabled_providers"`
+	AuthRequired     bool             `json:"auth_required"`
+	AccessMode       string           `json:"access_mode"`
+	Branding         projectBranding `json:"branding"`
+}
+
+// projectBranding holds the per-project branding overrides plus the
+// platform-wide fallbacks used by the forward-auth login template.
+type projectBranding struct {
+	SiteName           string `json:"site_name"`
+	LogoURL            string `json:"logo_url"`
+	FaviconURL         string `json:"favicon_url"`
+	PrimaryColor       string `json:"primary_color"`
+	SidebarBg          string `json:"sidebar_bg"`
+	Tagline            string `json:"tagline"`
+	Description        string `json:"description"`
+	FooterText         string `json:"footer_text"`
+	TrustText          string `json:"trust_text"`
+	PlatformSiteName   string `json:"platform_site_name"`
+	PlatformLogoURL    string `json:"platform_logo_url"`
+	PlatformFaviconURL string `json:"platform_favicon_url"`
 }
 
 func fetchProjectAuthConfigByHost(ctx context.Context, host string) (*projectAuthConfig, error) {
@@ -1084,25 +1288,6 @@ func projectEnabledFwdProviders(enabledProviders string) []auth.Provider {
 		if !seen[name] && allow(name) {
 			out = append(out, p)
 		}
-	}
-	return out
-}
-
-// projectEnabledFwdProvidersByHost returns the providers allowed for the
-// project mapped to host. Falls back to the global provider set when host
-// is empty or the muvee-server lookup fails / returns no match — that keeps
-// non-project flows (apex domain, platform login) working unchanged.
-func projectEnabledFwdProvidersByHost(ctx context.Context, host string) map[string]auth.Provider {
-	if host == "" {
-		return providers()
-	}
-	cfg, err := fetchProjectAuthConfigByHost(ctx, host)
-	if err != nil || cfg == nil {
-		return providers()
-	}
-	out := make(map[string]auth.Provider)
-	for _, p := range projectEnabledFwdProviders(cfg.EnabledProviders) {
-		out[p.Name()] = p
 	}
 	return out
 }

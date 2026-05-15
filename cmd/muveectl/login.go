@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -184,10 +186,55 @@ var whoamiCmd = &cobra.Command{
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the CLI version",
+	Short: "Print the muveectl client and connected server versions",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(version)
+		srv, srvErr := fetchServerVersion()
+		renderVersion(os.Stdout, version, srv, srvErr, jsonMode)
 	},
+}
+
+// fetchServerVersion hits /api/runtime/config on the active profile and
+// returns the server's git-release version. Returns a typed error when the
+// caller has no credentials so renderVersion can phrase the unavailable
+// reason precisely.
+func fetchServerVersion() (string, error) {
+	if cl == nil || cl.server == "" {
+		return "", fmt.Errorf("not logged in (run: muveectl login --server <URL>)")
+	}
+	res, err := cl.do("GET", "/api/runtime/config", nil)
+	if err != nil {
+		return "", err
+	}
+	v, _ := res["server_version"].(string)
+	if v == "" {
+		return "", fmt.Errorf("server did not return server_version")
+	}
+	return v, nil
+}
+
+// renderVersion writes the client / server version pair in either the
+// kubectl-style two-line plain format or a flat JSON object. When the server
+// fetch failed, the Server line is still rendered with the reason — silently
+// dropping it would make "no credentials" indistinguishable from "server
+// unreachable".
+func renderVersion(w io.Writer, clientVer, serverVer string, serverErr error, jsonMode bool) {
+	if jsonMode {
+		out := map[string]string{"client_version": clientVer}
+		if serverErr != nil {
+			out["server_error"] = serverErr.Error()
+		} else {
+			out["server_version"] = serverVer
+		}
+		b, _ := json.Marshal(out)
+		fmt.Fprintln(w, string(b))
+		return
+	}
+	fmt.Fprintf(w, "Client Version: %s\n", clientVer)
+	if serverErr != nil {
+		fmt.Fprintf(w, "Server Version: <unavailable: %s>\n", serverErr)
+	} else {
+		fmt.Fprintf(w, "Server Version: %s\n", serverVer)
+	}
 }
 
 // ─── Install Claude Skill ────────────────────────────────────────────────────

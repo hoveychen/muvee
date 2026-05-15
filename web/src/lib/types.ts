@@ -59,6 +59,18 @@ export interface Project {
   // downstream sign-in flow may use (e.g. "google,feishu"). Empty = inherit
   // the globally-configured set.
   enabled_providers: string
+  // Per-project branding for the forward-auth login page served on this
+  // project's downstream subdomain. Empty = fall back to platform settings,
+  // then built-in defaults.
+  branding_site_name: string
+  branding_logo_url: string
+  branding_favicon_url: string
+  branding_primary_color: string
+  branding_sidebar_bg: string
+  branding_tagline: string
+  branding_description: string
+  branding_footer_text: string
+  branding_trust_text: string
   // Admin-only fixed-port binding. When both are set, the project is forced
   // onto fixed_node_id and its container's port is published on
   // fixed_host_port (instead of an ephemeral host port). null/undefined means
