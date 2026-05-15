@@ -959,7 +959,15 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
-	http.Redirect(w, r, forwardAuthBase+"/_oauth/login", http.StatusFound)
+	// Keep the login page on the project subdomain so handleLoginPage's
+	// inboundHost() resolves to the project — otherwise the apex host
+	// has no project mapping and falls back to the full provider set,
+	// silently bypassing each project's enabled_providers whitelist.
+	loginBase := forwardAuthBase
+	if host != "" {
+		loginBase = proto + "://" + host
+	}
+	http.Redirect(w, r, loginBase+"/_oauth/login", http.StatusFound)
 }
 
 // projectMinimalInfo mirrors muvee-server's projectMinimalInfo response shape
