@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
@@ -9,7 +9,7 @@ import { useAuth } from '../lib/auth'
 
 const MONO = 'var(--font-mono)'
 
-type Tab = 'deploy' | 'config' | 'auth' | 'users' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository' | 'traffic'
+type Tab = 'deploy' | 'config' | 'branding' | 'auth' | 'users' | 'datasets' | 'secrets' | 'tokens' | 'workspace' | 'repository' | 'traffic'
 
 /* Map deployment status → badge CSS class */
 const statusBadgeClass = (status: string) => {
@@ -220,12 +220,14 @@ export default function ProjectDetail() {
         {(isTunnel ? [
           ['traffic', Activity, t('projectDetail.tabs.traffic')],
           ['config', Settings, t('projectDetail.tabs.config')],
+          ['branding', Palette, t('projectDetail.tabs.branding')],
           ['auth', Shield, t('projectDetail.tabs.auth')],
           ['users', Users, 'Users'],
           ['tokens', Key, t('projectDetail.tabs.tokens')],
         ] as const : [
           ['deploy', Rocket, t('projectDetail.tabs.deployments')],
           ['config', Settings, t('projectDetail.tabs.config')],
+          ['branding', Palette, t('projectDetail.tabs.branding')],
           ['auth', Shield, t('projectDetail.tabs.auth')],
           ['users', Users, 'Users'] as const,
           ...(project.git_source === 'hosted' ? [['repository', GitBranch, t('projectDetail.tabs.repository')] as const] : []),
@@ -276,6 +278,15 @@ export default function ProjectDetail() {
             saveError={saveError}
             isAdmin={isAdmin}
             onChangeOwner={handleChangeOwner}
+          />
+        )}
+        {tab === 'branding' && (
+          <BrandingTab
+            form={editForm}
+            onChange={setEditForm}
+            onSave={handleSave}
+            saving={saving}
+            saveError={saveError}
           />
         )}
         {tab === 'auth' && (
@@ -729,270 +740,297 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
   const isImage = form.project_type === 'image'
   const isTunnelType = form.project_type === 'domain_only'
 
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set(['identity']))
+  const toggleSection = (id: string) =>
+    setOpenSections(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  const renderSection = (id: string, title: string, body: React.ReactNode) => {
+    const open = openSections.has(id)
+    return (
+      <div style={{ borderTop: '1px solid var(--border)' }}>
+        <button
+          type="button"
+          onClick={() => toggleSection(id)}
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.875rem 0', background: 'none', border: 'none', cursor: 'pointer' }}
+        >
+          <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{title}</span>
+          {open ? <ChevronUp size={14} style={{ color: 'var(--fg-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--fg-muted)' }} />}
+        </button>
+        {open && <div className="space-y-5" style={{ paddingBottom: '1rem' }}>{body}</div>}
+      </div>
+    )
+  }
+
   return (
-    <div className="max-w-lg space-y-5">
-      {field(t('projectDetail.config.projectName'), 'name')}
-      {!isTunnelType && !isImage && field(t('projectDetail.config.gitUrl'), 'git_url')}
-      {!isTunnelType && !isImage && field(t('projectDetail.config.gitBranch'), 'git_branch')}
-      {isImage && field(t('projectDetail.config.imageRef'), 'image_ref', t('projectDetail.config.imageRefHint'))}
-      {isImage && (
-        <div>
-          <label className="form-label">{t('projectDetail.config.containerPort').toUpperCase()}</label>
-          <input
-            type="number"
-            min={1}
-            max={65535}
-            value={form.container_port ?? ''}
-            onChange={e => onChange({ ...form, container_port: e.target.value === '' ? undefined : Number(e.target.value) })}
-            className="form-input w-full"
-            style={{ fontFamily: MONO }}
-          />
-          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
-            {t('projectDetail.config.containerPortHint')}
-          </p>
-        </div>
-      )}
-
-      {!isTunnelType && (
-        <div>
-          <label className="form-label">
-            {t('projectDetail.config.autoDeploy').toUpperCase()}
-          </label>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <div
-              onClick={() => onChange({ ...form, auto_deploy_enabled: !form.auto_deploy_enabled })}
-              className="relative rounded-full transition-colors duration-200"
-              style={{
-                width: '36px', height: '20px',
-                background: form.auto_deploy_enabled ? 'var(--accent)' : 'var(--border)',
-                cursor: 'pointer',
-              }}
-            >
-              <div
-                className="absolute top-1 rounded-full transition-transform duration-200"
-                style={{
-                  width: '12px', height: '12px',
-                  background: '#ffffff',
-                  left: form.auto_deploy_enabled ? '18px' : '4px',
-                }}
-              />
-            </div>
-            <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-              {form.auto_deploy_enabled ? t('projectDetail.config.enabled') : t('projectDetail.config.disabled')}
-            </span>
-          </label>
-          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
-            {t('projectDetail.config.autoDeployHint')}
-          </p>
-          {form.auto_deploy_enabled && (
-            <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)', fontFamily: MONO }}>
-              {t('projectDetail.config.autoDeployLastSha')}:{' '}
-              {form.last_tracked_commit_sha
-                ? form.last_tracked_commit_sha.slice(0, 12)
-                : t('projectDetail.config.autoDeployNever')}
-            </p>
-          )}
-        </div>
-      )}
-
-      <div>
-        <label className="form-label">
-          {t('projectDetail.config.owner').toUpperCase()}
-        </label>
-        {isAdmin ? (
-          <>
-            <OwnerCombobox
-              users={users}
-              currentOwnerId={form.owner_id}
-              currentOwnerLabel={
-                form.owner_name
-                  ? `${form.owner_name}${form.owner_email ? ` (${form.owner_email})` : ''}`
-                  : (form.owner_email || form.owner_id || '')
-              }
-              disabled={ownerSaving}
-              onSelect={handleOwnerSelect}
+    <div className="max-w-lg">
+      {renderSection('identity', t('projectDetail.config.sections.identity'), (
+        <>
+          {field(t('projectDetail.config.projectName'), 'name')}
+          {field(t('projectDetail.config.description'), 'description')}
+          {field(t('projectDetail.config.tags'), 'tags', t('projectDetail.config.tagsHint'))}
+          <div>
+            <label className="form-label">
+              {t('projectDetail.config.icon').toUpperCase()}
+            </label>
+            <textarea
+              value={(form.icon ?? '') as string}
+              onChange={e => onChange({ ...form, icon: e.target.value })}
+              rows={3}
+              className="form-input w-full"
+              style={{ fontFamily: MONO, resize: 'vertical' }}
+              placeholder={t('projectDetail.config.iconPlaceholder')}
             />
             <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
-              {ownerSaving
-                ? t('projectDetail.config.ownerSaving')
-                : t('projectDetail.config.ownerHint')}
+              {t('projectDetail.config.iconHint')}
             </p>
-            {ownerError && (
-              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--danger)' }}>{ownerError}</p>
-            )}
-          </>
-        ) : (
-          <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)' }}>
-            {form.owner_name ? `${form.owner_name}${form.owner_email ? ` (${form.owner_email})` : ''}` : (form.owner_email || form.owner_id)}
-          </p>
-        )}
-      </div>
+          </div>
+          <div>
+            <label className="form-label">
+              {t('projectDetail.config.domainPrefix').toUpperCase()}
+              {domainPrefixRequired && (
+                <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>
+              )}
+            </label>
+            <input
+              type="text"
+              value={(form.domain_prefix ?? '') as string}
+              onChange={e => onChange({ ...form, domain_prefix: e.target.value })}
+              placeholder={nameIsValidPrefix ? form.name : undefined}
+              className="form-input w-full"
+              style={{ fontFamily: MONO }}
+            />
+            <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
+              {nameIsValidPrefix
+                ? t('projectDetail.config.domainOptional', { name: form.name })
+                : t('projectDetail.config.domainRequired')}
+            </p>
+          </div>
+        </>
+      ))}
 
-      {!isTunnelType && (isAdmin || form.fixed_host_port) && (
-        <div>
-          <label className="form-label">
-            {t('projectDetail.config.fixedPort').toUpperCase()}
-          </label>
-          {isAdmin ? (
-            <div className="flex flex-col gap-2">
+      {!isTunnelType && renderSection('source', t('projectDetail.config.sections.source'), (
+        <>
+          {!isImage && field(t('projectDetail.config.gitUrl'), 'git_url')}
+          {!isImage && field(t('projectDetail.config.gitBranch'), 'git_branch')}
+          {isImage && field(t('projectDetail.config.imageRef'), 'image_ref', t('projectDetail.config.imageRefHint'))}
+          {isImage && (
+            <div>
+              <label className="form-label">{t('projectDetail.config.containerPort').toUpperCase()}</label>
               <input
                 type="number"
-                min={1024}
+                min={1}
                 max={65535}
-                placeholder={t('projectDetail.config.fixedPortNone')}
-                value={form.fixed_host_port ?? ''}
-                onChange={e => onChange({ ...form, fixed_host_port: e.target.value === '' ? null : Number(e.target.value) })}
+                value={form.container_port ?? ''}
+                onChange={e => onChange({ ...form, container_port: e.target.value === '' ? undefined : Number(e.target.value) })}
                 className="form-input w-full"
                 style={{ fontFamily: MONO }}
               />
-              <select
-                value={form.fixed_node_id ?? ''}
-                onChange={e => onChange({ ...form, fixed_node_id: e.target.value || null })}
+              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('projectDetail.config.containerPortHint')}
+              </p>
+            </div>
+          )}
+          {isCompose && field(t('projectDetail.config.composeFilePath'), 'compose_file_path', t('projectDetail.config.composeFilePathHint'))}
+          {isCompose && field(t('projectDetail.config.exposeService'), 'expose_service', t('projectDetail.config.exposeServiceHint'))}
+          {isCompose && (
+            <div>
+              <label className="form-label">{t('projectDetail.config.exposePort').toUpperCase()}</label>
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                value={form.expose_port ?? ''}
+                onChange={e => onChange({ ...form, expose_port: e.target.value === '' ? undefined : Number(e.target.value) })}
                 className="form-input w-full"
                 style={{ fontFamily: MONO }}
-              >
-                <option value="">{t('projectDetail.config.fixedNode')} —</option>
-                {(nodes ?? []).map(n => (
-                  <option key={n.id} value={n.id}>{n.hostname} ({n.id.slice(0, 8)})</option>
-                ))}
-              </select>
-              {(form.fixed_host_port || form.fixed_node_id) && (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ alignSelf: 'flex-start' }}
-                  onClick={() => onChange({ ...form, fixed_host_port: null, fixed_node_id: null })}
-                >
-                  {t('projectDetail.config.fixedPortClear')}
-                </button>
-              )}
+              />
+              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('projectDetail.config.exposePortHint')}
+              </p>
             </div>
-          ) : (
-            <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: form.fixed_host_port ? 'var(--fg-primary)' : 'var(--fg-muted)' }}>
-              {form.fixed_host_port ? `:${form.fixed_host_port} on ${form.fixed_node_id?.slice(0, 8) ?? '?'}` : t('projectDetail.config.fixedPortNone')}
+          )}
+          {!isCompose && !isImage && field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
+          {isCompose && (
+            <div>
+              <label className="form-label">{t('projectDetail.config.pinnedNode').toUpperCase()}</label>
+              <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: form.pinned_node_id ? 'var(--fg-primary)' : 'var(--fg-muted)' }}>
+                {form.pinned_node_id || t('projectDetail.config.pinnedNodeNone')}
+              </p>
+              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('projectDetail.config.pinnedNodeHint')}
+              </p>
+            </div>
+          )}
+          <div>
+            <label className="form-label">
+              {t('projectDetail.config.autoDeploy').toUpperCase()}
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div
+                onClick={() => onChange({ ...form, auto_deploy_enabled: !form.auto_deploy_enabled })}
+                className="relative rounded-full transition-colors duration-200"
+                style={{
+                  width: '36px', height: '20px',
+                  background: form.auto_deploy_enabled ? 'var(--accent)' : 'var(--border)',
+                  cursor: 'pointer',
+                }}
+              >
+                <div
+                  className="absolute top-1 rounded-full transition-transform duration-200"
+                  style={{
+                    width: '12px', height: '12px',
+                    background: '#ffffff',
+                    left: form.auto_deploy_enabled ? '18px' : '4px',
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+                {form.auto_deploy_enabled ? t('projectDetail.config.enabled') : t('projectDetail.config.disabled')}
+              </span>
+            </label>
+            <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+              {t('projectDetail.config.autoDeployHint')}
             </p>
+            {form.auto_deploy_enabled && (
+              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)', fontFamily: MONO }}>
+                {t('projectDetail.config.autoDeployLastSha')}:{' '}
+                {form.last_tracked_commit_sha
+                  ? form.last_tracked_commit_sha.slice(0, 12)
+                  : t('projectDetail.config.autoDeployNever')}
+              </p>
+            )}
+          </div>
+        </>
+      ))}
+
+      {!isCompose && !isTunnelType && renderSection('runtime', t('projectDetail.config.sections.runtime'), (
+        <>
+          {field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
+          {field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
+        </>
+      ))}
+
+      {renderSection('admin', t('projectDetail.config.sections.admin'), (
+        <>
+          <div>
+            <label className="form-label">
+              {t('projectDetail.config.owner').toUpperCase()}
+            </label>
+            {isAdmin ? (
+              <>
+                <OwnerCombobox
+                  users={users}
+                  currentOwnerId={form.owner_id}
+                  currentOwnerLabel={
+                    form.owner_name
+                      ? `${form.owner_name}${form.owner_email ? ` (${form.owner_email})` : ''}`
+                      : (form.owner_email || form.owner_id || '')
+                  }
+                  disabled={ownerSaving}
+                  onSelect={handleOwnerSelect}
+                />
+                <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                  {ownerSaving
+                    ? t('projectDetail.config.ownerSaving')
+                    : t('projectDetail.config.ownerHint')}
+                </p>
+                {ownerError && (
+                  <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--danger)' }}>{ownerError}</p>
+                )}
+              </>
+            ) : (
+              <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)' }}>
+                {form.owner_name ? `${form.owner_name}${form.owner_email ? ` (${form.owner_email})` : ''}` : (form.owner_email || form.owner_id)}
+              </p>
+            )}
+          </div>
+
+          {!isTunnelType && (isAdmin || form.fixed_host_port) && (
+            <div>
+              <label className="form-label">
+                {t('projectDetail.config.fixedPort').toUpperCase()}
+              </label>
+              {isAdmin ? (
+                <div className="flex flex-col gap-2">
+                  <input
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    placeholder={t('projectDetail.config.fixedPortNone')}
+                    value={form.fixed_host_port ?? ''}
+                    onChange={e => onChange({ ...form, fixed_host_port: e.target.value === '' ? null : Number(e.target.value) })}
+                    className="form-input w-full"
+                    style={{ fontFamily: MONO }}
+                  />
+                  <select
+                    value={form.fixed_node_id ?? ''}
+                    onChange={e => onChange({ ...form, fixed_node_id: e.target.value || null })}
+                    className="form-input w-full"
+                    style={{ fontFamily: MONO }}
+                  >
+                    <option value="">{t('projectDetail.config.fixedNode')} —</option>
+                    {(nodes ?? []).map(n => (
+                      <option key={n.id} value={n.id}>{n.hostname} ({n.id.slice(0, 8)})</option>
+                    ))}
+                  </select>
+                  {(form.fixed_host_port || form.fixed_node_id) && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      style={{ alignSelf: 'flex-start' }}
+                      onClick={() => onChange({ ...form, fixed_host_port: null, fixed_node_id: null })}
+                    >
+                      {t('projectDetail.config.fixedPortClear')}
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: form.fixed_host_port ? 'var(--fg-primary)' : 'var(--fg-muted)' }}>
+                  {form.fixed_host_port ? `:${form.fixed_host_port} on ${form.fixed_node_id?.slice(0, 8) ?? '?'}` : t('projectDetail.config.fixedPortNone')}
+                </p>
+              )}
+              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('projectDetail.config.fixedPortHint')}
+              </p>
+            </div>
           )}
-          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
-            {t('projectDetail.config.fixedPortHint')}
-          </p>
+        </>
+      ))}
+
+      <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.25rem', paddingTop: '1rem' }}>
+        {saveError && (
+          <p style={{ fontSize: '0.875rem', color: 'var(--danger)', marginBottom: '0.75rem' }}>{saveError}</p>
+        )}
+        <div className="flex gap-3">
+          <button
+            onClick={onSave}
+            disabled={saving}
+            className="btn-primary"
+            style={saving ? { cursor: 'not-allowed', opacity: 0.7 } : {}}
+          >
+            {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
+          </button>
+          <button
+            onClick={onDelete}
+            className="btn-danger flex items-center gap-2"
+          >
+            <Trash2 size={13} /> {t('projectDetail.config.delete')}
+          </button>
         </div>
-      )}
-
-      <div>
-        <label className="form-label">
-          {t('projectDetail.config.domainPrefix').toUpperCase()}
-          {domainPrefixRequired && (
-            <span style={{ color: 'var(--danger)', marginLeft: '0.3em' }}>*</span>
-          )}
-        </label>
-        <input
-          type="text"
-          value={(form.domain_prefix ?? '') as string}
-          onChange={e => onChange({ ...form, domain_prefix: e.target.value })}
-          placeholder={nameIsValidPrefix ? form.name : undefined}
-          className="form-input w-full"
-          style={{ fontFamily: MONO }}
-        />
-        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: domainPrefixRequired ? 'var(--danger)' : 'var(--fg-muted)' }}>
-          {nameIsValidPrefix
-            ? t('projectDetail.config.domainOptional', { name: form.name })
-            : t('projectDetail.config.domainRequired')}
-        </p>
-      </div>
-
-      {field(t('projectDetail.config.description'), 'description')}
-      {field(t('projectDetail.config.tags'), 'tags', t('projectDetail.config.tagsHint'))}
-
-      {/* Icon */}
-      <div>
-        <label className="form-label">
-          {t('projectDetail.config.icon').toUpperCase()}
-        </label>
-        <textarea
-          value={(form.icon ?? '') as string}
-          onChange={e => onChange({ ...form, icon: e.target.value })}
-          rows={3}
-          className="form-input w-full"
-          style={{ fontFamily: MONO, resize: 'vertical' }}
-          placeholder={t('projectDetail.config.iconPlaceholder')}
-        />
-        <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
-          {t('projectDetail.config.iconHint')}
-        </p>
-      </div>
-
-      {/* Branding — drives the forward-auth login page on this project's subdomain. */}
-      <BrandingSection form={form} onChange={onChange} />
-
-      {/* Build / runtime fields — deployment only. Compose uses image: directives, no Dockerfile. */}
-      {!isCompose && !isImage && !isTunnelType && field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
-      {/* Memory + volume mount path: shared by deployment and image projects. */}
-      {!isCompose && !isTunnelType && field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
-      {!isCompose && !isTunnelType && field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
-
-      {/* Compose-specific fields */}
-      {isCompose && field(t('projectDetail.config.composeFilePath'), 'compose_file_path', t('projectDetail.config.composeFilePathHint'))}
-      {isCompose && field(t('projectDetail.config.exposeService'), 'expose_service', t('projectDetail.config.exposeServiceHint'))}
-      {isCompose && (
-        <div>
-          <label className="form-label">
-            {t('projectDetail.config.exposePort').toUpperCase()}
-          </label>
-          <input
-            type="number"
-            min={1}
-            max={65535}
-            value={form.expose_port ?? ''}
-            onChange={e => onChange({ ...form, expose_port: e.target.value === '' ? undefined : Number(e.target.value) })}
-            className="form-input w-full"
-            style={{ fontFamily: MONO }}
-          />
-          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
-            {t('projectDetail.config.exposePortHint')}
-          </p>
-        </div>
-      )}
-      {isCompose && (
-        <div>
-          <label className="form-label">
-            {t('projectDetail.config.pinnedNode').toUpperCase()}
-          </label>
-          <p style={{ fontFamily: MONO, fontSize: '0.875rem', color: form.pinned_node_id ? 'var(--fg-primary)' : 'var(--fg-muted)' }}>
-            {form.pinned_node_id || t('projectDetail.config.pinnedNodeNone')}
-          </p>
-          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
-            {t('projectDetail.config.pinnedNodeHint')}
-          </p>
-        </div>
-      )}
-
-      {saveError && (
-        <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
-      )}
-
-      <div className="flex gap-3 pt-2">
-        <button
-          onClick={onSave}
-          disabled={saving}
-          className="btn-primary"
-          style={saving ? { cursor: 'not-allowed', opacity: 0.7 } : {}}
-        >
-          {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
-        </button>
-        <button
-          onClick={onDelete}
-          className="btn-danger flex items-center gap-2"
-        >
-          <Trash2 size={13} /> {t('projectDetail.config.delete')}
-        </button>
       </div>
     </div>
   )
 }
 
-function BrandingSection({ form, onChange }: {
+function BrandingTab({ form, onChange, onSave, saving, saveError }: {
   form: Partial<Project>
   onChange: (f: Partial<Project>) => void
+  onSave: () => void
+  saving: boolean
+  saveError?: string | null
 }) {
   const { t } = useTranslation()
   const textField = (label: string, hint: string, key: keyof Project) => (
@@ -1040,7 +1078,7 @@ function BrandingSection({ form, onChange }: {
     )
   }
   return (
-    <div className="space-y-4" style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+    <div className="space-y-4">
       <div>
         <h3 style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', margin: 0 }}>
           {t('projectDetail.config.brandingHeading')}
@@ -1070,6 +1108,19 @@ function BrandingSection({ form, onChange }: {
       </div>
       {textField(t('projectDetail.config.brandingFooterText'), t('projectDetail.config.brandingFooterTextHint'), 'branding_footer_text')}
       {textField(t('projectDetail.config.brandingTrustText'), t('projectDetail.config.brandingTrustTextHint'), 'branding_trust_text')}
+      {saveError && (
+        <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
+      )}
+      <div className="flex gap-3 pt-2">
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="btn-primary"
+          style={saving ? { cursor: 'not-allowed', opacity: 0.7 } : {}}
+        >
+          {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
+        </button>
+      </div>
     </div>
   )
 }

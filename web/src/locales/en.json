@@ -87,6 +87,7 @@
     "tabs": {
       "deployments": "Deployments",
       "config": "Config",
+      "branding": "Branding",
       "datasets": "Datasets",
       "secrets": "Secrets",
       "workspace": "Workspace",
@@ -113,6 +114,12 @@
     },
     "noDeployments": "No deployments yet. Click Deploy to start.",
     "config": {
+      "sections": {
+        "identity": "Identity",
+        "source": "Source",
+        "runtime": "Runtime",
+        "admin": "Admin"
+      },
       "projectName": "Project Name",
       "gitUrl": "Git URL",
       "gitBranch": "Git Branch",

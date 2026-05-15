@@ -90,6 +90,7 @@ func init() {
 
 	// projects update flags
 	addProjectFlags(projectsUpdateCmd)
+	projectsUpdateCmd.Flags().String("owner", "", "Admin only: reassign the project to this owner (username or UUID); applied via a separate admin endpoint")
 
 	// projects logs flags
 	projectsLogsCmd.Flags().String("deployment", "", "Specific deployment ID (defaults to latest)")
@@ -123,6 +124,8 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("dockerfile", "", "Dockerfile path relative to repo root (default: Dockerfile)")
 	cmd.Flags().Bool("auth-required", false, "Enable OAuth protection via Traefik ForwardAuth")
 	cmd.Flags().Bool("no-auth", false, "Disable OAuth protection")
+	cmd.Flags().Bool("auto-deploy", false, "Enable auto-redeploy when the tracked branch (or upstream image digest) changes")
+	cmd.Flags().Bool("no-auto-deploy", false, "Disable auto-redeploy")
 	cmd.Flags().String("auth-domains", "", "Comma-separated allowed email domains")
 	cmd.Flags().String("auth-bypass-paths", "", "Newline-separated paths that bypass auth (use * suffix for prefix match, e.g. /api/public/*)")
 	cmd.Flags().Bool("domain-only", false, "Reserve a tunnel domain prefix without a git repo (no deployment)")
@@ -140,6 +143,20 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().Int("fixed-port", 0, "Admin only: fix the published host port (1024-65535); requires --fixed-node")
 	cmd.Flags().String("fixed-node", "", "Admin only: pin the project to a deployer node UUID; requires --fixed-port")
 	cmd.Flags().Bool("clear-fixed-port", false, "Admin only: remove the fixed-port binding (clears both fixed_host_port and fixed_node_id)")
+	// Sign-in page branding (rendered on the forward-auth login page when the project is private).
+	cmd.Flags().String("branding-site-name", "", "Branding: headline shown on the sidebar and browser tab")
+	cmd.Flags().String("branding-logo-url", "", "Branding: HTTPS logo URL (replaces site name on sidebar/header)")
+	cmd.Flags().String("branding-favicon-url", "", "Branding: HTTPS favicon URL (.ico/.png/.svg)")
+	cmd.Flags().String("branding-primary-color", "", "Branding: primary hex colour, e.g. #4f46e5")
+	cmd.Flags().String("branding-sidebar-bg", "", "Branding: sidebar background hex colour")
+	cmd.Flags().String("branding-tagline", "", "Branding: small uppercase tagline at top of sidebar")
+	cmd.Flags().String("branding-description", "", "Branding: multi-line description shown under the brand")
+	cmd.Flags().String("branding-footer-text", "", "Branding: single-line footer text (empty hides the footer)")
+	cmd.Flags().String("branding-trust-text", "", "Branding: comma-separated trust badges (up to 3, e.g. 'Encrypted,SOC 2,GDPR')")
+}
+
+func resolveUserRef(c *client, arg string) (string, error) {
+	return resolveResourceRef(c, "user", "/api/users", arg)
 }
 
 func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
@@ -173,6 +190,12 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 	}
 	if cmd.Flags().Changed("no-auth") {
 		p["auth_required"] = false
+	}
+	if cmd.Flags().Changed("auto-deploy") {
+		p["auto_deploy_enabled"] = true
+	}
+	if cmd.Flags().Changed("no-auto-deploy") {
+		p["auto_deploy_enabled"] = false
 	}
 	if cmd.Flags().Changed("auth-domains") {
 		v, _ := cmd.Flags().GetString("auth-domains")
@@ -243,6 +266,22 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		if cmd.Flags().Changed("fixed-node") {
 			v, _ := cmd.Flags().GetString("fixed-node")
 			p["fixed_node_id"] = v
+		}
+	}
+	for _, m := range []struct{ flag, field string }{
+		{"branding-site-name", "branding_site_name"},
+		{"branding-logo-url", "branding_logo_url"},
+		{"branding-favicon-url", "branding_favicon_url"},
+		{"branding-primary-color", "branding_primary_color"},
+		{"branding-sidebar-bg", "branding_sidebar_bg"},
+		{"branding-tagline", "branding_tagline"},
+		{"branding-description", "branding_description"},
+		{"branding-footer-text", "branding_footer_text"},
+		{"branding-trust-text", "branding_trust_text"},
+	} {
+		if cmd.Flags().Changed(m.flag) {
+			v, _ := cmd.Flags().GetString(m.flag)
+			p[m.field] = v
 		}
 	}
 	return p
@@ -388,9 +427,26 @@ var projectsUpdateCmd = &cobra.Command{
 			return err
 		}
 		p := collectProjectFlags(cmd)
-		result, err := cl.do("PUT", "/api/projects/"+id, p)
-		if err != nil {
-			return err
+		var result map[string]interface{}
+		if len(p) > 0 {
+			result, err = cl.do("PUT", "/api/projects/"+id, p)
+			if err != nil {
+				return err
+			}
+		}
+		if cmd.Flags().Changed("owner") {
+			ref, _ := cmd.Flags().GetString("owner")
+			ownerID, err := resolveUserRef(cl, ref)
+			if err != nil {
+				return fmt.Errorf("resolve --owner: %w", err)
+			}
+			result, err = cl.do("PUT", "/api/projects/"+id+"/owner", map[string]interface{}{"owner_id": ownerID})
+			if err != nil {
+				return err
+			}
+		}
+		if result == nil {
+			return fmt.Errorf("nothing to update — pass at least one flag")
 		}
 		if jsonMode {
 			printJSON(result)

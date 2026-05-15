@@ -87,6 +87,7 @@
     "tabs": {
       "deployments": "部署记录",
       "config": "配置",
+      "branding": "品牌",
       "datasets": "数据集",
       "secrets": "密钥",
       "workspace": "工作区",
@@ -113,6 +114,12 @@
     },
     "noDeployments": "暂无部署记录，点击「部署」按钮开始。",
     "config": {
+      "sections": {
+        "identity": "基本信息",
+        "source": "代码 / 镜像来源",
+        "runtime": "运行时",
+        "admin": "管理员"
+      },
       "projectName": "项目名称",
       "gitUrl": "Git 地址",
       "gitBranch": "Git 分支",

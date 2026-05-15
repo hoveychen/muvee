@@ -1,6 +1,6 @@
 ---
 name: muveectl
-version: 7
+version: 8
 description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, port-forward, curl, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, debug container crashes and restarts, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
 ---
 
@@ -138,7 +138,12 @@ muveectl projects create --name NAME --image-ref REF \
 #   Mutually exclusive with --git-url, --git-source, --compose, --domain-only.
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
-  [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2]
+  [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2] \
+  [--auto-deploy] [--no-auto-deploy] \
+  [--branding-site-name NAME] [--branding-logo-url URL] [--branding-favicon-url URL] \
+  [--branding-primary-color HEX] [--branding-sidebar-bg HEX] [--branding-tagline TAG] \
+  [--branding-description DESC] [--branding-footer-text TEXT] [--branding-trust-text "a,b,c"] \
+  [--owner USERNAME_OR_UUID]
 muveectl projects deploy PROJECT_ID
 muveectl projects deployments PROJECT_ID
 # Build/deploy phase logs (captured during `docker build` / `docker run`):
@@ -220,6 +225,57 @@ muveectl projects update PROJECT_ID \
 - Draw a simple SVG icon that represents the project's purpose (e.g. a chart for analytics, a robot for AI, a globe for web apps)
 - Use `viewBox="0 0 24 24"` and `stroke="currentColor"` so it adapts to light/dark themes
 - Keep the SVG under ~500 characters for readability in CLI output
+
+### Auto-Deploy (`--auto-deploy`)
+
+Redeploys the project automatically when the tracked source changes. Works in two modes depending on project type:
+
+- **Git projects (hosted or external)** — server polls the tracked branch and redeploys on a new commit. Hosted repos trigger immediately on push.
+- **Image / compose projects** — server polls the upstream image digest and redeploys when the tag is repushed.
+
+```bash
+muveectl projects update PROJECT_ID --auto-deploy      # enable
+muveectl projects update PROJECT_ID --no-auto-deploy   # disable
+```
+
+Not supported for `--domain-only` (tunnel) projects.
+
+### Sign-in Page Branding (`--branding-*`)
+
+When a project is auth-protected, Traefik's ForwardAuth renders a login page on the project's subdomain. The branding flags customise that page — what the **downstream users** of this project see, distinct from platform-wide branding.
+
+| Flag | What it controls |
+|---|---|
+| `--branding-site-name "Acme Docs"` | Headline shown on the sidebar and browser tab |
+| `--branding-logo-url https://...` | Logo image; replaces the site name on sidebar/header |
+| `--branding-favicon-url https://...` | `.ico` / `.png` / `.svg` shown in the browser tab |
+| `--branding-primary-color "#4f46e5"` | Hex colour tinting the provider-button hover state |
+| `--branding-sidebar-bg "#1a0033"` | Hex colour for the desktop sidebar background |
+| `--branding-tagline "Acme Inc."` | Small uppercase tagline above the brand |
+| `--branding-description "Internal tools..."` | Multi-line description shown under the brand |
+| `--branding-footer-text "© Acme 2026"` | Single-line footer (empty hides the row entirely) |
+| `--branding-trust-text "Encrypted,SOC 2,GDPR"` | Comma-separated trust badges (up to 3) below the sign-in buttons |
+
+Empty fields fall back to the platform-wide branding configured in admin settings.
+
+```bash
+muveectl projects update my-app \
+  --branding-site-name "Acme Docs" \
+  --branding-primary-color "#4f46e5" \
+  --branding-sidebar-bg "#1a0033" \
+  --branding-trust-text "Encrypted,SOC 2,GDPR ready"
+```
+
+### Reassigning Project Ownership (`--owner`)
+
+Admin only. Hands a project to a different platform user. Accepts a username or UUID:
+
+```bash
+muveectl projects update my-app --owner alice
+muveectl projects update my-app --owner 8c7b6a5d-...
+```
+
+The owner change goes through a dedicated admin endpoint (`PUT /api/projects/:id/owner`) — non-admin callers get 403. You can combine `--owner` with other update flags in the same command; the normal update is applied first, then ownership is reassigned.
 
 ### Logs (build vs. runtime)
 
