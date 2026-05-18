@@ -2,13 +2,12 @@ package main
 
 // Phase 0 spike — agent-side outbound WebSocket dialer that connects to the
 // control plane's `/api/agent/control` endpoint and serves `open_exec` frames
-// by shelling out to `docker exec -ti` with a host PTY. Will evolve in P5–P9
-// to handle cp, signals, multi-session multiplexing tweaks, binary framing.
+// by shelling out to `docker exec -ti` with a host PTY. Will evolve in P8 to
+// handle cp; in P5 the wire protocol moved to a shared internal/agentcontrol
+// package so the server, agent, and CLI share one Frame definition.
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -22,11 +21,16 @@ import (
 	"github.com/creack/pty"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/hoveychen/muvee/internal/agentcontrol"
 )
 
 type spikeSession struct {
-	ptmx io.WriteCloser
+	// exec-only: PTY master writer + resize closure.
+	ptmx   io.WriteCloser
 	resize func(cols, rows uint16)
+	// cp-upload-only: stdin pipe of `docker cp - <container>:<path>`.
+	cpStdin io.WriteCloser
+	// shared: tear down the subprocess + any pipes.
 	stop func()
 }
 
@@ -37,10 +41,10 @@ type spikeAgent struct {
 	sessions map[string]*spikeSession
 }
 
-func (a *spikeAgent) write(f map[string]interface{}) error {
+func (a *spikeAgent) write(f agentcontrol.Frame) error {
 	a.wmu.Lock()
 	defer a.wmu.Unlock()
-	return a.ws.WriteJSON(f)
+	return agentcontrol.WriteFrame(a.ws, f)
 }
 
 func (a *spikeAgent) set(session string, s *spikeSession) {
@@ -127,7 +131,7 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 			case <-hbCtx.Done():
 				return
 			case <-t.C:
-				if err := a.write(map[string]interface{}{"type": "ping"}); err != nil {
+				if err := a.write(agentcontrol.Frame{Type: agentcontrol.TypePing}); err != nil {
 					return
 				}
 			}
@@ -136,70 +140,75 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 
 	for {
 		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
-		_, msg, err := ws.ReadMessage()
+		f, err := agentcontrol.ReadFrame(ws)
 		if err != nil {
 			return err
 		}
-		var f map[string]interface{}
-		if err := json.Unmarshal(msg, &f); err != nil {
-			continue
-		}
-		ftype, _ := f["type"].(string)
-		session, _ := f["session"].(string)
-		switch ftype {
-		case "hello", "pong":
+		switch f.Type {
+		case agentcontrol.TypeHello, agentcontrol.TypePong:
 			// no-op
-		case "open_exec":
-			container, _ := f["container"].(string)
-			cmdAny, _ := f["cmd"].([]interface{})
-			cmd := make([]string, 0, len(cmdAny))
-			for _, v := range cmdAny {
-				if s, ok := v.(string); ok {
-					cmd = append(cmd, s)
-				}
-			}
-			cols := uint16(80)
-			rows := uint16(24)
-			if v, ok := f["cols"].(float64); ok && v > 0 {
-				cols = uint16(v)
-			}
-			if v, ok := f["rows"].(float64); ok && v > 0 {
-				rows = uint16(v)
-			}
-			if session == "" || container == "" || len(cmd) == 0 {
-				_ = a.write(map[string]interface{}{
-					"type": "error", "session": session,
-					"msg": "open_exec requires session/container/cmd",
+		case agentcontrol.TypeOpenExec:
+			if f.Session == "" || f.Container == "" || len(f.Cmd) == 0 {
+				_ = a.write(agentcontrol.Frame{
+					Type: agentcontrol.TypeError, Session: f.Session,
+					Msg: "open_exec requires session/container/cmd",
 				})
 				continue
 			}
-			go runDockerExecPTYSpike(ctx, a, container, cmd, session, cols, rows)
-		case "stdio":
-			s := a.get(session)
-			if s == nil {
+			cols, rows := uint16(80), uint16(24)
+			if f.Cols > 0 {
+				cols = uint16(f.Cols)
+			}
+			if f.Rows > 0 {
+				rows = uint16(f.Rows)
+			}
+			go runDockerExecPTYSpike(ctx, a, f.Container, f.Cmd, f.Session, cols, rows)
+		case agentcontrol.TypeOpenCp:
+			if f.Session == "" || f.Container == "" || f.Path == "" {
+				_ = a.write(agentcontrol.Frame{
+					Type: agentcontrol.TypeError, Session: f.Session,
+					Msg: "open_cp requires session/container/path",
+				})
 				continue
 			}
-			data, _ := f["data"].(string)
-			raw, _ := base64.StdEncoding.DecodeString(data)
-			if len(raw) > 0 {
-				_, _ = s.ptmx.Write(raw)
+			go runDockerCp(ctx, a, f.Container, f.Path, f.Direction, f.Session)
+		case agentcontrol.TypeStdio:
+			s := a.get(f.Session)
+			if s == nil || s.ptmx == nil {
+				continue
 			}
-		case "resize":
-			s := a.get(session)
+			if len(f.Data) > 0 {
+				_, _ = s.ptmx.Write(f.Data)
+			}
+		case agentcontrol.TypeCpUpTar:
+			s := a.get(f.Session)
+			if s == nil || s.cpStdin == nil {
+				continue
+			}
+			if len(f.Data) > 0 {
+				_, _ = s.cpStdin.Write(f.Data)
+			}
+		case agentcontrol.TypeCpEnd:
+			s := a.get(f.Session)
+			if s == nil || s.cpStdin == nil {
+				continue
+			}
+			_ = s.cpStdin.Close()
+		case agentcontrol.TypeResize:
+			s := a.get(f.Session)
 			if s == nil || s.resize == nil {
 				continue
 			}
-			cols := uint16(80)
-			rows := uint16(24)
-			if v, ok := f["cols"].(float64); ok && v > 0 {
-				cols = uint16(v)
+			cols, rows := uint16(80), uint16(24)
+			if f.Cols > 0 {
+				cols = uint16(f.Cols)
 			}
-			if v, ok := f["rows"].(float64); ok && v > 0 {
-				rows = uint16(v)
+			if f.Rows > 0 {
+				rows = uint16(f.Rows)
 			}
 			s.resize(cols, rows)
-		case "close":
-			if s := a.get(session); s != nil && s.stop != nil {
+		case agentcontrol.TypeClose:
+			if s := a.get(f.Session); s != nil && s.stop != nil {
 				s.stop()
 			}
 		default:
@@ -215,7 +224,7 @@ func runDockerExecPTYSpike(ctx context.Context, a *spikeAgent, container string,
 	c := exec.CommandContext(ctx, "docker", args...)
 	ptmx, err := pty.StartWithSize(c, &pty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
-		_ = a.write(map[string]interface{}{"type": "error", "session": session, "msg": err.Error()})
+		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeError, Session: session, Msg: err.Error()})
 		return
 	}
 	resize := func(cols, rows uint16) {
@@ -234,9 +243,13 @@ func runDockerExecPTYSpike(ctx context.Context, a *spikeAgent, container string,
 	for {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
-			_ = a.write(map[string]interface{}{
-				"type": "stdio", "session": session, "stream": "stdout",
-				"data": buf[:n],
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			_ = a.write(agentcontrol.Frame{
+				Type:    agentcontrol.TypeStdio,
+				Session: session,
+				Stream:  agentcontrol.StreamStdout,
+				Data:    chunk,
 			})
 		}
 		if err != nil {
@@ -251,5 +264,109 @@ func runDockerExecPTYSpike(ctx context.Context, a *spikeAgent, container string,
 			code = ee.ExitCode()
 		}
 	}
-	_ = a.write(map[string]interface{}{"type": "exit", "session": session, "code": code})
+	_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+}
+
+// runDockerCp shells out to `docker cp` in either direction and proxies the
+// tar stream over the control WS. Direction "up" means local→container
+// (CLI is sending tar via cp_up_tar frames); direction "down" means
+// container→local (agent reads tar from docker cp stdout and sends it back
+// via cp_down_tar frames).
+func runDockerCp(ctx context.Context, a *spikeAgent, container, path, direction, session string) {
+	switch direction {
+	case agentcontrol.CpDirectionUp:
+		c := exec.CommandContext(ctx, "docker", "cp", "-", container+":"+path)
+		stdin, err := c.StdinPipe()
+		if err != nil {
+			_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeError, Session: session, Msg: err.Error()})
+			return
+		}
+		var stderr strings.Builder
+		c.Stderr = &stderr
+		if err := c.Start(); err != nil {
+			_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeError, Session: session, Msg: err.Error()})
+			return
+		}
+		a.set(session, &spikeSession{
+			cpStdin: stdin,
+			stop: func() {
+				_ = stdin.Close()
+				if c.Process != nil {
+					_ = c.Process.Kill()
+				}
+			},
+		})
+		defer a.drop(session)
+		code := 0
+		if err := c.Wait(); err != nil {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				code = ee.ExitCode()
+			}
+		}
+		if code != 0 && stderr.Len() > 0 {
+			_ = a.write(agentcontrol.Frame{
+				Type: agentcontrol.TypeStdio, Session: session,
+				Stream: agentcontrol.StreamStderr, Data: []byte(stderr.String()),
+			})
+		}
+		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+
+	case agentcontrol.CpDirectionDown:
+		c := exec.CommandContext(ctx, "docker", "cp", container+":"+path, "-")
+		stdout, err := c.StdoutPipe()
+		if err != nil {
+			_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeError, Session: session, Msg: err.Error()})
+			return
+		}
+		var stderr strings.Builder
+		c.Stderr = &stderr
+		if err := c.Start(); err != nil {
+			_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeError, Session: session, Msg: err.Error()})
+			return
+		}
+		a.set(session, &spikeSession{
+			stop: func() {
+				if c.Process != nil {
+					_ = c.Process.Kill()
+				}
+			},
+		})
+		defer a.drop(session)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				_ = a.write(agentcontrol.Frame{
+					Type: agentcontrol.TypeCpDownTar, Session: session, Data: chunk,
+				})
+			}
+			if err != nil {
+				break
+			}
+		}
+		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeCpEnd, Session: session})
+		code := 0
+		if err := c.Wait(); err != nil {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				code = ee.ExitCode()
+			}
+		}
+		if code != 0 && stderr.Len() > 0 {
+			_ = a.write(agentcontrol.Frame{
+				Type: agentcontrol.TypeStdio, Session: session,
+				Stream: agentcontrol.StreamStderr, Data: []byte(stderr.String()),
+			})
+		}
+		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+
+	default:
+		_ = a.write(agentcontrol.Frame{
+			Type: agentcontrol.TypeError, Session: session,
+			Msg: "open_cp direction must be 'up' or 'down'",
+		})
+	}
 }

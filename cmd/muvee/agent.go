@@ -291,6 +291,18 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		out, err := runRuntimeLogs(ctx, task)
 		taskErr = err
 		extra["result"] = out
+	case store.TaskTypeRestart:
+		out, err := runRestart(ctx, task)
+		taskErr = err
+		extra["result"] = out
+	case store.TaskTypeEnv:
+		out, err := runEnvInspect(ctx, task)
+		taskErr = err
+		extra["result"] = out
+	case store.TaskTypeDescribe:
+		out, err := runDescribe(ctx, task)
+		taskErr = err
+		extra["result"] = out
 	}
 
 	if taskErr != nil {
@@ -510,6 +522,178 @@ func runRuntimeLogs(ctx context.Context, task *store.Task) (string, error) {
 		out = append(out[:runtimeLogsMaxBytes], []byte("\n[truncated]\n")...)
 	}
 	return string(out), nil
+}
+
+// runRestart issues `docker restart muvee-<domain_prefix>` and returns the
+// combined output so the CLI can surface stderr on failure. taskErr is set
+// only when docker itself fails to run; a "no such container" surfaces as
+// success with an explanatory body so the CLI prints it.
+func runRestart(ctx context.Context, task *store.Task) (string, error) {
+	domainPrefix := str(task.Payload, "domain_prefix")
+	if domainPrefix == "" {
+		return "", fmt.Errorf("restart task missing domain_prefix")
+	}
+	containerName := "muvee-" + domainPrefix
+	cmd := exec.CommandContext(ctx, "docker", "restart", containerName)
+	out, err := cmd.CombinedOutput()
+	body := strings.TrimSpace(string(out))
+	if err != nil {
+		if strings.Contains(body, "No such container") {
+			return body, nil
+		}
+		if body == "" {
+			body = err.Error()
+		}
+		return body, fmt.Errorf("docker restart %s: %w", containerName, err)
+	}
+	if body == "" {
+		body = containerName + " restarted"
+	}
+	return body, nil
+}
+
+// runEnvInspect returns the container's effective env vars as JSON
+// (`{"key":"value", ...}`). Server-side masks secret-looking values before
+// returning to the CLI; the unmasked map is only ever in the agent's address
+// space and the task.Result column. The control plane reads task.Result with
+// admin context to decide whether to mask.
+func runEnvInspect(ctx context.Context, task *store.Task) (string, error) {
+	domainPrefix := str(task.Payload, "domain_prefix")
+	if domainPrefix == "" {
+		return "", fmt.Errorf("env task missing domain_prefix")
+	}
+	containerName := "muvee-" + domainPrefix
+	out, err := exec.CommandContext(ctx, "docker", "inspect",
+		"--format", "{{json .Config.Env}}", containerName).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker inspect %s: %w", containerName, err)
+	}
+	var entries []string
+	if err := json.Unmarshal(bytes.TrimSpace(out), &entries); err != nil {
+		return "", fmt.Errorf("parse env list: %w", err)
+	}
+	env := make(map[string]string, len(entries))
+	for _, e := range entries {
+		i := strings.Index(e, "=")
+		if i < 0 {
+			env[e] = ""
+			continue
+		}
+		env[e[:i]] = e[i+1:]
+	}
+	encoded, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// runDescribe collects a kubectl-describe-flavored snapshot of the project's
+// container by reading `docker inspect`. The result is a JSON object with
+// status, restart count, exit code, OOMKilled flag, image, ports, mounts,
+// command, and env var keys (values not included; use `projects env`).
+func runDescribe(ctx context.Context, task *store.Task) (string, error) {
+	domainPrefix := str(task.Payload, "domain_prefix")
+	if domainPrefix == "" {
+		return "", fmt.Errorf("describe task missing domain_prefix")
+	}
+	containerName := "muvee-" + domainPrefix
+	out, err := exec.CommandContext(ctx, "docker", "inspect",
+		"--format", "{{json .}}", containerName).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker inspect %s: %w", containerName, err)
+	}
+	var raw struct {
+		ID      string `json:"Id"`
+		Created string `json:"Created"`
+		Path    string `json:"Path"`
+		Args    []string
+		Image   string
+		Name    string
+		RestartCount int `json:"RestartCount"`
+		State   struct {
+			Status     string
+			Running    bool
+			Paused     bool
+			Restarting bool
+			OOMKilled  bool
+			Dead       bool
+			Pid        int
+			ExitCode   int
+			Error      string
+			StartedAt  string
+			FinishedAt string
+			Health     *struct {
+				Status string
+			}
+		}
+		Config struct {
+			Image      string
+			Entrypoint []string
+			Cmd        []string
+			Env        []string
+		}
+		HostConfig struct {
+			Memory     int64
+			CpuShares  int64
+		}
+		NetworkSettings struct {
+			Ports map[string][]struct {
+				HostIp   string
+				HostPort string
+			}
+		}
+		Mounts []struct {
+			Type        string
+			Source      string
+			Destination string
+			Mode        string
+			RW          bool
+		}
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return "", fmt.Errorf("parse inspect: %w", err)
+	}
+	envKeys := make([]string, 0, len(raw.Config.Env))
+	for _, e := range raw.Config.Env {
+		if i := strings.Index(e, "="); i > 0 {
+			envKeys = append(envKeys, e[:i])
+		} else if e != "" {
+			envKeys = append(envKeys, e)
+		}
+	}
+	healthStatus := ""
+	if raw.State.Health != nil {
+		healthStatus = raw.State.Health.Status
+	}
+	summary := map[string]interface{}{
+		"container_name": containerName,
+		"image":          raw.Config.Image,
+		"image_sha":      raw.Image,
+		"command":        append(append([]string{raw.Path}, raw.Args...), raw.Config.Cmd...),
+		"created_at":     raw.Created,
+		"state": map[string]interface{}{
+			"status":      raw.State.Status,
+			"running":     raw.State.Running,
+			"oom_killed":  raw.State.OOMKilled,
+			"exit_code":   raw.State.ExitCode,
+			"error":       raw.State.Error,
+			"started_at":  raw.State.StartedAt,
+			"finished_at": raw.State.FinishedAt,
+			"health":      healthStatus,
+			"pid":         raw.State.Pid,
+		},
+		"restart_count": raw.RestartCount,
+		"memory_limit":  raw.HostConfig.Memory,
+		"ports":         raw.NetworkSettings.Ports,
+		"mounts":        raw.Mounts,
+		"env_keys":      envKeys,
+	}
+	encoded, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func runCleanup(ctx context.Context, task *store.Task) error {

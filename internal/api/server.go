@@ -31,6 +31,7 @@ import (
 	"github.com/hoveychen/muvee/internal/gitrepo"
 	"github.com/hoveychen/muvee/internal/monitor"
 	"github.com/hoveychen/muvee/internal/muveectlbin"
+	"github.com/hoveychen/muvee/internal/projectevents"
 	"github.com/hoveychen/muvee/internal/scheduler"
 	"github.com/hoveychen/muvee/internal/store"
 )
@@ -699,6 +700,10 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/projects/{id}/deploy", s.requireAuthorized(s.triggerDeploy))
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
 		r.Post("/api/projects/{id}/runtime-logs", s.requireAuthorized(s.triggerRuntimeLogs))
+		r.Post("/api/projects/{id}/restart", s.requireAuthorized(s.triggerRestart))
+		r.Post("/api/projects/{id}/env", s.requireAuthorized(s.triggerEnvInspect))
+		r.Post("/api/projects/{id}/describe", s.requireAuthorized(s.triggerDescribe))
+		r.Get("/api/projects/{id}/events", s.getProjectEvents)
 		r.Get("/api/tasks/{id}", s.getTaskStatus)
 		r.Get("/api/projects/{id}/metrics", s.getProjectMetrics)
 		r.Get("/api/projects/{id}/traffic", s.getProjectTraffic)
@@ -711,9 +716,13 @@ func (s *Server) Router() http.Handler {
 		r.HandleFunc("/api/projects/{id}/proxy", s.handleProjectProxy)
 		r.HandleFunc("/api/projects/{id}/proxy/*", s.handleProjectProxy)
 
-		// Phase 0 spike: WebSocket endpoint that routes an exec session through
-		// the agent control channel. CLI-only; will be replaced in P5–P9.
-		r.Get("/api/projects/{id}/_exec_spike", s.handleProjectExecSpike)
+		// Run a command inside the project container with a host PTY, routed
+		// through the agent control channel. Auth required + project access
+		// check happens inside the handler.
+		r.Get("/api/projects/{id}/exec", s.handleProjectExec)
+		// Copy files to/from the project container, routed through the agent
+		// control channel via `docker cp` tar streams on the agent side.
+		r.Get("/api/projects/{id}/cp", s.handleProjectCp)
 
 		// Adhoc tunnel – WebSocket endpoint for CLI tunnel connections.
 		// Gated on requireAuthorized: publishing on the platform's apex domain
@@ -2457,11 +2466,153 @@ func (s *Server) triggerRuntimeLogs(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"task_id": taskID.String(), "deployment_id": deployment.ID.String()})
 }
 
+// triggerRestart dispatches a restart task to the deploy node where the
+// project's current running deployment lives. The agent picks the task up and
+// runs `docker restart muvee-<domain_prefix>` — no rebuild, no redeploy, just
+// a kick. The CLI polls GET /api/tasks/{id} for completion.
+func (s *Server) triggerRestart(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if running == nil {
+		jsonErr(w, fmt.Errorf("project has no running deployment"), 409)
+		return
+	}
+	deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
+	if err != nil || deployment == nil || deployment.NodeID == nil {
+		jsonErr(w, fmt.Errorf("deployment node unknown"), 409)
+		return
+	}
+	taskID, err := s.sched.DispatchRestart(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	projectevents.Push(id, projectevents.TypeRestart, projectevents.SeverityInfo,
+		fmt.Sprintf("restart requested by %s", user.Email))
+	jsonOK(w, map[string]string{"task_id": taskID.String(), "deployment_id": deployment.ID.String()})
+}
+
+// triggerEnvInspect dispatches an env task. Reuses the user-task pattern
+// (POST to dispatch, GET /api/tasks/{id} to poll); the CLI applies the
+// optional `--raw` flag client-side after pulling the result. Secret masking
+// happens client-side too — the server returns the raw JSON map from the
+// agent, but only project members + admins can reach this endpoint at all.
+func (s *Server) triggerEnvInspect(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if running == nil {
+		jsonErr(w, fmt.Errorf("project has no running deployment"), 409)
+		return
+	}
+	deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
+	if err != nil || deployment == nil || deployment.NodeID == nil {
+		jsonErr(w, fmt.Errorf("deployment node unknown"), 409)
+		return
+	}
+	taskID, err := s.sched.DispatchEnv(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"task_id": taskID.String(), "deployment_id": deployment.ID.String()})
+}
+
+// getProjectEvents returns the ring-buffered platform events for a project.
+// Query params:
+//   since: only return events with id > since (use for follow-style polling)
+//   limit: cap on the number of events returned (default 200, max 200)
+// Lost on server restart by design — see internal/projectevents docs.
+func (s *Server) getProjectEvents(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+	var since int64
+	if v := r.URL.Query().Get("since"); v != "" {
+		since, _ = strconv.ParseInt(v, 10, 64)
+	}
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	jsonOK(w, map[string]interface{}{"events": projectevents.Since(id, since, limit)})
+}
+
+// triggerDescribe dispatches a describe task. Result format matches what the
+// agent emits (see cmd/muvee/agent.go runDescribe).
+func (s *Server) triggerDescribe(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	if running == nil {
+		jsonErr(w, fmt.Errorf("project has no running deployment"), 409)
+		return
+	}
+	deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
+	if err != nil || deployment == nil || deployment.NodeID == nil {
+		jsonErr(w, fmt.Errorf("deployment node unknown"), 409)
+		return
+	}
+	taskID, err := s.sched.DispatchDescribe(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]string{"task_id": taskID.String(), "deployment_id": deployment.ID.String()})
+}
+
 // getTaskStatus is the CLI-side polling endpoint for tasks the user has
-// dispatched (currently only runtime_logs). Returns 404 for unknown tasks and
-// 403 when the caller doesn't have access to the task's underlying project.
-// Only runtime_logs tasks are exposed via this endpoint — build/deploy/cleanup
-// status is still surfaced through the deployment-centric endpoints.
+// dispatched (runtime_logs, restart, env, describe). Returns 404 for unknown
+// tasks and 403 when the caller doesn't have access to the task's underlying
+// project. Only user-dispatched task types are exposed via this endpoint —
+// build/deploy/cleanup status is still surfaced through the deployment-centric
+// endpoints.
 func (s *Server) getTaskStatus(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
@@ -2472,7 +2623,10 @@ func (s *Server) getTaskStatus(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, fmt.Errorf("task not found"), 404)
 		return
 	}
-	if task.Type != store.TaskTypeRuntimeLogs {
+	switch task.Type {
+	case store.TaskTypeRuntimeLogs, store.TaskTypeRestart, store.TaskTypeEnv, store.TaskTypeDescribe:
+		// allowed
+	default:
 		jsonErr(w, fmt.Errorf("task not accessible"), 403)
 		return
 	}
@@ -3442,6 +3596,10 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 		task, err := s.store.GetTask(r.Context(), taskID)
 		if err == nil && task != nil && task.Type == store.TaskTypeBuild {
 			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusBuilding, "")
+			if dep, derr := s.store.GetDeployment(r.Context(), task.DeploymentID); derr == nil && dep != nil {
+				projectevents.Push(dep.ProjectID, projectevents.TypeDeployStarted, projectevents.SeverityInfo,
+					fmt.Sprintf("build started (deployment %s)", task.DeploymentID))
+			}
 		}
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
@@ -3455,6 +3613,10 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 				errMsg = "task failed"
 			}
 			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusFailed, errMsg)
+			if dep, derr := s.store.GetDeployment(r.Context(), task.DeploymentID); derr == nil && dep != nil {
+				projectevents.Push(dep.ProjectID, projectevents.TypeDeployFailed, projectevents.SeverityError,
+					fmt.Sprintf("%s task failed: %s", task.Type, errMsg))
+			}
 		}
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
@@ -3475,6 +3637,10 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 	case store.TaskTypeDeploy:
 		if body.HostPort > 0 {
 			_ = s.store.SetDeploymentHostPort(r.Context(), task.DeploymentID, body.HostPort)
+			if dep, derr := s.store.GetDeployment(r.Context(), task.DeploymentID); derr == nil && dep != nil {
+				projectevents.Push(dep.ProjectID, projectevents.TypeDeployCompleted, projectevents.SeverityInfo,
+					fmt.Sprintf("deployed on host port %d", body.HostPort))
+			}
 			// Retire previous running deployments for the same project.
 			// For any retired deployment that ran on a different node, dispatch a cleanup
 			// task so the stale container is removed from that node.
@@ -3491,6 +3657,10 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusFailed, "deploy completed but no host_port reported")
+			if dep, derr := s.store.GetDeployment(r.Context(), task.DeploymentID); derr == nil && dep != nil {
+				projectevents.Push(dep.ProjectID, projectevents.TypeDeployFailed, projectevents.SeverityError,
+					"deploy completed but no host_port reported")
+			}
 		}
 	}
 

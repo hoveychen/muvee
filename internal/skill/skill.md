@@ -1,7 +1,7 @@
 ---
 name: muveectl
-version: 8
-description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, port-forward, curl, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, debug container crashes and restarts, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, or manage dataset files (ls, pull, push, rm, mkdir, mv, cp).
+version: 10
+description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, restart, port-forward, curl, exec / shell / cp into containers, describe, env, events, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, restart a container without a redeploy, inspect container state (describe / env / events), debug container crashes and restarts, run commands or open a shell inside a project container, copy files in/out of a container, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, manage dataset files (ls, pull, push, rm, mkdir, mv, cp), or self-update muveectl from the configured server.
 ---
 
 # muveectl – Muvee CLI
@@ -337,6 +337,85 @@ muveectl projects workspace push PROJECT_ID local_file.bin --remote-path uploads
 # Delete a file from the workspace
 muveectl projects workspace rm PROJECT_ID remote/path/file.txt
 ```
+
+### Inspect & Kick (`restart` / `env` / `describe` / `events`)
+
+Four kubectl-style read-only / single-shot commands for poking at a running project without opening a shell. All dispatch a one-shot agent task (5 s typical end-to-end latency) and stream back the result.
+
+```bash
+# Restart the running container — no rebuild, no redeploy. Useful after
+# changing secrets or env vars, or to clear memory.
+muveectl projects restart PROJECT_ID
+
+# Print env vars effective inside the container. Secret-looking keys
+# (PASSWORD/SECRET/TOKEN/KEY/CREDENTIAL/...) mask their values as '***';
+# add --raw to see the unmasked value.
+muveectl projects env PROJECT_ID
+muveectl projects env PROJECT_ID --raw
+
+# Kubectl-describe-style snapshot: status, exit code, OOMKilled, restart
+# count, image+sha, ports, mounts, env keys.
+muveectl projects describe PROJECT_ID
+muveectl projects describe PROJECT_ID --output json   # raw JSON for scripts
+
+# Tail platform events recorded server-side (deploy.started, deploy.completed,
+# deploy.failed, restart, container.oom_killed). In-memory ring buffer capped
+# at 200 events per project — lost on server restart.
+muveectl projects events PROJECT_ID
+muveectl projects events PROJECT_ID --follow         # poll every 3 s
+```
+
+When to reach for each:
+- **`restart`** when env vars / secrets changed but the project file is unchanged, or to break a wedged process without a deploy cycle.
+- **`describe`** as the first stop when "why did my container die?" — it gives you ExitCode, OOMKilled, RestartCount, and Health on one screen.
+- **`env`** to confirm an injected secret or auto-injected `MUVEE_*` env var actually reached the container.
+- **`events`** to follow what the platform itself thinks is happening — useful when you suspect the deploy lifecycle, not the app, is misbehaving.
+
+### Interactive Debugging (`exec` / `shell` / `cp`)
+
+For inspecting a running container directly — running ad-hoc commands, opening a shell, or copying files in/out — there are three kubectl-style subcommands that route through the deploy agent's outbound control channel:
+
+```bash
+# Run a one-off command inside the project container (PTY-backed, like kubectl exec).
+muveectl projects exec PROJECT_ID -- ls -la /app
+muveectl projects exec PROJECT_ID -- sh -c 'env | grep API'
+
+# Open an interactive shell — convenience for 'projects exec ID -- /bin/sh'.
+# Most muvee images are Alpine / distroless, so /bin/sh is the safe default.
+muveectl projects shell PROJECT_ID
+
+# Copy files between the local filesystem and the container, in either direction.
+# Exactly one side must be a PROJECT:PATH reference.
+muveectl projects cp ./config.json PROJECT_ID:/app/config.json   # upload
+muveectl projects cp PROJECT_ID:/app/logs ./logs-dump            # download
+```
+
+When to use which:
+- **`exec`** — automated one-shot checks ("does this env var resolve?", "ls /tmp"). Exit code propagates back so you can chain it in shell scripts.
+- **`shell`** — open-ended debugging from a real terminal. Ctrl-C / SIGWINCH / colorized output all work because the agent allocates a host PTY around `docker exec -ti`.
+- **`cp`** — pulling crash dumps, log files, or coredumps out; pushing fixed config or a one-off script in. The wire is a tar stream so directories and (read-only) symlinks survive.
+
+Caveats:
+- These all require a **running deployment**. With no live container the server returns 404 ("no running deployment") — fall back to `projects logs` to see why the deploy failed.
+- The deploy node's agent must be connected to the control plane (logged as `agentcontrol: connected to ...`). A disconnected agent surfaces as 503 ("agent for node ... not currently connected").
+- Project access is gated by owner / member / admin — same rule as `projects curl` and `port-forward`.
+
+## Self-Update (`muveectl upgrade`)
+
+Refreshes the muveectl binary in place from the **current profile's** server, so your CLI always matches whichever environment you're pointed at.
+
+```bash
+muveectl upgrade
+```
+
+How it works: downloads `<server>/api/muveectl/muveectl_<os>_<arch>` to a temp file in the same directory as the running binary, chmods it executable, and atomically renames it over the live binary. The server transparently serves the embedded binary or 302-redirects to the matching GitHub release asset.
+
+When to use:
+- After a Muvee server upgrade, to pull the matching CLI version (`muveectl version` reports both Client and Server versions, so you'll see the drift).
+- When switching profiles between environments at different versions: `muveectl profile use prod && muveectl upgrade`.
+- In place of re-running the install one-liner for routine updates.
+
+If the install directory isn't writable by the current user (e.g. `/usr/local/bin` without admin), the command fails with `need write access to upgrade in place` — re-run with `sudo`, or `chown` the binary first.
 
 ## Reaching Auth-Protected Projects from the CLI
 

@@ -195,6 +195,58 @@ func (s *Scheduler) DispatchRuntimeLogs(ctx context.Context, nodeID uuid.UUID, d
 	return created.ID, nil
 }
 
+// DispatchRestart creates a restart task on the node where the deployment is
+// running. The agent runs `docker restart muvee-<domain_prefix>` and the CLI
+// polls /api/tasks/{id} for completion.
+func (s *Scheduler) DispatchRestart(ctx context.Context, nodeID uuid.UUID, deployment *store.Deployment, domainPrefix string) (uuid.UUID, error) {
+	task := &store.Task{
+		Type:         store.TaskTypeRestart,
+		NodeID:       &nodeID,
+		DeploymentID: deployment.ID,
+		Payload: map[string]interface{}{
+			"domain_prefix": domainPrefix,
+		},
+	}
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
+}
+
+// DispatchEnv creates an env task on the running deployment's node. The agent
+// inspects the container and returns its environment variables.
+func (s *Scheduler) DispatchEnv(ctx context.Context, nodeID uuid.UUID, deployment *store.Deployment, domainPrefix string) (uuid.UUID, error) {
+	task := &store.Task{
+		Type:         store.TaskTypeEnv,
+		NodeID:       &nodeID,
+		DeploymentID: deployment.ID,
+		Payload:      map[string]interface{}{"domain_prefix": domainPrefix},
+	}
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
+}
+
+// DispatchDescribe creates a describe task on the running deployment's node.
+// The agent collects container state (status, exit code, OOMKilled, restart
+// count, image+sha, ports, env summary, mounts) via `docker inspect`.
+func (s *Scheduler) DispatchDescribe(ctx context.Context, nodeID uuid.UUID, deployment *store.Deployment, domainPrefix string) (uuid.UUID, error) {
+	task := &store.Task{
+		Type:         store.TaskTypeDescribe,
+		NodeID:       &nodeID,
+		DeploymentID: deployment.ID,
+		Payload:      map[string]interface{}{"domain_prefix": domainPrefix},
+	}
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
+}
+
 // DispatchComposeCleanup tears down a compose project on its pinned node,
 // including its docker named volumes. Used when a compose project is deleted.
 // deploymentID is optional — if zero, the cleanup is not tied to a specific

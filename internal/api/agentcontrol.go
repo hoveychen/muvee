@@ -15,23 +15,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/hoveychen/muvee/internal/agentcontrol"
 	"github.com/hoveychen/muvee/internal/auth"
 	"github.com/hoveychen/muvee/internal/store"
 )
-
-type ctrlFrame struct {
-	Type      string   `json:"type"`
-	Session   string   `json:"session,omitempty"`
-	Container string   `json:"container,omitempty"`
-	Cmd       []string `json:"cmd,omitempty"`
-	Stream    string   `json:"stream,omitempty"`
-	Data      []byte   `json:"data,omitempty"`
-	Code      int      `json:"code,omitempty"`
-	Msg       string   `json:"msg,omitempty"`
-	NodeID    string   `json:"node_id,omitempty"`
-	Cols      int      `json:"cols,omitempty"`
-	Rows      int      `json:"rows,omitempty"`
-}
 
 type agentControlConn struct {
 	nodeID uuid.UUID
@@ -39,22 +26,22 @@ type agentControlConn struct {
 	wmu    sync.Mutex
 
 	smu      sync.Mutex
-	sessions map[string]chan ctrlFrame
+	sessions map[string]chan agentcontrol.Frame
 }
 
-func (a *agentControlConn) writeFrame(f ctrlFrame) error {
+func (a *agentControlConn) writeFrame(f agentcontrol.Frame) error {
 	a.wmu.Lock()
 	defer a.wmu.Unlock()
-	return a.ws.WriteJSON(f)
+	return agentcontrol.WriteFrame(a.ws, f)
 }
 
-func (a *agentControlConn) openSession(session string) chan ctrlFrame {
+func (a *agentControlConn) openSession(session string) chan agentcontrol.Frame {
 	a.smu.Lock()
 	defer a.smu.Unlock()
 	if a.sessions == nil {
-		a.sessions = map[string]chan ctrlFrame{}
+		a.sessions = map[string]chan agentcontrol.Frame{}
 	}
-	ch := make(chan ctrlFrame, 32)
+	ch := make(chan agentcontrol.Frame, 32)
 	a.sessions[session] = ch
 	return ch
 }
@@ -68,7 +55,7 @@ func (a *agentControlConn) closeSession(session string) {
 	}
 }
 
-func (a *agentControlConn) dispatch(f ctrlFrame) {
+func (a *agentControlConn) dispatch(f agentcontrol.Frame) {
 	a.smu.Lock()
 	ch := a.sessions[f.Session]
 	a.smu.Unlock()
@@ -138,21 +125,22 @@ func (s *Server) handleAgentControl(w http.ResponseWriter, r *http.Request) {
 	defer ws.Close()
 	log.Printf("agentcontrol: node %s connected", nodeID)
 
-	_ = conn.writeFrame(ctrlFrame{Type: "hello", NodeID: nodeID.String()})
+	_ = conn.writeFrame(agentcontrol.Frame{Type: agentcontrol.TypeHello, NodeID: nodeID.String()})
 
 	for {
 		ws.SetReadDeadline(time.Now().Add(90 * time.Second))
-		var f ctrlFrame
-		if err := ws.ReadJSON(&f); err != nil {
+		f, err := agentcontrol.ReadFrame(ws)
+		if err != nil {
 			log.Printf("agentcontrol: node %s read err: %v", nodeID, err)
 			return
 		}
 		switch f.Type {
-		case "ping":
-			_ = conn.writeFrame(ctrlFrame{Type: "pong"})
-		case "stdio", "exit", "error":
+		case agentcontrol.TypePing:
+			_ = conn.writeFrame(agentcontrol.Frame{Type: agentcontrol.TypePong})
+		case agentcontrol.TypeStdio, agentcontrol.TypeCpDownTar, agentcontrol.TypeCpEnd,
+			agentcontrol.TypeExit, agentcontrol.TypeError:
 			conn.dispatch(f)
-			if f.Type == "exit" || f.Type == "error" {
+			if f.Type == agentcontrol.TypeExit || f.Type == agentcontrol.TypeError {
 				conn.closeSession(f.Session)
 			}
 		default:
@@ -161,13 +149,46 @@ func (s *Server) handleAgentControl(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleProjectExecSpike is the CLI-facing endpoint for the Phase 0 spike.
-// User-authenticated; routes the session through the right agent control conn.
+// handleProjectExec is the CLI-facing WebSocket endpoint for running a command
+// inside the project's container via the agent control channel.
 //
-// Route: GET /api/projects/{id}/_exec_spike (WebSocket upgrade)
-// First frame from CLI MUST be {type:"open_exec", cmd:[...]}. Server fills in
-// container based on the project's running deployment.
-func (s *Server) handleProjectExecSpike(w http.ResponseWriter, r *http.Request) {
+// Route: GET /api/projects/{id}/exec (WebSocket upgrade)
+// First frame from CLI MUST be {type:"open_exec", cmd:[...]}.
+func (s *Server) handleProjectExec(w http.ResponseWriter, r *http.Request) {
+	s.proxyAgentSession(w, r, func(f agentcontrol.Frame) error {
+		if f.Type != agentcontrol.TypeOpenExec || len(f.Cmd) == 0 {
+			return fmt.Errorf("first frame must be open_exec with non-empty cmd")
+		}
+		return nil
+	})
+}
+
+// handleProjectCp is the CLI-facing WebSocket endpoint for copying files
+// to/from the project container.
+//
+// Route: GET /api/projects/{id}/cp (WebSocket upgrade)
+// First frame from CLI MUST be {type:"open_cp", path:"...", direction:"up"|"down"}.
+func (s *Server) handleProjectCp(w http.ResponseWriter, r *http.Request) {
+	s.proxyAgentSession(w, r, func(f agentcontrol.Frame) error {
+		if f.Type != agentcontrol.TypeOpenCp {
+			return fmt.Errorf("first frame must be open_cp")
+		}
+		if f.Path == "" {
+			return fmt.Errorf("open_cp.path is required")
+		}
+		if f.Direction != agentcontrol.CpDirectionUp && f.Direction != agentcontrol.CpDirectionDown {
+			return fmt.Errorf("open_cp.direction must be %q or %q", agentcontrol.CpDirectionUp, agentcontrol.CpDirectionDown)
+		}
+		return nil
+	})
+}
+
+// proxyAgentSession is the shared body for the CLI-facing exec/cp endpoints:
+// it authenticates the user, finds the project's running agent, upgrades the
+// WS, reads the CLI's open frame (validated by validateOpen), forwards it to
+// the agent with the container name + new session id filled in, and then
+// proxies frames in both directions until either side closes.
+func (s *Server) proxyAgentSession(w http.ResponseWriter, r *http.Request, validateOpen func(agentcontrol.Frame) error) {
 	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
 		return
@@ -201,12 +222,12 @@ func (s *Server) handleProjectExecSpike(w http.ResponseWriter, r *http.Request) 
 
 	// Read the first frame from CLI.
 	ws.SetReadDeadline(time.Now().Add(30 * time.Second))
-	var open ctrlFrame
-	if err := ws.ReadJSON(&open); err != nil {
+	open, err := agentcontrol.ReadFrame(ws)
+	if err != nil {
 		return
 	}
-	if open.Type != "open_exec" || len(open.Cmd) == 0 {
-		_ = ws.WriteJSON(ctrlFrame{Type: "error", Msg: "first frame must be open_exec with non-empty cmd"})
+	if err := validateOpen(open); err != nil {
+		_ = agentcontrol.WriteFrame(ws, agentcontrol.Frame{Type: agentcontrol.TypeError, Msg: err.Error()})
 		return
 	}
 
@@ -214,17 +235,12 @@ func (s *Server) handleProjectExecSpike(w http.ResponseWriter, r *http.Request) 
 	ch := agent.openSession(session)
 	defer agent.closeSession(session)
 
-	// Tell the agent to start.
-	containerName := "muvee-" + dep.DomainPrefix
-	if err := agent.writeFrame(ctrlFrame{
-		Type:      "open_exec",
-		Session:   session,
-		Container: containerName,
-		Cmd:       open.Cmd,
-		Cols:      open.Cols,
-		Rows:      open.Rows,
-	}); err != nil {
-		_ = ws.WriteJSON(ctrlFrame{Type: "error", Msg: err.Error()})
+	// Forward the open frame to the agent with container name + session id
+	// filled in. We trust the CLI's other fields (Cmd/Path/Direction/Cols/...).
+	open.Session = session
+	open.Container = "muvee-" + dep.DomainPrefix
+	if err := agent.writeFrame(open); err != nil {
+		_ = agentcontrol.WriteFrame(ws, agentcontrol.Frame{Type: agentcontrol.TypeError, Msg: err.Error()})
 		return
 	}
 
@@ -243,21 +259,21 @@ func (s *Server) handleProjectExecSpike(w http.ResponseWriter, r *http.Request) 
 				if !ok {
 					return
 				}
-				if err := ws.WriteJSON(f); err != nil {
+				if err := agentcontrol.WriteFrame(ws, f); err != nil {
 					return
 				}
-				if f.Type == "exit" || f.Type == "error" {
+				if f.Type == agentcontrol.TypeExit || f.Type == agentcontrol.TypeError {
 					return
 				}
 			}
 		}
 	}()
 
-	// CLI → agent (only for stdin/resize/signal once 0b lands; 0a ignores)
+	// CLI → agent (stdin / resize / signal / cp_up_tar / cp_end / close).
 	for {
 		ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		var f ctrlFrame
-		if err := ws.ReadJSON(&f); err != nil {
+		f, err := agentcontrol.ReadFrame(ws)
+		if err != nil {
 			break
 		}
 		f.Session = session
@@ -265,6 +281,9 @@ func (s *Server) handleProjectExecSpike(w http.ResponseWriter, r *http.Request) 
 			break
 		}
 	}
+	// CLI disconnected — tell the agent to terminate this session so the
+	// container process and PTY don't outlive the client.
+	_ = agent.writeFrame(agentcontrol.Frame{Type: agentcontrol.TypeClose, Session: session})
 	cancel()
 	<-done
 }
