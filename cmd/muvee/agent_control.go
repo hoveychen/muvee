@@ -162,7 +162,10 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 			if f.Rows > 0 {
 				rows = uint16(f.Rows)
 			}
-			go runDockerExecPTYSpike(ctx, a, f.Container, f.Cmd, f.Session, cols, rows)
+			// Synchronous start so a.set(...) lands before the main loop
+			// reads the next frame — otherwise fast follow-up stdio frames
+			// can find no session and get dropped.
+			startDockerExecSession(ctx, a, f.Container, f.Cmd, f.Session, cols, rows)
 		case agentcontrol.TypeOpenCp:
 			if f.Session == "" || f.Container == "" || f.Path == "" {
 				_ = a.write(agentcontrol.Frame{
@@ -171,7 +174,7 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 				})
 				continue
 			}
-			go runDockerCp(ctx, a, f.Container, f.Path, f.Direction, f.Session)
+			startDockerCpSession(ctx, a, f.Container, f.Path, f.Direction, f.Session)
 		case agentcontrol.TypeStdio:
 			s := a.get(f.Session)
 			if s == nil || s.ptmx == nil {
@@ -217,9 +220,11 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 	}
 }
 
-// runDockerExecPTYSpike shells out to `docker exec -ti` with a host PTY and
-// proxies bytes through ctrlFrame messages on the control WS.
-func runDockerExecPTYSpike(ctx context.Context, a *spikeAgent, container string, cmd []string, session string, cols, rows uint16) {
+// startDockerExecSession spawns `docker exec -ti` with a host PTY, registers
+// the session synchronously (so subsequent stdio/resize frames find it), and
+// then runs the PTY-to-WS forwarding loop in a goroutine. Errors during start
+// are surfaced as an `error` frame to the CLI.
+func startDockerExecSession(ctx context.Context, a *spikeAgent, container string, cmd []string, session string, cols, rows uint16) {
 	args := append([]string{"exec", "-ti", container}, cmd...)
 	c := exec.CommandContext(ctx, "docker", args...)
 	ptmx, err := pty.StartWithSize(c, &pty.Winsize{Cols: cols, Rows: rows})
@@ -235,44 +240,42 @@ func runDockerExecPTYSpike(ctx context.Context, a *spikeAgent, container string,
 		_ = c.Process.Kill()
 	}
 	a.set(session, &spikeSession{ptmx: ptmx, resize: resize, stop: stop})
-	defer a.drop(session)
-	defer ptmx.Close()
-
-	// PTY → control plane
-	buf := make([]byte, 4096)
-	for {
-		n, err := ptmx.Read(buf)
-		if n > 0 {
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			_ = a.write(agentcontrol.Frame{
-				Type:    agentcontrol.TypeStdio,
-				Session: session,
-				Stream:  agentcontrol.StreamStdout,
-				Data:    chunk,
-			})
+	go func() {
+		defer a.drop(session)
+		defer ptmx.Close()
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				_ = a.write(agentcontrol.Frame{
+					Type:    agentcontrol.TypeStdio,
+					Session: session,
+					Stream:  agentcontrol.StreamStdout,
+					Data:    chunk,
+				})
+			}
+			if err != nil {
+				break
+			}
 		}
-		if err != nil {
-			break
+		code := 0
+		if err := c.Wait(); err != nil {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				code = ee.ExitCode()
+			}
 		}
-	}
-
-	code := 0
-	if err := c.Wait(); err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			code = ee.ExitCode()
-		}
-	}
-	_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+	}()
 }
 
-// runDockerCp shells out to `docker cp` in either direction and proxies the
-// tar stream over the control WS. Direction "up" means local→container
-// (CLI is sending tar via cp_up_tar frames); direction "down" means
-// container→local (agent reads tar from docker cp stdout and sends it back
-// via cp_down_tar frames).
-func runDockerCp(ctx context.Context, a *spikeAgent, container, path, direction, session string) {
+// startDockerCpSession spawns `docker cp` in the requested direction and
+// registers the session synchronously before returning, so cp_up_tar / cp_end
+// frames that arrive immediately after open_cp find the session. The c.Wait()
+// + exit-frame work runs in a goroutine.
+func startDockerCpSession(ctx context.Context, a *spikeAgent, container, path, direction, session string) {
 	switch direction {
 	case agentcontrol.CpDirectionUp:
 		c := exec.CommandContext(ctx, "docker", "cp", "-", container+":"+path)
@@ -296,21 +299,23 @@ func runDockerCp(ctx context.Context, a *spikeAgent, container, path, direction,
 				}
 			},
 		})
-		defer a.drop(session)
-		code := 0
-		if err := c.Wait(); err != nil {
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				code = ee.ExitCode()
+		go func() {
+			defer a.drop(session)
+			code := 0
+			if err := c.Wait(); err != nil {
+				var ee *exec.ExitError
+				if errors.As(err, &ee) {
+					code = ee.ExitCode()
+				}
 			}
-		}
-		if code != 0 && stderr.Len() > 0 {
-			_ = a.write(agentcontrol.Frame{
-				Type: agentcontrol.TypeStdio, Session: session,
-				Stream: agentcontrol.StreamStderr, Data: []byte(stderr.String()),
-			})
-		}
-		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+			if code != 0 && stderr.Len() > 0 {
+				_ = a.write(agentcontrol.Frame{
+					Type: agentcontrol.TypeStdio, Session: session,
+					Stream: agentcontrol.StreamStderr, Data: []byte(stderr.String()),
+				})
+			}
+			_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+		}()
 
 	case agentcontrol.CpDirectionDown:
 		c := exec.CommandContext(ctx, "docker", "cp", container+":"+path, "-")
@@ -332,36 +337,38 @@ func runDockerCp(ctx context.Context, a *spikeAgent, container, path, direction,
 				}
 			},
 		})
-		defer a.drop(session)
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				chunk := make([]byte, n)
-				copy(chunk, buf[:n])
+		go func() {
+			defer a.drop(session)
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := stdout.Read(buf)
+				if n > 0 {
+					chunk := make([]byte, n)
+					copy(chunk, buf[:n])
+					_ = a.write(agentcontrol.Frame{
+						Type: agentcontrol.TypeCpDownTar, Session: session, Data: chunk,
+					})
+				}
+				if err != nil {
+					break
+				}
+			}
+			_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeCpEnd, Session: session})
+			code := 0
+			if err := c.Wait(); err != nil {
+				var ee *exec.ExitError
+				if errors.As(err, &ee) {
+					code = ee.ExitCode()
+				}
+			}
+			if code != 0 && stderr.Len() > 0 {
 				_ = a.write(agentcontrol.Frame{
-					Type: agentcontrol.TypeCpDownTar, Session: session, Data: chunk,
+					Type: agentcontrol.TypeStdio, Session: session,
+					Stream: agentcontrol.StreamStderr, Data: []byte(stderr.String()),
 				})
 			}
-			if err != nil {
-				break
-			}
-		}
-		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeCpEnd, Session: session})
-		code := 0
-		if err := c.Wait(); err != nil {
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				code = ee.ExitCode()
-			}
-		}
-		if code != 0 && stderr.Len() > 0 {
-			_ = a.write(agentcontrol.Frame{
-				Type: agentcontrol.TypeStdio, Session: session,
-				Stream: agentcontrol.StreamStderr, Data: []byte(stderr.String()),
-			})
-		}
-		_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+			_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeExit, Session: session, Code: code})
+		}()
 
 	default:
 		_ = a.write(agentcontrol.Frame{
