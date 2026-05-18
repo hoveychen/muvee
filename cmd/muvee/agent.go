@@ -99,6 +99,10 @@ func runAgent() {
 	}
 	go runNodeMetricsReporter(ctx, controlPlaneURL, agentSecret, nodeID, baseDir)
 	go runAgentHealthReporter(ctx, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, volumeNFSBasePath, datasetNFSBasePath)
+	// Phase 0 spike: outbound control channel for exec routing.
+	if nodeRole == "deploy" {
+		go runAgentControlChannel(ctx, controlPlaneURL, agentSecret, nodeID)
+	}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()

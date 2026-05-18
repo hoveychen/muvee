@@ -83,6 +83,7 @@ func init() {
 	projectsCmd.AddCommand(projectsMetricsCmd)
 	projectsCmd.AddCommand(projectsPortForwardCmd)
 	projectsCmd.AddCommand(projectsCurlCmd)
+	projectsCmd.AddCommand(projectsExecSpikeCmd)
 
 	// projects create flags
 	addProjectFlags(projectsCreateCmd)

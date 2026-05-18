@@ -300,15 +300,16 @@ type PublicProjectInfo struct {
 // RunningDeploymentInfo is a denormalized view of a running deployment
 // used to generate Traefik HTTP provider configuration.
 type RunningDeploymentInfo struct {
-	DeploymentID       uuid.UUID `db:"deployment_id"`
-	ProjectID          uuid.UUID `db:"project_id"`
-	DomainPrefix       string    `db:"domain_prefix"`
-	AuthRequired       bool      `db:"auth_required"`
-	AuthAllowedDomains string    `db:"auth_allowed_domains"`
-	AuthBypassPaths    string    `db:"auth_bypass_paths"`
-	AccessMode         string    `db:"access_mode"`
-	HostIP             string    `db:"host_ip"`
-	HostPort           int       `db:"host_port"`
+	DeploymentID       uuid.UUID  `db:"deployment_id"`
+	ProjectID          uuid.UUID  `db:"project_id"`
+	DomainPrefix       string     `db:"domain_prefix"`
+	AuthRequired       bool       `db:"auth_required"`
+	AuthAllowedDomains string     `db:"auth_allowed_domains"`
+	AuthBypassPaths    string     `db:"auth_bypass_paths"`
+	AccessMode         string     `db:"access_mode"`
+	HostIP             string     `db:"host_ip"`
+	HostPort           int        `db:"host_port"`
+	NodeID             *uuid.UUID `db:"node_id"`
 }
 
 type NodeRole string

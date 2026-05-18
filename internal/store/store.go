@@ -1366,15 +1366,19 @@ func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeployment
 // Returns nil if no running deployment exists.
 func (s *Store) GetRunningDeploymentByProject(ctx context.Context, projectID uuid.UUID) (*RunningDeploymentInfo, error) {
 	var r RunningDeploymentInfo
+	var nodeID uuid.UUID
 	err := s.db.QueryRow(ctx, `
-		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.access_mode, n.host_ip, d.host_port
+		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.access_mode, n.host_ip, d.host_port, d.node_id
 		FROM deployments d
 		JOIN projects p ON d.project_id = p.id
 		JOIN nodes n ON d.node_id = n.id
 		WHERE d.project_id = $1 AND d.status = 'running' AND d.host_port > 0 AND n.host_ip != ''
 		ORDER BY d.created_at DESC
 		LIMIT 1
-	`, projectID).Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.AuthBypassPaths, &r.AccessMode, &r.HostIP, &r.HostPort)
+	`, projectID).Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.AuthBypassPaths, &r.AccessMode, &r.HostIP, &r.HostPort, &nodeID)
+	if err == nil {
+		r.NodeID = &nodeID
+	}
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

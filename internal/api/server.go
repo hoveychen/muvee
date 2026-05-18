@@ -711,6 +711,10 @@ func (s *Server) Router() http.Handler {
 		r.HandleFunc("/api/projects/{id}/proxy", s.handleProjectProxy)
 		r.HandleFunc("/api/projects/{id}/proxy/*", s.handleProjectProxy)
 
+		// Phase 0 spike: WebSocket endpoint that routes an exec session through
+		// the agent control channel. CLI-only; will be replaced in P5–P9.
+		r.Get("/api/projects/{id}/_exec_spike", s.handleProjectExecSpike)
+
 		// Adhoc tunnel – WebSocket endpoint for CLI tunnel connections.
 		// Gated on requireAuthorized: publishing on the platform's apex domain
 		// (even ephemeral t-* prefixes) requires the same authorization a deploy
@@ -791,6 +795,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/agent/node-metrics", s.handleNodeMetrics)
 		r.Post("/api/agent/health-report", s.handleAgentHealthReport)
 		r.Post("/api/deployments/{id}/logs", s.appendDeploymentLog)
+		// Phase 0 spike: outbound control channel from agent for exec routing.
+		r.Get("/api/agent/control", s.handleAgentControl)
 	})
 
 	return r
