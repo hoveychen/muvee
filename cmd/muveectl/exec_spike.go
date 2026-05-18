@@ -12,10 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
@@ -89,16 +87,12 @@ var projectsExecSpikeCmd = &cobra.Command{
 			}
 		}
 
-		// SIGWINCH → resize frame.
-		winch := make(chan os.Signal, 1)
-		signal.Notify(winch, syscall.SIGWINCH)
-		defer signal.Stop(winch)
-		go func() {
-			for range winch {
-				c, r := terminalSize()
-				_ = writeFrame(map[string]interface{}{"type": "resize", "cols": c, "rows": r})
-			}
-		}()
+		// SIGWINCH → resize frame (Unix only; no-op on Windows).
+		stopWatchResize := watchTerminalResize(func() {
+			c, r := terminalSize()
+			_ = writeFrame(map[string]interface{}{"type": "resize", "cols": c, "rows": r})
+		})
+		defer stopWatchResize()
 
 		// stdin → server (stdio frames).
 		stdinErr := make(chan error, 1)
