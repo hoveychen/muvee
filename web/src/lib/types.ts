@@ -373,14 +373,27 @@ export interface InvitationLink {
   invited_by?: string | null
   invited_by_name?: string
   invited_by_email?: string
+  project_id?: string | null
+  max_uses?: number | null
   expires_at?: string | null
   used_at?: string | null
   used_by?: string | null
   used_by_email?: string
+  use_count?: number
   created_at: string
   // Token is only present in the response from POST /api/admin/invitation-links
   // (one-time return — never recoverable afterwards).
   token?: string
+}
+
+export interface InvitationLinkUse {
+  id: string
+  link_id: string
+  user_id: string
+  used_at: string
+  user_email?: string
+  user_name?: string
+  avatar_url?: string
 }
 
 export type HealthStatus = 'ok' | 'warning' | 'error'

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
@@ -1366,7 +1366,12 @@ function parseProviderSet(raw: string): Set<string> {
 function EnabledProvidersField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [globals, setGlobals] = useState<GlobalProvider[] | null>(null)
   useEffect(() => {
-    fetch('/api/auth/providers')
+    // /api/auth/downstream-providers includes env-side providers AND any
+    // social providers admins enabled via /admin/settings. /api/auth/providers
+    // is the env-only list used by the platform login page; that one does NOT
+    // see Google/Discord/etc. configured at runtime, which is why the project
+    // Auth tab needs the downstream-specific endpoint.
+    fetch('/api/auth/downstream-providers')
       .then(r => r.json())
       .then((data: GlobalProvider[]) => setGlobals(data))
       .catch(() => setGlobals([]))
@@ -1500,6 +1505,7 @@ function UsersTab({ projectId, form, onChange, onSave, saving, saveError, ownerN
       </div>
 
       <ProjectAccessUsersPanel projectId={projectId} disabled={!isPrivate} />
+      <ProjectInvitationLinksPanel projectId={projectId} disabled={!isPrivate} />
       <PendingRequestsPanel projectId={projectId} />
       <RecentVisitorsPanel projectId={projectId} isPrivate={isPrivate} />
     </div>
@@ -1621,6 +1627,290 @@ function ProjectAccessUsersPanel({ projectId, disabled }: { projectId: string; d
               </button>
             </li>
           ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function ProjectInvitationLinksPanel({ projectId, disabled }: { projectId: string; disabled?: boolean }) {
+  const [links, setLinks] = useState<InvitationLink[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [showForm, setShowForm] = useState(false)
+  const [expiresInDays, setExpiresInDays] = useState('')
+  const [maxUses, setMaxUses] = useState('')
+  const [freshLink, setFreshLink] = useState<{ id: string; url: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [expanded, setExpanded] = useState<Record<string, InvitationLinkUse[] | 'loading' | undefined>>({})
+
+  useEffect(() => {
+    api.projects.invitationLinks(projectId).then(setLinks).catch(e => setError(e.message))
+  }, [projectId])
+
+  const buildURL = (token: string) => `${window.location.origin}/login?invite_token=${encodeURIComponent(token)}`
+
+  const handleGenerate = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const opts: { expires_in_days?: number; max_uses?: number } = {}
+      const d = parseInt(expiresInDays, 10)
+      if (!Number.isNaN(d) && d > 0) opts.expires_in_days = d
+      const m = parseInt(maxUses, 10)
+      if (!Number.isNaN(m) && m > 0) opts.max_uses = m
+      const link = await api.projects.createInvitationLink(projectId, opts)
+      if (link.token) {
+        setFreshLink({ id: link.id, url: buildURL(link.token) })
+      }
+      setLinks(prev => [link, ...prev])
+      setExpiresInDays('')
+      setMaxUses('')
+      setShowForm(false)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRevoke = async (linkId: string) => {
+    if (!confirm('Revoke this invitation link? It will no longer let new users in.')) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.projects.deleteInvitationLink(projectId, linkId)
+      setLinks(prev => prev.filter(l => l.id !== linkId))
+      if (freshLink && freshLink.id === linkId) setFreshLink(null)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleCopy = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // ignore
+    }
+  }
+
+  const toggleUses = async (linkId: string) => {
+    if (expanded[linkId] && expanded[linkId] !== 'loading') {
+      setExpanded(prev => ({ ...prev, [linkId]: undefined }))
+      return
+    }
+    setExpanded(prev => ({ ...prev, [linkId]: 'loading' }))
+    try {
+      const uses = await api.projects.invitationLinkUses(projectId, linkId)
+      setExpanded(prev => ({ ...prev, [linkId]: uses }))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+      setExpanded(prev => ({ ...prev, [linkId]: undefined }))
+    }
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+      <label className="form-label">Invitation links</label>
+      <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
+        Share a link so anyone (even users who haven't signed in to muvee yet) can join this project's allow-list by signing in once.
+        {disabled && ' Links take effect only when service access is set to Private.'}
+      </p>
+
+      {freshLink && (
+        <div style={{
+          padding: '0.6rem 0.75rem',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--accent)',
+          borderRadius: '6px',
+          marginBottom: '0.75rem',
+        }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginBottom: '0.35rem' }}>
+            Copy this URL now — it will not be shown again.
+          </div>
+          <div className="flex gap-2" style={{ alignItems: 'center' }}>
+            <input
+              type="text"
+              readOnly
+              value={freshLink.url}
+              className="form-input"
+              style={{ flex: 1, fontSize: '0.8125rem', fontFamily: 'monospace' }}
+              onFocus={e => e.currentTarget.select()}
+            />
+            <button
+              type="button"
+              onClick={() => handleCopy(freshLink.url)}
+              className="btn-secondary"
+              style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+            >
+              {copied ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!showForm ? (
+        <button
+          type="button"
+          onClick={() => setShowForm(true)}
+          className="btn-primary"
+          style={{ fontSize: '0.875rem', padding: '0.4rem 0.9rem', marginBottom: '0.75rem' }}
+          disabled={busy}
+        >
+          <Plus size={14} /> Generate link
+        </button>
+      ) : (
+        <div style={{
+          padding: '0.75rem',
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          marginBottom: '0.75rem',
+          background: 'var(--bg-elevated)',
+        }}>
+          <div className="flex gap-2" style={{ marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+              <label style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>Expires in (days)</label>
+              <input
+                type="number"
+                min="1"
+                value={expiresInDays}
+                onChange={e => setExpiresInDays(e.target.value)}
+                placeholder="never"
+                className="form-input"
+                style={{ width: '100%', fontSize: '0.875rem' }}
+              />
+            </div>
+            <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+              <label style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>Max uses</label>
+              <input
+                type="number"
+                min="1"
+                value={maxUses}
+                onChange={e => setMaxUses(e.target.value)}
+                placeholder="unlimited"
+                className="form-input"
+                style={{ width: '100%', fontSize: '0.875rem' }}
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleGenerate}
+              className="btn-primary"
+              style={{ fontSize: '0.875rem', padding: '0.4rem 0.9rem' }}
+              disabled={busy}
+            >
+              Generate
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowForm(false); setExpiresInDays(''); setMaxUses('') }}
+              className="btn-secondary"
+              style={{ fontSize: '0.875rem', padding: '0.4rem 0.9rem' }}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginBottom: '0.5rem' }}>{error}</p>
+      )}
+
+      {links.length === 0 ? (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', fontStyle: 'italic' }}>
+          No invitation links yet.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {links.map(link => {
+            const useCount = link.use_count ?? 0
+            const maxLabel = link.max_uses ? `${useCount} / ${link.max_uses}` : `${useCount} / ∞`
+            const expiresLabel = link.expires_at
+              ? new Date(link.expires_at).toLocaleString()
+              : 'never'
+            const expired = link.expires_at ? new Date(link.expires_at).getTime() < Date.now() : false
+            const exhausted = link.max_uses != null && useCount >= link.max_uses
+            const active = !expired && !exhausted
+            const uses = expanded[link.id]
+            return (
+              <li key={link.id} style={{
+                padding: '0.55rem 0.7rem',
+                borderRadius: '6px',
+                border: '1px solid var(--border)',
+                marginBottom: '0.4rem',
+                background: 'var(--bg-elevated)',
+                opacity: active ? 1 : 0.65,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem' }}>
+                  <div style={{ minWidth: 0, fontSize: '0.8125rem' }}>
+                    <div>
+                      <span style={{ fontWeight: 500 }}>Uses:</span> {maxLabel}
+                      {!active && <span style={{ marginLeft: '0.6rem', color: 'var(--danger)', fontSize: '0.75rem' }}>
+                        {expired ? 'expired' : 'exhausted'}
+                      </span>}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '0.15rem' }}>
+                      Expires: {expiresLabel} · Created {timeAgo(link.created_at)}
+                      {link.invited_by_email && ` · by ${link.invited_by_email}`}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleUses(link.id)}
+                      className="btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.55rem' }}
+                      disabled={useCount === 0}
+                      title={useCount === 0 ? 'No uses yet' : 'Show who used this link'}
+                    >
+                      {uses && uses !== 'loading' ? 'Hide' : 'Users'} ({useCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRevoke(link.id)}
+                      className="btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.55rem' }}
+                      disabled={busy}
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                </div>
+                {uses === 'loading' && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}>Loading…</div>
+                )}
+                {uses && uses !== 'loading' && uses.length > 0 && (
+                  <ul style={{ listStyle: 'none', padding: 0, margin: '0.5rem 0 0 0' }}>
+                    {uses.map(u => (
+                      <li key={u.id} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.3rem 0.4rem',
+                        fontSize: '0.75rem',
+                        borderTop: '1px solid var(--border)',
+                      }}>
+                        {u.avatar_url
+                          ? <img src={u.avatar_url} alt="" style={{ width: 18, height: 18, borderRadius: '50%' }} />
+                          : <div style={{ width: 18, height: 18, borderRadius: '50%', background: 'var(--border)' }} />}
+                        <span>{u.user_name || u.user_email || u.user_id}</span>
+                        <span style={{ color: 'var(--fg-muted)', marginLeft: 'auto' }}>{timeAgo(u.used_at)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>

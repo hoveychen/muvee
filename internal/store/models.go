@@ -390,22 +390,45 @@ type Invitation struct {
 	InvitedByEmail string `db:"-" json:"invited_by_email,omitempty"`
 }
 
-// InvitationLink is a single-use access token that auto-authorizes the first
-// OAuth user who logs in carrying it. Used in AccessModeInvite.
+// InvitationLink is an access token that auto-authorizes a logging-in user.
+//
+// Two flavours share this row:
+//   - Platform invite  (ProjectID == nil): single-use unless MaxUses overrides
+//     it; consumption flips UsedAt/UsedBy. Used in AccessModeInvite.
+//   - Project invite   (ProjectID != nil): consumption is recorded in the
+//     invitation_link_uses table; the link stays valid until UseCount >=
+//     MaxUses (when MaxUses != nil) or ExpiresAt passes, or it is revoked.
+//     Each consumer is also upserted into project_access_users for ProjectID.
 type InvitationLink struct {
 	ID        uuid.UUID  `db:"id"          json:"id"`
 	TokenHash string     `db:"token_hash"  json:"-"`
 	InvitedBy *uuid.UUID `db:"invited_by"  json:"invited_by,omitempty"`
+	ProjectID *uuid.UUID `db:"project_id"  json:"project_id,omitempty"`
+	MaxUses   *int       `db:"max_uses"    json:"max_uses,omitempty"`
 	ExpiresAt *time.Time `db:"expires_at"  json:"expires_at,omitempty"`
 	UsedAt    *time.Time `db:"used_at"     json:"used_at,omitempty"`
 	UsedBy    *uuid.UUID `db:"used_by"     json:"used_by,omitempty"`
 	CreatedAt time.Time  `db:"created_at"  json:"created_at"`
 	// Token is only populated when freshly created (one-time return) — never stored.
 	Token string `db:"-" json:"token,omitempty"`
-	// Joined display fields, populated by ListInvitationLinks.
+	// Joined display fields, populated by listing queries.
 	InvitedByName  string `db:"-" json:"invited_by_name,omitempty"`
 	InvitedByEmail string `db:"-" json:"invited_by_email,omitempty"`
 	UsedByEmail    string `db:"-" json:"used_by_email,omitempty"`
+	// UseCount is populated for project invites by ListProjectInvitationLinks.
+	UseCount int `db:"-" json:"use_count,omitempty"`
+}
+
+// InvitationLinkUse records one consumption of a multi-use project invitation
+// link by a specific user.
+type InvitationLinkUse struct {
+	ID        uuid.UUID `db:"id"        json:"id"`
+	LinkID    uuid.UUID `db:"link_id"   json:"link_id"`
+	UserID    uuid.UUID `db:"user_id"   json:"user_id"`
+	UsedAt    time.Time `db:"used_at"   json:"used_at"`
+	UserEmail string    `db:"-"         json:"user_email,omitempty"`
+	UserName  string    `db:"-"         json:"user_name,omitempty"`
+	AvatarURL string    `db:"-"         json:"avatar_url,omitempty"`
 }
 
 // AuthorizationRequest tracks a user's request to be authorized on the platform.

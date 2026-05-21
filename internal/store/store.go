@@ -2369,20 +2369,20 @@ func (s *Store) DeleteInvitation(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-// ─── Invitation Links (single-use) ──────────────────────────────────────────
+// ─── Invitation Links (platform single-use + project multi-use) ────────────
 
-// CreateInvitationLink generates a fresh token, stores its sha256 hash, and
-// returns the invitation_link with the raw Token populated (only available
-// here — the token is never recoverable from the DB after this call).
+// CreateInvitationLink generates a fresh PLATFORM-scoped token (project_id is
+// NULL → single-use) and returns the invitation_link with the raw Token
+// populated (only available here — never recoverable from the DB afterwards).
 func (s *Store) CreateInvitationLink(ctx context.Context, invitedBy uuid.UUID, token, tokenHash string, expiresAt *time.Time) (*InvitationLink, error) {
 	var link InvitationLink
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO invitation_links (id, token_hash, invited_by, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, NOW())
-		RETURNING id, token_hash, invited_by, expires_at, used_at, used_by, created_at
+		RETURNING id, token_hash, invited_by, project_id, max_uses, expires_at, used_at, used_by, created_at
 	`, uuid.New(), tokenHash, invitedBy, expiresAt).Scan(
-		&link.ID, &link.TokenHash, &link.InvitedBy, &link.ExpiresAt,
-		&link.UsedAt, &link.UsedBy, &link.CreatedAt)
+		&link.ID, &link.TokenHash, &link.InvitedBy, &link.ProjectID, &link.MaxUses,
+		&link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -2390,32 +2390,69 @@ func (s *Store) CreateInvitationLink(ctx context.Context, invitedBy uuid.UUID, t
 	return &link, nil
 }
 
-// GetValidInvitationLinkByHash returns an unused, non-expired link matching the
-// given token hash. Returns (nil, nil) when no such link exists.
-func (s *Store) GetValidInvitationLinkByHash(ctx context.Context, tokenHash string, now time.Time) (*InvitationLink, error) {
+// CreateProjectInvitationLink generates a project-scoped invitation token.
+// maxUses == nil means unlimited consumption until expires_at / manual revoke.
+func (s *Store) CreateProjectInvitationLink(ctx context.Context, projectID, invitedBy uuid.UUID, token, tokenHash string, maxUses *int, expiresAt *time.Time) (*InvitationLink, error) {
 	var link InvitationLink
 	err := s.db.QueryRow(ctx, `
-		SELECT id, token_hash, invited_by, expires_at, used_at, used_by, created_at
-		FROM invitation_links
-		WHERE token_hash = $1
-		  AND used_at IS NULL
-		  AND (expires_at IS NULL OR expires_at > $2)
+		INSERT INTO invitation_links (id, token_hash, invited_by, project_id, max_uses, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		RETURNING id, token_hash, invited_by, project_id, max_uses, expires_at, used_at, used_by, created_at
+	`, uuid.New(), tokenHash, invitedBy, projectID, maxUses, expiresAt).Scan(
+		&link.ID, &link.TokenHash, &link.InvitedBy, &link.ProjectID, &link.MaxUses,
+		&link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	link.Token = token
+	return &link, nil
+}
+
+// GetValidInvitationLinkByHash returns a non-expired invitation link matching
+// the given token hash if it still has remaining capacity. Returns (nil, nil)
+// when no usable link exists. Validates two flavours:
+//   - Platform (project_id IS NULL): rejects if used_at IS NOT NULL.
+//   - Project  (project_id NOT NULL): rejects if max_uses != NULL and the
+//     count of rows in invitation_link_uses for this link has hit max_uses.
+func (s *Store) GetValidInvitationLinkByHash(ctx context.Context, tokenHash string, now time.Time) (*InvitationLink, error) {
+	var link InvitationLink
+	var useCount int
+	err := s.db.QueryRow(ctx, `
+		SELECT l.id, l.token_hash, l.invited_by, l.project_id, l.max_uses,
+		       l.expires_at, l.used_at, l.used_by, l.created_at,
+		       COALESCE((SELECT COUNT(*) FROM invitation_link_uses u WHERE u.link_id = l.id), 0)
+		FROM invitation_links l
+		WHERE l.token_hash = $1
+		  AND (l.expires_at IS NULL OR l.expires_at > $2)
+		  AND (
+		    (l.project_id IS NULL AND l.used_at IS NULL)
+		    OR
+		    (l.project_id IS NOT NULL
+		      AND (l.max_uses IS NULL
+		           OR (SELECT COUNT(*) FROM invitation_link_uses u WHERE u.link_id = l.id) < l.max_uses))
+		  )
 	`, tokenHash, now).Scan(
-		&link.ID, &link.TokenHash, &link.InvitedBy, &link.ExpiresAt,
-		&link.UsedAt, &link.UsedBy, &link.CreatedAt)
+		&link.ID, &link.TokenHash, &link.InvitedBy, &link.ProjectID, &link.MaxUses,
+		&link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt, &useCount)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
-	return &link, err
+	if err != nil {
+		return nil, err
+	}
+	link.UseCount = useCount
+	return &link, nil
 }
 
-// ConsumeInvitationLink atomically marks the link as used by the given user.
-// Returns ErrNoRows if the link was already consumed in a concurrent request.
+// ConsumeInvitationLink atomically marks a PLATFORM-scoped (single-use) link
+// as used by the given user. Returns an error if the link was already
+// consumed in a concurrent request, or if it is a project-scoped link (the
+// caller should use RecordInvitationLinkUse instead).
 func (s *Store) ConsumeInvitationLink(ctx context.Context, linkID, userID uuid.UUID) error {
 	res, err := s.db.Exec(ctx, `
 		UPDATE invitation_links
 		SET used_at = NOW(), used_by = $1
-		WHERE id = $2 AND used_at IS NULL
+		WHERE id = $2 AND used_at IS NULL AND project_id IS NULL
 	`, userID, linkID)
 	if err != nil {
 		return err
@@ -2426,14 +2463,32 @@ func (s *Store) ConsumeInvitationLink(ctx context.Context, linkID, userID uuid.U
 	return nil
 }
 
+// RecordInvitationLinkUse records one consumption of a project-scoped
+// invitation link by userID. Idempotent: the UNIQUE(link_id,user_id)
+// constraint silently absorbs repeat clicks from the same user. Callers
+// should additionally upsert (project_id, user_id) into project_access_users.
+func (s *Store) RecordInvitationLinkUse(ctx context.Context, linkID, userID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO invitation_link_uses (id, link_id, user_id, used_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (link_id, user_id) DO NOTHING
+	`, uuid.New(), linkID, userID)
+	return err
+}
+
+// ListInvitationLinks returns the platform-scoped (project_id IS NULL) links
+// used by the admin invitations page. Project-scoped links are excluded so
+// they don't leak across projects in the admin view.
 func (s *Store) ListInvitationLinks(ctx context.Context) ([]*InvitationLink, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT l.id, l.token_hash, l.invited_by, l.expires_at, l.used_at, l.used_by, l.created_at,
+		SELECT l.id, l.token_hash, l.invited_by, l.project_id, l.max_uses,
+		       l.expires_at, l.used_at, l.used_by, l.created_at,
 		       COALESCE(inv.name, ''), COALESCE(inv.email, ''),
 		       COALESCE(used.email, '')
 		FROM invitation_links l
 		LEFT JOIN users inv  ON inv.id  = l.invited_by
 		LEFT JOIN users used ON used.id = l.used_by
+		WHERE l.project_id IS NULL
 		ORDER BY l.created_at DESC
 	`)
 	if err != nil {
@@ -2444,13 +2499,86 @@ func (s *Store) ListInvitationLinks(ctx context.Context) ([]*InvitationLink, err
 	for rows.Next() {
 		var link InvitationLink
 		if err := rows.Scan(&link.ID, &link.TokenHash, &link.InvitedBy,
-			&link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt,
+			&link.ProjectID, &link.MaxUses, &link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt,
 			&link.InvitedByName, &link.InvitedByEmail, &link.UsedByEmail); err != nil {
 			return nil, err
 		}
 		out = append(out, &link)
 	}
 	return out, nil
+}
+
+// ListProjectInvitationLinks returns all invitation links for one project,
+// newest first. UseCount is populated for each row.
+func (s *Store) ListProjectInvitationLinks(ctx context.Context, projectID uuid.UUID) ([]*InvitationLink, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT l.id, l.token_hash, l.invited_by, l.project_id, l.max_uses,
+		       l.expires_at, l.used_at, l.used_by, l.created_at,
+		       COALESCE(inv.name, ''), COALESCE(inv.email, ''),
+		       COALESCE((SELECT COUNT(*) FROM invitation_link_uses u WHERE u.link_id = l.id), 0)
+		FROM invitation_links l
+		LEFT JOIN users inv ON inv.id = l.invited_by
+		WHERE l.project_id = $1
+		ORDER BY l.created_at DESC
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*InvitationLink, 0)
+	for rows.Next() {
+		var link InvitationLink
+		if err := rows.Scan(&link.ID, &link.TokenHash, &link.InvitedBy,
+			&link.ProjectID, &link.MaxUses, &link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt,
+			&link.InvitedByName, &link.InvitedByEmail, &link.UseCount); err != nil {
+			return nil, err
+		}
+		out = append(out, &link)
+	}
+	return out, nil
+}
+
+// ListInvitationLinkUses returns the consumption history for one link with
+// each consumer's display fields, newest first.
+func (s *Store) ListInvitationLinkUses(ctx context.Context, linkID uuid.UUID) ([]*InvitationLinkUse, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT u.id, u.link_id, u.user_id, u.used_at,
+		       COALESCE(usr.email, ''), COALESCE(usr.name, ''), COALESCE(usr.avatar_url, '')
+		FROM invitation_link_uses u
+		LEFT JOIN users usr ON usr.id = u.user_id
+		WHERE u.link_id = $1
+		ORDER BY u.used_at DESC
+	`, linkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*InvitationLinkUse, 0)
+	for rows.Next() {
+		var use InvitationLinkUse
+		if err := rows.Scan(&use.ID, &use.LinkID, &use.UserID, &use.UsedAt,
+			&use.UserEmail, &use.UserName, &use.AvatarURL); err != nil {
+			return nil, err
+		}
+		out = append(out, &use)
+	}
+	return out, nil
+}
+
+// GetInvitationLink returns a single link by id (no project scoping). Callers
+// that need to enforce per-project access should check link.ProjectID.
+func (s *Store) GetInvitationLink(ctx context.Context, id uuid.UUID) (*InvitationLink, error) {
+	var link InvitationLink
+	err := s.db.QueryRow(ctx, `
+		SELECT id, token_hash, invited_by, project_id, max_uses,
+		       expires_at, used_at, used_by, created_at
+		FROM invitation_links WHERE id = $1
+	`, id).Scan(&link.ID, &link.TokenHash, &link.InvitedBy, &link.ProjectID, &link.MaxUses,
+		&link.ExpiresAt, &link.UsedAt, &link.UsedBy, &link.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return &link, err
 }
 
 func (s *Store) DeleteInvitationLink(ctx context.Context, id uuid.UUID) error {

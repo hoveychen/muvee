@@ -251,26 +251,31 @@ func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email,
 	mode := s.accessMode(ctx)
 	_, isAdmin := s.adminEmails[email]
 
-	// Pre-flight checks for invite mode: figure out whether this email is
-	// invited (white-list), holds a valid one-time link, or — for already
-	// existing platform members — gets to keep signing in regardless. New
-	// platform members matching none of these are rejected without ever
-	// being created.
-	emailInvited := false
+	// Resolve the invite token (if any) up front, regardless of platform
+	// access_mode. The token may be a platform-scoped single-use link OR a
+	// project-scoped multi-use link; both flavours bypass the white-list
+	// when present, and project links also need to be replayed against
+	// project_access_users below.
 	var consumeLink *store.InvitationLink
+	if inviteToken != "" {
+		link, err := s.store.GetValidInvitationLinkByHash(ctx, hashInviteToken(inviteToken), time.Now())
+		if err != nil {
+			return nil, nil, fmt.Errorf("check invite link: %w", err)
+		}
+		consumeLink = link
+	}
+
+	// Pre-flight checks for invite mode: figure out whether this email is
+	// invited (white-list), holds a valid link, or — for already existing
+	// platform members — gets to keep signing in regardless. New platform
+	// members matching none of these are rejected without ever being created.
+	emailInvited := false
 	if mode == store.AccessModeInvite && !isAdmin {
 		invited, err := s.store.IsEmailInvited(ctx, email)
 		if err != nil {
 			return nil, nil, fmt.Errorf("check invitation: %w", err)
 		}
 		emailInvited = invited
-		if !emailInvited && inviteToken != "" {
-			link, err := s.store.GetValidInvitationLinkByHash(ctx, hashInviteToken(inviteToken), time.Now())
-			if err != nil {
-				return nil, nil, fmt.Errorf("check invite link: %w", err)
-			}
-			consumeLink = link
-		}
 		if !emailInvited && consumeLink == nil {
 			// Existing platform members can keep signing in even after the
 			// invite list shifts; identity-only rows (came in through
@@ -336,10 +341,25 @@ func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email,
 	}
 
 	if consumeLink != nil {
-		// Best-effort: a concurrent login may have already consumed the link.
-		// We've already promoted the platform member above, so swallow the
-		// error.
-		_ = s.store.ConsumeInvitationLink(ctx, consumeLink.ID, user.ID)
+		if consumeLink.ProjectID == nil {
+			// Platform-scoped single-use link. Best-effort: a concurrent login
+			// may have already consumed it; we've already promoted the
+			// platform member above, so swallow the error.
+			_ = s.store.ConsumeInvitationLink(ctx, consumeLink.ID, user.ID)
+		} else {
+			// Project-scoped multi-use link. Record this consumption and
+			// upsert (project, user) into project_access_users so the
+			// downstream-service ForwardAuth check sees them. The two writes
+			// are independently idempotent (UNIQUE constraints absorb
+			// concurrent retries), so errors are best-effort logged via the
+			// returned error rather than blocking sign-in.
+			if err := s.store.RecordInvitationLinkUse(ctx, consumeLink.ID, user.ID); err != nil {
+				return nil, nil, fmt.Errorf("record invitation link use: %w", err)
+			}
+			if err := s.store.AddProjectAccessUser(ctx, *consumeLink.ProjectID, user.ID, consumeLink.InvitedBy); err != nil {
+				return nil, nil, fmt.Errorf("add project access user: %w", err)
+			}
+		}
 	}
 
 	// Mirror platform_member values back onto the legacy user.Role /

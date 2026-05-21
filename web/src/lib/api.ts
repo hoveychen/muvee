@@ -98,6 +98,19 @@ export const api = {
     removeAccessUser: (id: string, userId: string) =>
       request(`/api/projects/${id}/access-users/${userId}`, { method: 'DELETE' }),
 
+    // Per-project invitation links (multi-use; consumer is auto-added to allow-list).
+    invitationLinks: (id: string) =>
+      request<import('./types').InvitationLink[]>(`/api/projects/${id}/invitation-links`),
+    createInvitationLink: (id: string, data: { expires_in_days?: number; max_uses?: number }) =>
+      request<import('./types').InvitationLink>(`/api/projects/${id}/invitation-links`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    deleteInvitationLink: (id: string, linkId: string) =>
+      request(`/api/projects/${id}/invitation-links/${linkId}`, { method: 'DELETE' }),
+    invitationLinkUses: (id: string, linkId: string) =>
+      request<import('./types').InvitationLinkUse[]>(`/api/projects/${id}/invitation-links/${linkId}/uses`),
+
     // Per-project visit log (recent unique visitors of the downstream service).
     visits: (id: string, limit = 100) =>
       request<import('./types').ProjectVisit[]>(`/api/projects/${id}/visits?limit=${limit}`),
