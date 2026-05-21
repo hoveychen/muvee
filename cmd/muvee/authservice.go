@@ -110,22 +110,28 @@ func fetchSocialConfigs(ctx context.Context) (auth.SocialConfigs, error) {
 	if resp.StatusCode != http.StatusOK {
 		return auth.SocialConfigs{}, fmt.Errorf("social-providers endpoint returned %d", resp.StatusCode)
 	}
-	var wrapper struct {
-		Data auth.SocialConfigs `json:"data"`
-	}
 	body, err := readResponseBody(resp)
 	if err != nil {
 		return auth.SocialConfigs{}, err
 	}
-	if err := json.Unmarshal(body, &wrapper); err != nil {
-		// jsonOK wraps in {"data": ...}; some routes return raw. Try raw.
-		var raw auth.SocialConfigs
-		if err2 := json.Unmarshal(body, &raw); err2 == nil {
-			return raw, nil
-		}
+	return decodeSocialConfigsResponse(body)
+}
+
+// decodeSocialConfigsResponse parses the response body of muvee-server's
+// /api/internal/oauth/social-providers endpoint. The handler uses jsonOK,
+// which encodes the value directly — no `{"data": ...}` wrapper — so this
+// just unmarshals straight into SocialConfigs. An earlier version assumed
+// the wrapper and unmarshaled body into a `{Data: SocialConfigs}` shape;
+// because Go's json.Unmarshal silently ignores unknown top-level fields
+// rather than failing, that wrapper unmarshal returned nil error with an
+// empty Data even on real payloads — every admin-configured social
+// provider got dropped on the floor.
+func decodeSocialConfigsResponse(body []byte) (auth.SocialConfigs, error) {
+	var cfg auth.SocialConfigs
+	if err := json.Unmarshal(body, &cfg); err != nil {
 		return auth.SocialConfigs{}, fmt.Errorf("decode social configs: %w", err)
 	}
-	return wrapper.Data, nil
+	return cfg, nil
 }
 
 func readResponseBody(resp *http.Response) ([]byte, error) {
