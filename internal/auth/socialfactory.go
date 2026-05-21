@@ -16,6 +16,22 @@ type SocialConfigs struct {
 	Twitter  *TwitterConfig  `json:"twitter,omitempty"`
 }
 
+// SocialProviderMetadata returns the static (id, display_name) pairs for the
+// five social providers admins can enable via /admin/settings. Used by the
+// downstream-providers listing endpoint to render checkboxes WITHOUT having
+// to actually instantiate the providers (which would require valid creds and
+// — for Apple — a parseable .p8 PEM). Values must stay in sync with each
+// provider's Name() / DisplayName() methods.
+func SocialProviderMetadata() []ProviderInfo {
+	return []ProviderInfo{
+		{ID: "google", DisplayName: "Google"},
+		{ID: "discord", DisplayName: "Discord"},
+		{ID: "apple", DisplayName: "Apple"},
+		{ID: "facebook", DisplayName: "Facebook"},
+		{ID: "twitter", DisplayName: "X"},
+	}
+}
+
 // BuildSocialProviders instantiates the social providers in cfg, returning
 // a map keyed by Name() ready to be merged into fwdProviders. Disabled or
 // partially-configured providers (returned as nil from their constructors)

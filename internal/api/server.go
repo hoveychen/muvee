@@ -465,23 +465,16 @@ func (s *Server) handleInternalAuthIdentityUpsert(w http.ResponseWriter, r *http
 	})
 }
 
-// handleInternalOAuthSocialProviders returns the social provider configs
-// (Discord / Apple / Facebook / Twitter) read from system_settings. Used by
-// muvee-authservice at startup and on /_oauth/internal/reload so admins can
-// configure social providers at runtime via /admin/settings instead of env
-// vars. Body contains client secrets + Apple .p8 PEM, so X-Muvee-Internal-Key
-// authentication is mandatory.
-func (s *Server) handleInternalOAuthSocialProviders(w http.ResponseWriter, r *http.Request) {
-	expected := internalAPIKey()
-	got := r.Header.Get("X-Muvee-Internal-Key")
-	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	settings, err := s.store.GetAllSettings(r.Context())
+// loadSocialConfigsFromSettings reads system_settings and assembles the set
+// of social-OAuth providers admins have enabled via /admin/settings. Returns
+// a zero-value SocialConfigs (all nil pointers) when nothing is enabled.
+// Shared between handleInternalOAuthSocialProviders (which ships the result
+// — secrets and all — to muvee-authservice) and handleListDownstreamProviders
+// (which only needs the enabled set, never the secrets).
+func (s *Server) loadSocialConfigsFromSettings(ctx context.Context) (auth.SocialConfigs, error) {
+	settings, err := s.store.GetAllSettings(ctx)
 	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
+		return auth.SocialConfigs{}, err
 	}
 	var cfg auth.SocialConfigs
 	if settings["google_enabled"] == "true" {
@@ -520,6 +513,27 @@ func (s *Server) handleInternalOAuthSocialProviders(w http.ResponseWriter, r *ht
 			PrivateKeyPEM: settings["apple_private_key_p8"],
 			RedirectURL:   settings["apple_redirect_url"],
 		}
+	}
+	return cfg, nil
+}
+
+// handleInternalOAuthSocialProviders returns the social provider configs
+// (Discord / Apple / Facebook / Twitter) read from system_settings. Used by
+// muvee-authservice at startup and on /_oauth/internal/reload so admins can
+// configure social providers at runtime via /admin/settings instead of env
+// vars. Body contains client secrets + Apple .p8 PEM, so X-Muvee-Internal-Key
+// authentication is mandatory.
+func (s *Server) handleInternalOAuthSocialProviders(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	cfg, err := s.loadSocialConfigsFromSettings(r.Context())
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
 	}
 	jsonOK(w, cfg)
 }
@@ -590,6 +604,12 @@ func (s *Server) Router() http.Handler {
 
 	// Public: list enabled auth providers (used by frontend to render login buttons)
 	r.Get("/api/auth/providers", s.handleListProviders)
+	// Public: list providers available to the downstream sign-in flow — env
+	// providers ∪ social providers admins enabled via /admin/settings. The
+	// project Auth tab's SIGN-IN PROVIDERS checkboxes read from this so what
+	// project owners see matches what muvee-authservice actually serves on
+	// the subdomain /_oauth/login page.
+	r.Get("/api/auth/downstream-providers", s.handleListDownstreamProviders)
 
 	// Public skill document for Claude
 	r.Get("/api/skill", s.handleSkill)
@@ -691,6 +711,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/projects/{id}/access-users", s.listProjectAccessUsers)
 		r.Post("/api/projects/{id}/access-users", s.requireAuthorized(s.addProjectAccessUser))
 		r.Delete("/api/projects/{id}/access-users/{userId}", s.requireAuthorized(s.removeProjectAccessUser))
+		r.Get("/api/projects/{id}/invitation-links", s.listProjectInvitationLinks)
+		r.Post("/api/projects/{id}/invitation-links", s.requireAuthorized(s.createProjectInvitationLink))
+		r.Delete("/api/projects/{id}/invitation-links/{linkId}", s.requireAuthorized(s.deleteProjectInvitationLink))
+		r.Get("/api/projects/{id}/invitation-links/{linkId}/uses", s.listProjectInvitationLinkUses)
 		r.Get("/api/projects/{id}/visits", s.listProjectVisits)
 		r.Get("/api/projects/{id}/access-requests", s.listProjectAccessRequests)
 		r.Post("/api/projects/{id}/access-requests", s.createAccessRequest)
@@ -815,6 +839,50 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, s.auth.ListProviders())
+}
+
+// mergeDownstreamProviders merges env-registered providers with the social
+// providers admins enabled via /admin/settings. envProviders comes from
+// auth.Service.ListProviders() and takes precedence on ID conflicts (so a
+// Google enabled both via env var AND via /admin/settings shows up exactly
+// once, with env-side ordering preserved). The returned list is append-only
+// — existing env-side ordering is kept; DB-enabled providers are appended in
+// the canonical SocialProviderMetadata() order.
+func mergeDownstreamProviders(envProviders []auth.ProviderInfo, cfg auth.SocialConfigs) []auth.ProviderInfo {
+	out := append([]auth.ProviderInfo(nil), envProviders...)
+	seen := make(map[string]bool, len(out))
+	for _, p := range out {
+		seen[p.ID] = true
+	}
+	enabled := map[string]bool{
+		"google":   cfg.Google != nil,
+		"discord":  cfg.Discord != nil,
+		"apple":    cfg.Apple != nil,
+		"facebook": cfg.Facebook != nil,
+		"twitter":  cfg.Twitter != nil,
+	}
+	for _, m := range auth.SocialProviderMetadata() {
+		if enabled[m.ID] && !seen[m.ID] {
+			out = append(out, m)
+			seen[m.ID] = true
+		}
+	}
+	return out
+}
+
+// handleListDownstreamProviders returns the union of (env-registered
+// providers) and (social providers admins enabled via /admin/settings). This
+// is the source of truth for the project Auth tab's SIGN-IN PROVIDERS
+// checkboxes — those checkboxes gate which providers downstream end-users
+// see on the project subdomain's /_oauth/login page, which is exactly the
+// merged set that muvee-authservice loads.
+func (s *Server) handleListDownstreamProviders(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.loadSocialConfigsFromSettings(r.Context())
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, mergeDownstreamProviders(s.auth.ListProviders(), cfg))
 }
 
 func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
@@ -1471,12 +1539,25 @@ func (s *Server) checkFixedNodeAndPortFree(ctx context.Context, nodeID uuid.UUID
 	return 0, nil
 }
 
-// knownProviderIDs returns the set of currently-registered OAuth provider IDs
-// (e.g. "google", "feishu") used to validate per-project enabled_providers
-// writes. Built fresh on each call since the provider set is fixed at server
-// boot — there is no hot-reload to invalidate a cached map.
-func (s *Server) knownProviderIDs() map[string]bool {
-	infos := s.auth.ListProviders()
+// knownProviderIDs returns the set of provider IDs that may appear in a
+// project's enabled_providers whitelist. This must match what the project
+// Auth tab actually offers — i.e. env-registered providers ∪ social
+// providers admins enabled via /admin/settings — otherwise saving a
+// selection that includes a DB-enabled provider would be rejected by
+// normaliseEnabledProviders. A DB read error here falls back to the
+// env-only set so a transient settings outage doesn't lose the ability to
+// validate the providers that were definitely registered at boot.
+func (s *Server) knownProviderIDs(ctx context.Context) map[string]bool {
+	envInfos := s.auth.ListProviders()
+	cfg, err := s.loadSocialConfigsFromSettings(ctx)
+	if err != nil {
+		out := make(map[string]bool, len(envInfos))
+		for _, p := range envInfos {
+			out[p.ID] = true
+		}
+		return out
+	}
+	infos := mergeDownstreamProviders(envInfos, cfg)
 	out := make(map[string]bool, len(infos))
 	for _, p := range infos {
 		out[p.ID] = true
@@ -1754,7 +1835,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
-	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs()); err != nil {
+	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs(r.Context())); err != nil {
 		jsonErr(w, err, 400)
 		return
 	} else {
@@ -1918,7 +1999,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
-	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs()); err != nil {
+	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs(r.Context())); err != nil {
 		jsonErr(w, err, 400)
 		return
 	} else {
