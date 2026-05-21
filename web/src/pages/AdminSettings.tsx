@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save, Upload } from 'lucide-react'
+import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save, Upload, Copy, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useSettings } from '../lib/settings'
@@ -29,6 +29,53 @@ function Field({
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
       />
+      {hint && <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '4px' }}>{hint}</p>}
+    </div>
+  )
+}
+
+// ─── Read-only field with copy button (for OAuth callback URLs) ──────────────
+
+function ReadOnlyURLField({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  const [copied, setCopied] = useState(false)
+  const onCopy = async () => {
+    if (!value) return
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // ignore -- clipboard may be unavailable in non-HTTPS dev contexts
+    }
+  }
+  return (
+    <div style={{ marginBottom: '18px' }}>
+      <label className="form-label">{label}</label>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 6 }}>
+        <code
+          style={{
+            flex: 1, minWidth: 0,
+            fontFamily: MONO, fontSize: '0.8125rem',
+            padding: '6px 10px',
+            border: '1px solid var(--border)', borderRadius: 4,
+            background: 'var(--bg-subtle)', color: 'var(--fg-primary)',
+            overflowX: 'auto', whiteSpace: 'nowrap',
+          }}
+          title={value}
+        >
+          {value || '—'}
+        </code>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={onCopy}
+          disabled={!value}
+          title="Copy to clipboard"
+          style={{ padding: '0 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      </div>
       {hint && <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '4px' }}>{hint}</p>}
     </div>
   )
@@ -197,19 +244,19 @@ function CertRow({ cert, t }: { cert: CertStatus; t: (key: string, opts?: Record
 // ─── Social OAuth Providers section ───────────────────────────────────────────
 
 type SocialState = {
-  google_enabled: string; google_client_id: string; google_client_secret: string; google_redirect_url: string
-  discord_enabled: string; discord_client_id: string; discord_client_secret: string; discord_redirect_url: string
-  facebook_enabled: string; facebook_client_id: string; facebook_client_secret: string; facebook_redirect_url: string
-  twitter_enabled: string; twitter_client_id: string; twitter_client_secret: string; twitter_redirect_url: string
-  apple_enabled: string; apple_client_id: string; apple_team_id: string; apple_key_id: string; apple_private_key_p8: string; apple_redirect_url: string
+  google_enabled: string; google_client_id: string; google_client_secret: string
+  discord_enabled: string; discord_client_id: string; discord_client_secret: string
+  facebook_enabled: string; facebook_client_id: string; facebook_client_secret: string
+  twitter_enabled: string; twitter_client_id: string; twitter_client_secret: string
+  apple_enabled: string; apple_client_id: string; apple_team_id: string; apple_key_id: string; apple_private_key_p8: string
 }
 
 const blankSocial: SocialState = {
-  google_enabled: 'false', google_client_id: '', google_client_secret: '', google_redirect_url: '',
-  discord_enabled: 'false', discord_client_id: '', discord_client_secret: '', discord_redirect_url: '',
-  facebook_enabled: 'false', facebook_client_id: '', facebook_client_secret: '', facebook_redirect_url: '',
-  twitter_enabled: 'false', twitter_client_id: '', twitter_client_secret: '', twitter_redirect_url: '',
-  apple_enabled: 'false', apple_client_id: '', apple_team_id: '', apple_key_id: '', apple_private_key_p8: '', apple_redirect_url: '',
+  google_enabled: 'false', google_client_id: '', google_client_secret: '',
+  discord_enabled: 'false', discord_client_id: '', discord_client_secret: '',
+  facebook_enabled: 'false', facebook_client_id: '', facebook_client_secret: '',
+  twitter_enabled: 'false', twitter_client_id: '', twitter_client_secret: '',
+  apple_enabled: 'false', apple_client_id: '', apple_team_id: '', apple_key_id: '', apple_private_key_p8: '',
 }
 
 type ProviderID = 'google' | 'discord' | 'facebook' | 'twitter' | 'apple'
@@ -223,17 +270,19 @@ function pickProviderPatch(p: ProviderID, s: SocialState): Partial<SystemSetting
 }
 
 function ProviderCard({
-  id, displayName, social, setSocial, onSave, saving, saved,
+  id, displayName, social, setSocial, forwardAuthBaseURL, onSave, saving, saved,
 }: {
   id: 'google' | 'discord' | 'facebook' | 'twitter'
   displayName: string
   social: SocialState
   setSocial: (next: SocialState) => void
+  forwardAuthBaseURL: string
   onSave: (id: ProviderID) => void
   saving: boolean
   saved: boolean
 }) {
   const enabled = social[`${id}_enabled` as keyof SocialState] === 'true'
+  const callbackURL = forwardAuthBaseURL ? `${forwardAuthBaseURL}/_oauth/${id}` : ''
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-base)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -249,11 +298,8 @@ function ProviderCard({
         onChange={v => setSocial({ ...social, [`${id}_client_id`]: v })} />
       <Field label="Client Secret" value={social[`${id}_client_secret` as keyof SocialState]}
         onChange={v => setSocial({ ...social, [`${id}_client_secret`]: v })} />
-      <Field label="Redirect URL"
-        placeholder="https://auth.example.com/_oauth/{id}"
-        value={social[`${id}_redirect_url` as keyof SocialState]}
-        onChange={v => setSocial({ ...social, [`${id}_redirect_url`]: v })}
-        hint="The exact callback URL registered in the provider dashboard." />
+      <ReadOnlyURLField label="Redirect URL" value={callbackURL}
+        hint="Copy this exact URL into the provider dashboard's Authorized redirect URIs." />
       <button className="btn-primary" onClick={() => onSave(id)} disabled={saving}
         style={{ background: saved ? 'var(--success)' : undefined, transition: 'background 300ms' }}>
         {saving ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={13} />}
@@ -264,15 +310,17 @@ function ProviderCard({
 }
 
 function AppleProviderCard({
-  social, setSocial, onSave, saving, saved,
+  social, setSocial, forwardAuthBaseURL, onSave, saving, saved,
 }: {
   social: SocialState
   setSocial: (next: SocialState) => void
+  forwardAuthBaseURL: string
   onSave: (id: ProviderID) => void
   saving: boolean
   saved: boolean
 }) {
   const enabled = social.apple_enabled === 'true'
+  const callbackURL = forwardAuthBaseURL ? `${forwardAuthBaseURL}/_oauth/apple` : ''
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-base)', gridColumn: '1 / -1' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -297,11 +345,8 @@ function AppleProviderCard({
           value={social.apple_key_id}
           onChange={v => setSocial({ ...social, apple_key_id: v })}
           hint="ID of the .p8 sign-in key" />
-        <Field label="Redirect URL"
-          placeholder="https://auth.example.com/_oauth/apple"
-          value={social.apple_redirect_url}
-          onChange={v => setSocial({ ...social, apple_redirect_url: v })}
-          hint="Must be HTTPS and exactly match the Service ID's Return URLs." />
+        <ReadOnlyURLField label="Redirect URL" value={callbackURL}
+          hint="Copy into the Service ID's Return URLs. Must be HTTPS." />
       </div>
       <div style={{ marginTop: 6, marginBottom: 18 }}>
         <label className="form-label">Private Key (.p8 PEM contents)</label>
@@ -328,30 +373,26 @@ function AppleProviderCard({
 
 function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: string) => string }) {
   void t // reserved for future i18n keys
+  const forwardAuthBaseURL = initial.forward_auth_base_url || ''
   const [social, setSocial] = useState<SocialState>(() => ({
     ...blankSocial,
     google_enabled: initial.google_enabled || 'false',
     google_client_id: initial.google_client_id || '',
     google_client_secret: initial.google_client_secret || '',
-    google_redirect_url: initial.google_redirect_url || '',
     discord_enabled: initial.discord_enabled || 'false',
     discord_client_id: initial.discord_client_id || '',
     discord_client_secret: initial.discord_client_secret || '',
-    discord_redirect_url: initial.discord_redirect_url || '',
     facebook_enabled: initial.facebook_enabled || 'false',
     facebook_client_id: initial.facebook_client_id || '',
     facebook_client_secret: initial.facebook_client_secret || '',
-    facebook_redirect_url: initial.facebook_redirect_url || '',
     twitter_enabled: initial.twitter_enabled || 'false',
     twitter_client_id: initial.twitter_client_id || '',
     twitter_client_secret: initial.twitter_client_secret || '',
-    twitter_redirect_url: initial.twitter_redirect_url || '',
     apple_enabled: initial.apple_enabled || 'false',
     apple_client_id: initial.apple_client_id || '',
     apple_team_id: initial.apple_team_id || '',
     apple_key_id: initial.apple_key_id || '',
     apple_private_key_p8: initial.apple_private_key_p8 || '',
-    apple_redirect_url: initial.apple_redirect_url || '',
   }))
   const [savingFor, setSavingFor] = useState<ProviderID | null>(null)
   const [savedFor, setSavedFor] = useState<ProviderID | null>(null)
@@ -381,16 +422,27 @@ function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: st
           Google is special: leaving it disabled means downstream falls back to the env-configured platform Google app
           (shared client_id). Enable + fill below to give downstream subdomains a Google Cloud project of their own.
         </p>
+        {!forwardAuthBaseURL && (
+          <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--warning, #b45309)', marginBottom: 16, lineHeight: 1.6 }}>
+            ⚠️ Could not reach muvee-authservice to read FORWARD_AUTH_BASE_URL. Redirect URLs below will be blank until
+            the authservice container is reachable from muvee-server.
+          </p>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
           <ProviderCard id="google" displayName="Google" social={social} setSocial={setSocial}
+            forwardAuthBaseURL={forwardAuthBaseURL}
             onSave={save} saving={savingFor === 'google'} saved={savedFor === 'google'} />
           <ProviderCard id="discord" displayName="Discord" social={social} setSocial={setSocial}
+            forwardAuthBaseURL={forwardAuthBaseURL}
             onSave={save} saving={savingFor === 'discord'} saved={savedFor === 'discord'} />
           <ProviderCard id="facebook" displayName="Facebook" social={social} setSocial={setSocial}
+            forwardAuthBaseURL={forwardAuthBaseURL}
             onSave={save} saving={savingFor === 'facebook'} saved={savedFor === 'facebook'} />
           <ProviderCard id="twitter" displayName="X (Twitter)" social={social} setSocial={setSocial}
+            forwardAuthBaseURL={forwardAuthBaseURL}
             onSave={save} saving={savingFor === 'twitter'} saved={savedFor === 'twitter'} />
           <AppleProviderCard social={social} setSocial={setSocial}
+            forwardAuthBaseURL={forwardAuthBaseURL}
             onSave={save} saving={savingFor === 'apple'} saved={savedFor === 'apple'} />
         </div>
       </div>

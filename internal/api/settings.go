@@ -34,13 +34,55 @@ func (s *Server) handleGetPublicSettings(w http.ResponseWriter, r *http.Request)
 }
 
 // handleGetAdminSettings returns all system settings (admin only).
+// Augments the DB values with a computed `forward_auth_base_url` (queried
+// from muvee-authservice) so the admin UI can show admins the exact OAuth
+// callback URL — `<base>/_oauth/<provider>` — to register in each social
+// provider's dashboard.
 func (s *Server) handleGetAdminSettings(w http.ResponseWriter, r *http.Request) {
 	all, err := s.store.GetAllSettings(r.Context())
 	if err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
 		return
 	}
+	if base, err := s.fetchForwardAuthBaseURL(r.Context()); err != nil {
+		log.Printf("handleGetAdminSettings: forward auth base URL: %v", err)
+	} else {
+		all["forward_auth_base_url"] = base
+	}
 	jsonOK(w, all)
+}
+
+// fetchForwardAuthBaseURL asks muvee-authservice for its FORWARD_AUTH_BASE_URL
+// via the internal-key-gated endpoint. The OAuth callback path is fixed at
+// /_oauth/<provider> in authservice's router, so admins only need the base
+// to construct the full redirect URL for each provider's dashboard.
+func (s *Server) fetchForwardAuthBaseURL(ctx context.Context) (string, error) {
+	if s.authServiceURL == "" {
+		return "", fmt.Errorf("authServiceURL not configured")
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet,
+		strings.TrimRight(s.authServiceURL, "/")+"/_oauth/internal/base-url", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-Muvee-Internal-Key", internalAPIKey())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("authservice returned %d", resp.StatusCode)
+	}
+	var body struct {
+		ForwardAuthBaseURL string `json:"forward_auth_base_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	return body.ForwardAuthBaseURL, nil
 }
 
 // handleUpdateAdminSettings accepts a JSON map of key→value pairs and upserts them.
@@ -72,28 +114,28 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		// app distinct from the platform-side env GOOGLE_CLIENT_ID. When
 		// google_enabled = "true", reloadProviders merges this config
 		// over the env-derived Google provider in the authservice map.
-		"google_enabled":          true,
-		"google_client_id":        true,
-		"google_client_secret":    true,
-		"google_redirect_url":     true,
-		"discord_enabled":         true,
-		"discord_client_id":       true,
-		"discord_client_secret":   true,
-		"discord_redirect_url":    true,
-		"facebook_enabled":        true,
-		"facebook_client_id":      true,
-		"facebook_client_secret":  true,
-		"facebook_redirect_url":   true,
-		"twitter_enabled":         true,
-		"twitter_client_id":       true,
-		"twitter_client_secret":   true,
-		"twitter_redirect_url":    true,
-		"apple_enabled":           true,
-		"apple_client_id":         true, // Apple "Services ID"
-		"apple_team_id":           true,
-		"apple_key_id":            true,
-		"apple_private_key_p8":    true, // raw .p8 PEM contents
-		"apple_redirect_url":      true,
+		//
+		// Note: *_redirect_url keys are intentionally absent. The callback
+		// URL is computed by authservice as FORWARD_AUTH_BASE_URL +
+		// "/_oauth/<provider>" and surfaced read-only via the
+		// `forward_auth_base_url` field on GET /api/admin/settings.
+		"google_enabled":         true,
+		"google_client_id":       true,
+		"google_client_secret":   true,
+		"discord_enabled":        true,
+		"discord_client_id":      true,
+		"discord_client_secret":  true,
+		"facebook_enabled":       true,
+		"facebook_client_id":     true,
+		"facebook_client_secret": true,
+		"twitter_enabled":        true,
+		"twitter_client_id":      true,
+		"twitter_client_secret":  true,
+		"apple_enabled":          true,
+		"apple_client_id":        true, // Apple "Services ID"
+		"apple_team_id":          true,
+		"apple_key_id":           true,
+		"apple_private_key_p8":   true, // raw .p8 PEM contents
 	}
 
 	ctx := r.Context()

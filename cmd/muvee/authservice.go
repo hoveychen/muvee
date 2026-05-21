@@ -76,7 +76,7 @@ func reloadProviders(ctx context.Context) error {
 		log.Printf("authservice: fetch social configs failed (continuing with platform only): %v", err)
 		social = auth.SocialConfigs{}
 	}
-	socialProviders, err := auth.BuildSocialProviders(social)
+	socialProviders, err := auth.BuildSocialProviders(forwardAuthBase, social)
 	if err != nil {
 		return fmt.Errorf("build social providers: %w", err)
 	}
@@ -161,6 +161,23 @@ func handleInternalReload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleInternalBaseURL returns the authservice's own FORWARD_AUTH_BASE_URL
+// so muvee-server can show admins the exact OAuth callback URL to register
+// with each social provider's dashboard (path = /_oauth/<provider>).
+// Authenticated with X-Muvee-Internal-Key.
+func handleInternalBaseURL(w http.ResponseWriter, r *http.Request) {
+	expected := internalKey
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"forward_auth_base_url": forwardAuthBase,
+	})
+}
+
 func runAuthservice() {
 	baseURL := os.Getenv("FORWARD_AUTH_BASE_URL")
 	if baseURL == "" {
@@ -223,6 +240,9 @@ func runAuthservice() {
 	// Internal reload endpoint (muvee-server posts here after PUT /admin/settings
 	// touches a social_* key, see settings.go).
 	r.Post("/_oauth/internal/reload", handleInternalReload)
+	// Internal endpoint that returns FORWARD_AUTH_BASE_URL so muvee-server
+	// can display the canonical OAuth callback URL to admins.
+	r.Get("/_oauth/internal/base-url", handleInternalBaseURL)
 	// {provider} catch-all must come after the more specific /_oauth/* routes
 	// above; chi matches in registration order for static segments.
 	r.Get("/_oauth/{provider}", handleOAuthCallback)

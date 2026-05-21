@@ -10,11 +10,12 @@ import (
 
 // DiscordConfig holds the per-deployment Discord OAuth app credentials.
 // Loaded from system_settings (not env vars) so admins can configure social
-// providers at runtime without restarting the server.
+// providers at runtime without restarting the server. RedirectURL is NOT
+// here — authservice computes it from its own FORWARD_AUTH_BASE_URL +
+// "/_oauth/discord" in BuildSocialProviders.
 type DiscordConfig struct {
 	ClientID     string
 	ClientSecret string
-	RedirectURL  string
 }
 
 type discordProvider struct {
@@ -24,7 +25,7 @@ type discordProvider struct {
 // newDiscordProvider returns a Discord OAuth2 provider. Returns (nil, nil)
 // when either credential field is empty -- callers treat that as "not
 // configured" and skip registration.
-func newDiscordProvider(cfg DiscordConfig) (*discordProvider, error) {
+func newDiscordProvider(cfg DiscordConfig, redirectURL string) (*discordProvider, error) {
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
 		return nil, nil
 	}
@@ -32,7 +33,7 @@ func newDiscordProvider(cfg DiscordConfig) (*discordProvider, error) {
 		config: &oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
-			RedirectURL:  cfg.RedirectURL,
+			RedirectURL:  redirectURL,
 			Endpoint: oauth2.Endpoint{
 				AuthURL:  "https://discord.com/oauth2/authorize",
 				TokenURL: "https://discord.com/api/oauth2/token",

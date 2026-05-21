@@ -33,14 +33,17 @@ func SocialProviderMetadata() []ProviderInfo {
 }
 
 // BuildSocialProviders instantiates the social providers in cfg, returning
-// a map keyed by Name() ready to be merged into fwdProviders. Disabled or
-// partially-configured providers (returned as nil from their constructors)
-// are skipped silently. A construction error from any single provider
-// aborts the whole build so misconfiguration is loud, not silent.
-func BuildSocialProviders(cfg SocialConfigs) (map[string]Provider, error) {
+// a map keyed by Name() ready to be merged into fwdProviders. Each provider's
+// OAuth callback URL is computed as "{forwardAuthBase}/_oauth/{provider}" —
+// the same pattern as NewForwardAuthProviders, so admins do not configure
+// it per-provider. Disabled or partially-configured providers (returned as
+// nil from their constructors) are skipped silently. A construction error
+// from any single provider aborts the whole build so misconfiguration is
+// loud, not silent.
+func BuildSocialProviders(forwardAuthBase string, cfg SocialConfigs) (map[string]Provider, error) {
 	out := make(map[string]Provider)
 	if cfg.Google != nil {
-		p, err := newGoogleProviderFromConfig(*cfg.Google)
+		p, err := newGoogleProviderFromConfig(*cfg.Google, forwardAuthBase+"/_oauth/google")
 		if err != nil {
 			return nil, fmt.Errorf("google: %w", err)
 		}
@@ -49,7 +52,7 @@ func BuildSocialProviders(cfg SocialConfigs) (map[string]Provider, error) {
 		}
 	}
 	if cfg.Discord != nil {
-		p, err := newDiscordProvider(*cfg.Discord)
+		p, err := newDiscordProvider(*cfg.Discord, forwardAuthBase+"/_oauth/discord")
 		if err != nil {
 			return nil, fmt.Errorf("discord: %w", err)
 		}
@@ -58,7 +61,7 @@ func BuildSocialProviders(cfg SocialConfigs) (map[string]Provider, error) {
 		}
 	}
 	if cfg.Apple != nil {
-		p, err := newAppleProvider(*cfg.Apple)
+		p, err := newAppleProvider(*cfg.Apple, forwardAuthBase+"/_oauth/apple")
 		if err != nil {
 			return nil, fmt.Errorf("apple: %w", err)
 		}
@@ -67,7 +70,7 @@ func BuildSocialProviders(cfg SocialConfigs) (map[string]Provider, error) {
 		}
 	}
 	if cfg.Facebook != nil {
-		p, err := newFacebookProvider(*cfg.Facebook)
+		p, err := newFacebookProvider(*cfg.Facebook, forwardAuthBase+"/_oauth/facebook")
 		if err != nil {
 			return nil, fmt.Errorf("facebook: %w", err)
 		}
@@ -76,7 +79,7 @@ func BuildSocialProviders(cfg SocialConfigs) (map[string]Provider, error) {
 		}
 	}
 	if cfg.Twitter != nil {
-		p, err := newTwitterProvider(*cfg.Twitter)
+		p, err := newTwitterProvider(*cfg.Twitter, forwardAuthBase+"/_oauth/twitter")
 		if err != nil {
 			return nil, fmt.Errorf("twitter: %w", err)
 		}

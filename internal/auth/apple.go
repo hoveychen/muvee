@@ -19,22 +19,23 @@ import (
 // string -- it must be re-generated for each token request by signing an
 // ES256 JWT with the .p8 private key downloaded from the Apple Developer
 // console. ClientID here is Apple's Services ID (the web-flow analogue of an
-// app bundle id).
+// app bundle id). RedirectURL is NOT here — authservice computes it from
+// its own FORWARD_AUTH_BASE_URL + "/_oauth/apple" in BuildSocialProviders.
 type AppleConfig struct {
 	ClientID      string
 	TeamID        string
 	KeyID         string
 	PrivateKeyPEM string
-	RedirectURL   string
 }
 
 type appleProvider struct {
-	cfg        AppleConfig
-	privateKey *ecdsa.PrivateKey
-	verifier   *gooidc.IDTokenVerifier
+	cfg         AppleConfig
+	redirectURL string
+	privateKey  *ecdsa.PrivateKey
+	verifier    *gooidc.IDTokenVerifier
 }
 
-func newAppleProvider(cfg AppleConfig) (*appleProvider, error) {
+func newAppleProvider(cfg AppleConfig, redirectURL string) (*appleProvider, error) {
 	if cfg.ClientID == "" || cfg.TeamID == "" || cfg.KeyID == "" || cfg.PrivateKeyPEM == "" {
 		return nil, nil
 	}
@@ -56,9 +57,10 @@ func newAppleProvider(cfg AppleConfig) (*appleProvider, error) {
 		return nil, fmt.Errorf("apple: oidc discovery: %w", err)
 	}
 	return &appleProvider{
-		cfg:        cfg,
-		privateKey: pk,
-		verifier:   oidcProvider.Verifier(&gooidc.Config{ClientID: cfg.ClientID}),
+		cfg:         cfg,
+		redirectURL: redirectURL,
+		privateKey:  pk,
+		verifier:    oidcProvider.Verifier(&gooidc.Config{ClientID: cfg.ClientID}),
 	}, nil
 }
 
@@ -75,7 +77,7 @@ func (p *appleProvider) AuthCodeURL(state string) string {
 	v := url.Values{
 		"response_type": {"code"},
 		"client_id":     {p.cfg.ClientID},
-		"redirect_uri":  {p.cfg.RedirectURL},
+		"redirect_uri":  {p.redirectURL},
 		"scope":         {"email"},
 		"state":         {state},
 		"response_mode": {"query"},
@@ -114,7 +116,7 @@ func (p *appleProvider) UserInfoWithSubject(ctx context.Context, code, _ string)
 	cfg := &oauth2.Config{
 		ClientID:     p.cfg.ClientID,
 		ClientSecret: clientSecret,
-		RedirectURL:  p.cfg.RedirectURL,
+		RedirectURL:  p.redirectURL,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:   "https://appleid.apple.com/auth/authorize",
 			TokenURL:  "https://appleid.apple.com/auth/token",

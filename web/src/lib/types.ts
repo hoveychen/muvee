@@ -320,25 +320,25 @@ export interface SystemSettings {
   google_enabled?: string
   google_client_id?: string
   google_client_secret?: string
-  google_redirect_url?: string
   discord_enabled?: string
   discord_client_id?: string
   discord_client_secret?: string
-  discord_redirect_url?: string
   facebook_enabled?: string
   facebook_client_id?: string
   facebook_client_secret?: string
-  facebook_redirect_url?: string
   twitter_enabled?: string
   twitter_client_id?: string
   twitter_client_secret?: string
-  twitter_redirect_url?: string
   apple_enabled?: string
   apple_client_id?: string
   apple_team_id?: string
   apple_key_id?: string
   apple_private_key_p8?: string
-  apple_redirect_url?: string
+  // Read-only: computed by muvee-server from muvee-authservice's
+  // FORWARD_AUTH_BASE_URL. The OAuth callback for each provider is
+  // `${forward_auth_base_url}/_oauth/<provider>` — admins copy this into
+  // their Google/Discord/etc. dashboards.
+  forward_auth_base_url?: string
 }
 
 export interface AuthorizationRequest {

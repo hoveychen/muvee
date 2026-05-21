@@ -11,18 +11,19 @@ import (
 // FacebookConfig holds the per-deployment Meta for Developers app
 // credentials. Note: the `email` permission requires Meta App Review for
 // production use; until the app is approved Facebook returns only the
-// public_profile fields (id, name, picture).
+// public_profile fields (id, name, picture). RedirectURL is NOT here —
+// authservice computes it from its own FORWARD_AUTH_BASE_URL +
+// "/_oauth/facebook" in BuildSocialProviders.
 type FacebookConfig struct {
 	ClientID     string
 	ClientSecret string
-	RedirectURL  string
 }
 
 type facebookProvider struct {
 	config *oauth2.Config
 }
 
-func newFacebookProvider(cfg FacebookConfig) (*facebookProvider, error) {
+func newFacebookProvider(cfg FacebookConfig, redirectURL string) (*facebookProvider, error) {
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
 		return nil, nil
 	}
@@ -30,7 +31,7 @@ func newFacebookProvider(cfg FacebookConfig) (*facebookProvider, error) {
 		config: &oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
-			RedirectURL:  cfg.RedirectURL,
+			RedirectURL:  redirectURL,
 			Endpoint: oauth2.Endpoint{
 				AuthURL:  "https://www.facebook.com/v18.0/dialog/oauth",
 				TokenURL: "https://graph.facebook.com/v18.0/oauth/access_token",

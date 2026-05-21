@@ -18,11 +18,12 @@ import (
 // Note: the `email` scope is not exposed by the X API v2 OAuth2 endpoints;
 // only Elevated/Pro access on the older API v1.1 can return email. This
 // provider therefore relies entirely on the (provider, sub) path -- the
-// sign-in works fine without an email.
+// sign-in works fine without an email. RedirectURL is NOT here —
+// authservice computes it from its own FORWARD_AUTH_BASE_URL +
+// "/_oauth/twitter" in BuildSocialProviders.
 type TwitterConfig struct {
 	ClientID     string
 	ClientSecret string
-	RedirectURL  string
 }
 
 type twitterProvider struct {
@@ -30,7 +31,7 @@ type twitterProvider struct {
 	verifierSecret []byte
 }
 
-func newTwitterProvider(cfg TwitterConfig) (*twitterProvider, error) {
+func newTwitterProvider(cfg TwitterConfig, redirectURL string) (*twitterProvider, error) {
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
 		return nil, nil
 	}
@@ -39,7 +40,7 @@ func newTwitterProvider(cfg TwitterConfig) (*twitterProvider, error) {
 		config: &oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
-			RedirectURL:  cfg.RedirectURL,
+			RedirectURL:  redirectURL,
 			Endpoint: oauth2.Endpoint{
 				AuthURL:   "https://twitter.com/i/oauth2/authorize",
 				TokenURL:  "https://api.twitter.com/2/oauth2/token",

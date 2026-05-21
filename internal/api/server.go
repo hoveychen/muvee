@@ -481,28 +481,24 @@ func (s *Server) loadSocialConfigsFromSettings(ctx context.Context) (auth.Social
 		cfg.Google = &auth.GoogleConfig{
 			ClientID:     settings["google_client_id"],
 			ClientSecret: settings["google_client_secret"],
-			RedirectURL:  settings["google_redirect_url"],
 		}
 	}
 	if settings["discord_enabled"] == "true" {
 		cfg.Discord = &auth.DiscordConfig{
 			ClientID:     settings["discord_client_id"],
 			ClientSecret: settings["discord_client_secret"],
-			RedirectURL:  settings["discord_redirect_url"],
 		}
 	}
 	if settings["facebook_enabled"] == "true" {
 		cfg.Facebook = &auth.FacebookConfig{
 			ClientID:     settings["facebook_client_id"],
 			ClientSecret: settings["facebook_client_secret"],
-			RedirectURL:  settings["facebook_redirect_url"],
 		}
 	}
 	if settings["twitter_enabled"] == "true" {
 		cfg.Twitter = &auth.TwitterConfig{
 			ClientID:     settings["twitter_client_id"],
 			ClientSecret: settings["twitter_client_secret"],
-			RedirectURL:  settings["twitter_redirect_url"],
 		}
 	}
 	if settings["apple_enabled"] == "true" {
@@ -511,7 +507,6 @@ func (s *Server) loadSocialConfigsFromSettings(ctx context.Context) (auth.Social
 			TeamID:        settings["apple_team_id"],
 			KeyID:         settings["apple_key_id"],
 			PrivateKeyPEM: settings["apple_private_key_p8"],
-			RedirectURL:   settings["apple_redirect_url"],
 		}
 	}
 	return cfg, nil
