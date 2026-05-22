@@ -33,6 +33,7 @@ docs/.docusaurus/
 .env
 .env.local
 .env.*.local
+.proxy.env
 
 # Docker
 .docker/
@@ -68,6 +69,9 @@ tmp/
 # Fleet PRD scratch state
 TASKS.md
 .worktrees/
+
+# Deployment research / internal ops docs
+deployment/
 
 # patchright-cli / playwright-cli session storage
 .patchright-cli/

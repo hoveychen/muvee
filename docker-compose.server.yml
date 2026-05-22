@@ -5,7 +5,10 @@
 #   cp .env.server.example .env   # then edit .env
 #   # Generate registry credentials (run once):
 #   docker run --entrypoint htpasswd httpd:2 -Bbn <user> <password> > registry/htpasswd
-#   docker compose -f docker-compose.server.yml up -d
+#   # Proxy (required — create empty if no proxy needed, or copy template to configure):
+#   touch .proxy.env                          # no proxy
+#   cp .proxy.env.example .proxy.env          # with proxy — then edit .proxy.env
+#   docker-compose -f docker-compose.server.yml up -d
 #
 # Then register worker nodes by following the agent setup guide in README.md.
 
@@ -61,6 +64,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    env_file:
+      - .proxy.env
     environment:
       DATABASE_URL: postgres://muvee:${POSTGRES_PASSWORD:-muvee}@postgres:5432/muvee?sslmode=disable
       MIGRATIONS_DIR: /app/db/migrations
@@ -141,6 +146,8 @@ services:
   muvee-authservice:
     image: ghcr.io/hoveychen/muvee:latest
     command: ["authservice"]
+    env_file:
+      - .proxy.env
     environment:
       # Google OAuth (set GOOGLE_CLIENT_ID to enable)
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}

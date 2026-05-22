@@ -2,7 +2,10 @@
 #
 # Usage:
 #   cp .env.agent.example .env   # then edit .env
-#   docker compose -f docker-compose.agent-builder.yml up -d
+#   # Proxy (required — create empty if no proxy needed, or copy template to configure):
+#   touch .proxy.env                          # no proxy
+#   cp .proxy.env.example .proxy.env          # with proxy — then edit .proxy.env
+#   docker-compose -f docker-compose.agent-builder.yml up -d
 
 services:
   muvee-agent-builder:
@@ -10,6 +13,8 @@ services:
     command: ["agent"]
     restart: unless-stopped
     hostname: muvee-agent-builder
+    env_file:
+      - .proxy.env
     environment:
       NODE_ROLE: builder
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
