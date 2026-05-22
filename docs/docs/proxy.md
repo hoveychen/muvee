@@ -12,7 +12,6 @@ If your muvee deployment runs in a network that requires an HTTP proxy to reach 
 
 | Service | Why it needs proxy access |
 |---------|--------------------------|
-| `muvee-server` | The image-watch scheduler uses the `crane` library to query Docker Hub / ghcr.io image digests directly over HTTP (not through the Docker daemon) |
 | `muvee-authservice` | Calls external OAuth provider APIs: Google, Feishu/Lark, WeCom, DingTalk, Discord, Facebook, Apple, Twitter |
 | `muvee-agent-builder` | Clones project source code via `git clone` over HTTPS |
 
