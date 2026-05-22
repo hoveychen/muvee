@@ -309,6 +309,8 @@ export default function ProjectDetail() {
             ownerName={project.owner_name || project.owner_email || ''}
             ownerEmail={project.owner_email || ''}
             ownerAvatarURL={project.owner_avatar_url || ''}
+            domainPrefix={project.domain_prefix || ''}
+            baseDomain={baseDomain}
           />
         )}
         {tab === 'datasets' && (
@@ -1423,7 +1425,7 @@ function EnabledProvidersField({ value, onChange }: { value: string; onChange: (
   )
 }
 
-function UsersTab({ projectId, form, onChange, onSave, saving, saveError, ownerName, ownerEmail, ownerAvatarURL }: {
+function UsersTab({ projectId, form, onChange, onSave, saving, saveError, ownerName, ownerEmail, ownerAvatarURL, domainPrefix, baseDomain }: {
   projectId: string
   form: Partial<Project>
   onChange: (f: Partial<Project>) => void
@@ -1433,6 +1435,8 @@ function UsersTab({ projectId, form, onChange, onSave, saving, saveError, ownerN
   ownerName: string
   ownerEmail: string
   ownerAvatarURL: string
+  domainPrefix: string
+  baseDomain: string
 }) {
   const isPrivate = form.access_mode === 'private'
 
@@ -1505,7 +1509,7 @@ function UsersTab({ projectId, form, onChange, onSave, saving, saveError, ownerN
       </div>
 
       <ProjectAccessUsersPanel projectId={projectId} disabled={!isPrivate} />
-      <ProjectInvitationLinksPanel projectId={projectId} disabled={!isPrivate} />
+      <ProjectInvitationLinksPanel projectId={projectId} disabled={!isPrivate} domainPrefix={domainPrefix} baseDomain={baseDomain} />
       <PendingRequestsPanel projectId={projectId} />
       <RecentVisitorsPanel projectId={projectId} isPrivate={isPrivate} />
     </div>
@@ -1633,7 +1637,7 @@ function ProjectAccessUsersPanel({ projectId, disabled }: { projectId: string; d
   )
 }
 
-function ProjectInvitationLinksPanel({ projectId, disabled }: { projectId: string; disabled?: boolean }) {
+function ProjectInvitationLinksPanel({ projectId, disabled, domainPrefix, baseDomain }: { projectId: string; disabled?: boolean; domainPrefix: string; baseDomain: string }) {
   const [links, setLinks] = useState<InvitationLink[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1648,7 +1652,17 @@ function ProjectInvitationLinksPanel({ projectId, disabled }: { projectId: strin
     api.projects.invitationLinks(projectId).then(setLinks).catch(e => setError(e.message))
   }, [projectId])
 
-  const buildURL = (token: string) => `${window.location.origin}/login?invite_token=${encodeURIComponent(token)}`
+  // Project-scoped invites should land on the project's own subdomain so the
+  // visitor sees the project's branding + enabled_providers (rendered by
+  // authservice /_oauth/login when accessed via the project subdomain) rather
+  // than the platform's generic /login page. Fall back to the platform login
+  // only when the project has not been assigned a domain prefix yet.
+  const buildURL = (token: string) => {
+    if (domainPrefix && baseDomain) {
+      return `https://${domainPrefix}.${baseDomain}/?invite_token=${encodeURIComponent(token)}`
+    }
+    return `${window.location.origin}/login?invite_token=${encodeURIComponent(token)}`
+  }
 
   const handleGenerate = async () => {
     setBusy(true)

@@ -281,11 +281,36 @@ func resolveAuthClaims(r *http.Request) (*authClaims, error) {
 
 // handleVerify is the Traefik ForwardAuth endpoint for regular users.
 func handleVerify(w http.ResponseWriter, r *http.Request) {
+	// Look at the user-visible URL (X-Forwarded-Uri) for ?invite_token=... —
+	// r.URL only carries the Traefik forward-auth parameters (project_id /
+	// domains), not the browser's query string.
+	inviteToken := extractInviteTokenFromForwardedURI(r)
+
 	claims, err := resolveAuthClaims(r)
 	if err != nil {
+		// Unauthenticated visitor with an invite token: stash the token in a
+		// short-lived cookie so handleOAuthCallback can consume it once OAuth
+		// completes (the post-OAuth redirect back to the original URL would
+		// otherwise lose the query string visibility to the callback handler).
+		if inviteToken != "" {
+			setInviteTokenCookie(w, inviteToken)
+		}
 		redirectToLogin(w, r)
 		return
 	}
+
+	// Already-authenticated visitor with an invite token: consume the link
+	// in-place against muvee-server (records use + adds to project_access_users)
+	// so the access check below admits them on this same request. Best-effort:
+	// log + ignore errors so a stale / invalid token never blocks a valid
+	// session.
+	if inviteToken != "" {
+		if err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
+			log.Printf("authservice: consume invite (authed, email=%s): %v", claims.Email, err)
+		}
+		clearInviteTokenCookie(w)
+	}
+
 	if allowedDomains := r.URL.Query().Get("domains"); allowedDomains != "" {
 		if !emailMatchesDomains(claims.Email, allowedDomains) {
 			http.Error(w, "access denied: email domain not permitted", http.StatusForbidden)
@@ -352,6 +377,85 @@ func upsertUserUpstream(ctx context.Context, providerName, email, name, avatarUR
 		return nil
 	}
 	return fmt.Errorf("upstream identity upsert returned %d", resp.StatusCode)
+}
+
+// inviteTokenCookieName is the short-lived cookie that carries the value of
+// a `?invite_token=...` query parameter across the OAuth handoff. Set by
+// handleVerify when an unauthenticated visitor first hits the project
+// subdomain with the token, consumed by handleOAuthCallback once the user
+// completes OAuth — at which point we know who they are and can call
+// /api/internal/auth/upsert with the token to add them to
+// project_access_users.
+const inviteTokenCookieName = "muvee_invite_token"
+
+// extractInviteTokenFromForwardedURI returns the invite_token query parameter
+// from the user-visible URL. Behind Traefik forward-auth, r.URL.Query() only
+// carries the forward-auth middleware's own params (project_id, domains) —
+// the browser's query string is exposed via X-Forwarded-Uri.
+func extractInviteTokenFromForwardedURI(r *http.Request) string {
+	uri := r.Header.Get("X-Forwarded-Uri")
+	if uri == "" {
+		return ""
+	}
+	q := strings.IndexByte(uri, '?')
+	if q < 0 {
+		return ""
+	}
+	vals, err := url.ParseQuery(uri[q+1:])
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(vals.Get("invite_token"))
+}
+
+func setInviteTokenCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: inviteTokenCookieName, Value: token,
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+		SameSite: http.SameSiteLaxMode, Secure: true,
+	})
+}
+
+func clearInviteTokenCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: inviteTokenCookieName, Value: "", MaxAge: -1,
+		HttpOnly: true, Path: "/", Domain: cookieDomain,
+	})
+}
+
+// consumeInviteUpstream calls muvee-server's /api/internal/auth/upsert with
+// the invite_token, which threads through EnsurePlatformMember to record the
+// link use and add the user to project_access_users (see auth.go). Used in
+// two contexts: the authed-already path in handleVerify, and the post-OAuth
+// callback path when the cookie was set by an earlier verify hop.
+func consumeInviteUpstream(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) error {
+	body, err := json.Marshal(map[string]string{
+		"email":        email,
+		"name":         name,
+		"avatar_url":   avatarURL,
+		"provider":     providerName,
+		"invite_token": inviteToken,
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		muveeServerURL+"/api/internal/auth/upsert",
+		strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	return fmt.Errorf("upstream auth/upsert returned %d", resp.StatusCode)
 }
 
 // accessCheckResult is the structured result from muvee-server's
@@ -824,10 +928,31 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// in the central `users` table, and IsProjectAccessAllowedByEmail would
 	// reject them as "not a member" even on public projects.
 	//
-	// This is identity-only: domain restrictions and invite-mode gating do
-	// not apply to subdomain logins (those are platform-side admission
-	// rules). Per-project ACL still runs in checkProjectAccess below.
-	if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
+	// If an invite_token cookie was set by an earlier verify hop, route to
+	// auth/upsert (which runs EnsurePlatformMember → consumes the link +
+	// adds project_access_users). Otherwise stick with identity-upsert:
+	// domain restrictions and invite-mode gating do not apply to plain
+	// subdomain logins (those are platform-side admission rules). Per-project
+	// ACL still runs in checkProjectAccess on the subsequent verify.
+	inviteToken := ""
+	if c, err := r.Cookie(inviteTokenCookieName); err == nil {
+		inviteToken = c.Value
+	}
+	if inviteToken != "" {
+		clearInviteTokenCookie(w)
+		if err := consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
+			// Token may be expired / exhausted / revoked. Fall back to
+			// identity-upsert so the user still completes login; the access
+			// check on the subsequent verify will bounce them to
+			// request-access instead of breaking the OAuth round-trip.
+			log.Printf("authservice: consume invite (callback, %s, %s): %v; falling back to identity-upsert", providerName, email, err)
+			if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
+				log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
+				http.Error(w, "authentication failed", http.StatusInternalServerError)
+				return
+			}
+		}
+	} else if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
 		log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return
