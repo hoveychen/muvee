@@ -7,10 +7,10 @@ export PATH := $(PATH):/opt/homebrew/bin
 # ─── Web ─────────────────────────────────────────────────────────────────────
 
 web-install:
-	cd web && npm install
+	cd web && pnpm install
 
 web-build:
-	cd web && npm run build
+	cd web && pnpm run build
 
 # Copy the Vite build output into the embed package so it gets baked into the binary.
 embed-web: web-build
@@ -62,7 +62,7 @@ run: build
 # ─── Dev ─────────────────────────────────────────────────────────────────────
 
 web-dev:
-	cd web && npm run dev
+	cd web && pnpm run dev
 
 # ─── Quality ─────────────────────────────────────────────────────────────────
 

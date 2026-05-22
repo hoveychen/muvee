@@ -67,6 +67,7 @@ tmp/
 
 # Fleet PRD scratch state
 TASKS.md
+.worktrees/
 
 # patchright-cli / playwright-cli session storage
 .patchright-cli/

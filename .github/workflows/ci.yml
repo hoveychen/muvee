@@ -20,18 +20,23 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install web dependencies
-        run: cd web && npm ci
+        run: cd web && pnpm install --frozen-lockfile
 
       - name: Build frontend
-        run: cd web && npm run build
+        run: cd web && pnpm run build
 
       - name: Copy dist into embed package
         run: |
