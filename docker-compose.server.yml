@@ -8,7 +8,7 @@
 #   # Proxy (required — create empty if no proxy needed, or copy template to configure):
 #   touch .proxy.env                          # no proxy
 #   cp .proxy.env.example .proxy.env          # with proxy — then edit .proxy.env
-#   docker-compose -f docker-compose.server.yml up -d
+#   docker compose -f docker-compose.server.yml up -d
 #
 # Then register worker nodes by following the agent setup guide in README.md.
 

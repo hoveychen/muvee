@@ -5,7 +5,7 @@
 #   # Proxy (required — create empty if no proxy needed, or copy template to configure):
 #   touch .proxy.env                          # no proxy
 #   cp .proxy.env.example .proxy.env          # with proxy — then edit .proxy.env
-#   docker-compose -f docker-compose.agent-builder.yml up -d
+#   docker compose -f docker-compose.agent-builder.yml up -d
 
 services:
   muvee-agent-builder:

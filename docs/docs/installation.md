@@ -26,10 +26,10 @@ touch .proxy.env                   # no proxy
 # cp .proxy.env.example .proxy.env # behind proxy — then edit .proxy.env
 
 # Standalone — starts server + agents on this machine (default, recommended)
-docker-compose up -d
+docker compose up -d
 
 # Multi-node — starts server only; register agents separately on worker machines
-# docker-compose -f docker-compose.server.yml up -d
+# docker compose -f docker-compose.server.yml up -d
 ```
 
 ## Option B: Pre-built Binaries

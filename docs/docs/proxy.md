@@ -24,7 +24,7 @@ SSH-based git clones are also not affected by HTTP proxy settings. Use HTTPS + t
 
 ## Setup
 
-**.proxy.env is required** — docker-compose always loads it, even if empty. Create it before starting the stack:
+**.proxy.env is required** — docker compose always loads it, even if empty. Create it before starting the stack:
 
 ```bash
 # No proxy needed
