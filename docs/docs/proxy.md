@@ -28,7 +28,7 @@ SSH-based git clones are also not affected by HTTP proxy settings. Use HTTPS + t
 
 **No proxy needed:** leave `.proxy.env` as-is (empty).
 
-**Behind a proxy:** edit `.proxy.env` directly:
+**Behind a proxy:** edit `.proxy.env` directly. After adding credentials, `git status` will show the file as `modified` — this is expected. Do not stage or commit those changes (see [File security](#file-security) below).
 
 ```env title=".proxy.env"
 HTTPS_PROXY=http://<proxy-host>:<port>
@@ -57,8 +57,23 @@ The `NO_PROXY` list ensures that traffic between muvee's own services is never r
 
 ## File security
 
-`.proxy.env` is listed in `.gitignore` and will not be committed. The example template (`.proxy.env.example`) is committed and safe to share — it contains no real credentials.
+`.proxy.env` is tracked in git as an empty file, so it is present immediately after `git clone` and is safe to share in that state. Once you add real proxy credentials, your local edits will appear as `modified` in `git status` — **do not stage or commit those changes**.
+
+To prevent accidental commits on machines with real credentials configured:
+
+```bash
+git update-index --skip-worktree .proxy.env
+```
+
+The annotated reference template is in `.proxy.env.example`.
 
 ## Multi-node deployments
 
-For multi-node setups (`docker-compose.agent-builder.yml`), the same `.proxy.env` approach applies. Place `.proxy.env` alongside the compose file on each agent node and follow the same setup steps.
+For multi-node setups (`docker-compose.agent-builder.yml`), the same `.proxy.env` approach applies:
+
+- **If you `git clone` the repo on each agent node**: the empty `.proxy.env` is already there — edit it to configure proxy settings if needed.
+- **If you ship only the compose file to the node** (e.g., via `scp`): create an empty `.proxy.env` alongside it first — it is required by `env_file:` even when no proxy is used:
+
+  ```bash
+  touch .proxy.env
+  ```
