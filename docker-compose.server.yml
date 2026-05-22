@@ -5,9 +5,7 @@
 #   cp .env.server.example .env   # then edit .env
 #   # Generate registry credentials (run once):
 #   docker run --entrypoint htpasswd httpd:2 -Bbn <user> <password> > registry/htpasswd
-#   # Proxy (required — create empty if no proxy needed, or copy template to configure):
-#   touch .proxy.env                          # no proxy
-#   cp .proxy.env.example .proxy.env          # with proxy — then edit .proxy.env
+#   # Proxy: edit .proxy.env to configure (empty = no proxy, already present in repo)
 #   docker compose -f docker-compose.server.yml up -d
 #
 # Then register worker nodes by following the agent setup guide in README.md.

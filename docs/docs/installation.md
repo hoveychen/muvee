@@ -21,9 +21,8 @@ cp .env.example .env
 docker run --entrypoint htpasswd httpd:2 -Bbn \
   "$REGISTRY_USER" "$REGISTRY_PASSWORD" > registry/htpasswd
 
-# Proxy config (always required — touch if no proxy, or copy template if behind proxy)
-touch .proxy.env                   # no proxy
-# cp .proxy.env.example .proxy.env # behind proxy — then edit .proxy.env
+# Proxy: .proxy.env is already in the repo (empty = no proxy).
+# If you need a proxy, edit .proxy.env — see docs/proxy.md for details.
 
 # Standalone — starts server + agents on this machine (default, recommended)
 docker compose up -d

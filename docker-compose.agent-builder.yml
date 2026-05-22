@@ -2,9 +2,7 @@
 #
 # Usage:
 #   cp .env.agent.example .env   # then edit .env
-#   # Proxy (required — create empty if no proxy needed, or copy template to configure):
-#   touch .proxy.env                          # no proxy
-#   cp .proxy.env.example .proxy.env          # with proxy — then edit .proxy.env
+#   # Proxy: edit .proxy.env to configure (empty = no proxy, already present in repo)
 #   docker compose -f docker-compose.agent-builder.yml up -d
 
 services:
