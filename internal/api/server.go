@@ -244,21 +244,29 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	base := strings.ToLower(s.baseDomain)
-	var prefix string
+	var p *store.Project
 	switch {
 	case base != "" && strings.HasSuffix(host, "."+base):
-		prefix = strings.TrimSuffix(host, "."+base)
+		prefix := strings.TrimSuffix(host, "."+base)
+		var err error
+		p, err = s.store.GetProjectByDomainPrefix(r.Context(), prefix)
+		if err != nil {
+			jsonErr(w, err, http.StatusInternalServerError)
+			return
+		}
 	case host == base:
 		jsonErr(w, fmt.Errorf("apex host carries no project"), http.StatusNotFound)
 		return
 	default:
-		jsonErr(w, fmt.Errorf("host %q is not under base domain", host), http.StatusBadRequest)
-		return
-	}
-	p, err := s.store.GetProjectByDomainPrefix(r.Context(), prefix)
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
+		// Not under the platform base_domain — could still be a custom-domain
+		// alias attached to a project. project_aliases enforces lowercase, and
+		// `host` is already lowercased above.
+		var err error
+		p, err = s.store.GetProjectByAliasHost(r.Context(), host)
+		if err != nil {
+			jsonErr(w, err, http.StatusInternalServerError)
+			return
+		}
 	}
 	if p == nil {
 		jsonErr(w, nil, http.StatusNotFound)
@@ -710,6 +718,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/projects/{id}/invitation-links", s.requireAuthorized(s.createProjectInvitationLink))
 		r.Delete("/api/projects/{id}/invitation-links/{linkId}", s.requireAuthorized(s.deleteProjectInvitationLink))
 		r.Get("/api/projects/{id}/invitation-links/{linkId}/uses", s.listProjectInvitationLinkUses)
+		r.Get("/api/projects/{id}/aliases", s.listProjectAliases)
+		r.Post("/api/projects/{id}/aliases", s.requireAuthorized(s.createProjectAlias))
+		r.Delete("/api/projects/{id}/aliases/{aliasId}", s.requireAuthorized(s.deleteProjectAlias))
 		r.Get("/api/projects/{id}/visits", s.listProjectVisits)
 		r.Get("/api/projects/{id}/access-requests", s.listProjectAccessRequests)
 		r.Post("/api/projects/{id}/access-requests", s.createAccessRequest)
