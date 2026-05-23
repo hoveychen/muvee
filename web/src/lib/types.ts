@@ -396,6 +396,13 @@ export interface InvitationLinkUse {
   avatar_url?: string
 }
 
+export interface ProjectAlias {
+  id: string
+  project_id: string
+  host: string
+  created_at: string
+}
+
 export type HealthStatus = 'ok' | 'warning' | 'error'
 
 export interface HealthCheck {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectAlias, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
@@ -811,6 +811,10 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
             </p>
           </div>
         </>
+      ))}
+
+      {form.id && renderSection('aliases', 'Custom domains', (
+        <ProjectAliasesPanel projectId={form.id} />
       ))}
 
       {!isTunnelType && renderSection('source', t('projectDetail.config.sections.source'), (
@@ -1925,6 +1929,126 @@ function ProjectInvitationLinksPanel({ projectId, disabled, domainPrefix, baseDo
               </li>
             )
           })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function ProjectAliasesPanel({ projectId }: { projectId: string }) {
+  const [aliases, setAliases] = useState<ProjectAlias[]>([])
+  const [host, setHost] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.projects.aliases(projectId).then(setAliases).catch(e => setError(e.message))
+  }, [projectId])
+
+  const handleAdd = async () => {
+    const trimmed = host.trim().toLowerCase()
+    if (!trimmed) return
+    setBusy(true)
+    setError(null)
+    try {
+      const created = await api.projects.addAlias(projectId, trimmed)
+      setAliases(prev => [created, ...prev])
+      setHost('')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRemove = async (aliasId: string) => {
+    if (!confirm('Remove this custom domain? Visitors using it will get a connection error until DNS is repointed.')) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.projects.deleteAlias(projectId, aliasId)
+      setAliases(prev => prev.filter(a => a.id !== aliasId))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
+        Attach extra hostnames that route to this same project. Each host needs DNS pointing at this server: a subdomain (e.g. <code>app.example.com</code>) can use a CNAME to the project's built-in subdomain, but an apex domain (e.g. <code>example.com</code>) must use an A record to the server IP. A Let's Encrypt certificate is issued automatically on the first request after DNS resolves. Sign-in state is not shared between different hostnames — visitors will need to sign in once per host.
+      </p>
+
+      <div className="flex gap-2" style={{ marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        <input
+          type="text"
+          value={host}
+          onChange={e => setHost(e.target.value)}
+          placeholder="app.example.com"
+          className="form-input"
+          style={{ flex: '1 1 220px', minWidth: 0, fontSize: '0.875rem', fontFamily: 'monospace' }}
+          disabled={busy}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              void handleAdd()
+            }
+          }}
+        />
+        <button
+          type="button"
+          onClick={handleAdd}
+          className="btn-primary"
+          style={{ fontSize: '0.875rem', padding: '0.4rem 0.9rem' }}
+          disabled={busy || host.trim() === ''}
+        >
+          <Plus size={14} /> Add domain
+        </button>
+      </div>
+
+      {error && (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginBottom: '0.5rem' }}>{error}</p>
+      )}
+
+      {aliases.length === 0 ? (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', fontStyle: 'italic' }}>
+          No custom domains yet.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {aliases.map(a => (
+            <li key={a.id} style={{
+              padding: '0.55rem 0.7rem',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              marginBottom: '0.4rem',
+              background: 'var(--bg-elevated)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '0.5rem',
+            }}>
+              <a
+                href={`https://${a.host}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontFamily: MONO, fontSize: '0.875rem', textDecoration: 'none', color: 'var(--fg-primary)' }}
+              >
+                {a.host}
+              </a>
+              <button
+                type="button"
+                onClick={() => handleRemove(a.id)}
+                className="btn-secondary"
+                style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
+                disabled={busy}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
         </ul>
       )}
     </div>
