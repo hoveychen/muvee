@@ -237,25 +237,24 @@ func (s *Service) EnsureIdentityFromOAuth(ctx context.Context, providerName, pro
 // "invite" and the email is neither white-listed, link-bearing, nor an
 // existing account.
 //
+// Project-scoped invitation links short-circuit the platform-level policy
+// entirely: they admit a downstream-only user into a single project, so the
+// platform's ALLOWED_DOMAINS gate and the platform_members upsert do not
+// apply. The caller still gets back a *User (sans *PlatformMember) so the
+// upstream upsert endpoint can respond with the same JSON shape.
+//
 // providerName is consulted only to skip the domain check for org-scoped
 // providers; it falls back to a hard-coded list when the provider is not
 // registered locally so authservice-only providers still get the right
 // treatment.
 func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (*store.User, *store.PlatformMember, error) {
-	if !isOrgScopedProvider(s.providers, providerName) {
-		if err := s.checkDomain(email); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	mode := s.accessMode(ctx)
-	_, isAdmin := s.adminEmails[email]
-
-	// Resolve the invite token (if any) up front, regardless of platform
-	// access_mode. The token may be a platform-scoped single-use link OR a
-	// project-scoped multi-use link; both flavours bypass the white-list
-	// when present, and project links also need to be replayed against
-	// project_access_users below.
+	// Resolve the invite token BEFORE any platform-level gate so a
+	// project-scoped link can short-circuit ALLOWED_DOMAINS / invite-mode
+	// checks that don't apply to downstream-only invitees. The token may be
+	// a platform-scoped single-use link OR a project-scoped multi-use link;
+	// only the project-scoped flavour takes the early-return below — the
+	// platform-scoped one still threads through the standard checks since
+	// it does grant platform access.
 	var consumeLink *store.InvitationLink
 	if inviteToken != "" {
 		link, err := s.store.GetValidInvitationLinkByHash(ctx, hashInviteToken(inviteToken), time.Now())
@@ -264,6 +263,35 @@ func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email,
 		}
 		consumeLink = link
 	}
+
+	// Project-scoped invite token: write the identity row + invitation_link_uses
+	// + project_access_users and return. The user becomes a downstream-project
+	// member only; we intentionally do NOT create a platform_members row, do
+	// NOT enforce ALLOWED_DOMAINS, and do NOT consult access_mode — those are
+	// platform-side admission rules that have nothing to do with letting an
+	// outsider into a single project they were invited to.
+	if consumeLink != nil && consumeLink.ProjectID != nil {
+		user, err := s.EnsureIdentity(ctx, email, name, avatarURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := s.store.RecordInvitationLinkUse(ctx, consumeLink.ID, user.ID); err != nil {
+			return nil, nil, fmt.Errorf("record invitation link use: %w", err)
+		}
+		if err := s.store.AddProjectAccessUser(ctx, *consumeLink.ProjectID, user.ID, consumeLink.InvitedBy); err != nil {
+			return nil, nil, fmt.Errorf("add project access user: %w", err)
+		}
+		return user, nil, nil
+	}
+
+	if !isOrgScopedProvider(s.providers, providerName) {
+		if err := s.checkDomain(email); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	mode := s.accessMode(ctx)
+	_, isAdmin := s.adminEmails[email]
 
 	// Pre-flight checks for invite mode: figure out whether this email is
 	// invited (white-list), holds a valid link, or — for already existing
@@ -340,26 +368,13 @@ func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email,
 		pm.Authorized = true
 	}
 
+	// Platform-scoped single-use link consumption. Project-scoped links are
+	// already handled by the early-return at the top of the function, so
+	// anything reaching this point is platform-scoped. Best-effort: a
+	// concurrent login may have already consumed the link; we've already
+	// promoted the platform member above, so swallow the error.
 	if consumeLink != nil {
-		if consumeLink.ProjectID == nil {
-			// Platform-scoped single-use link. Best-effort: a concurrent login
-			// may have already consumed it; we've already promoted the
-			// platform member above, so swallow the error.
-			_ = s.store.ConsumeInvitationLink(ctx, consumeLink.ID, user.ID)
-		} else {
-			// Project-scoped multi-use link. Record this consumption and
-			// upsert (project, user) into project_access_users so the
-			// downstream-service ForwardAuth check sees them. The two writes
-			// are independently idempotent (UNIQUE constraints absorb
-			// concurrent retries), so errors are best-effort logged via the
-			// returned error rather than blocking sign-in.
-			if err := s.store.RecordInvitationLinkUse(ctx, consumeLink.ID, user.ID); err != nil {
-				return nil, nil, fmt.Errorf("record invitation link use: %w", err)
-			}
-			if err := s.store.AddProjectAccessUser(ctx, *consumeLink.ProjectID, user.ID, consumeLink.InvitedBy); err != nil {
-				return nil, nil, fmt.Errorf("add project access user: %w", err)
-			}
-		}
+		_ = s.store.ConsumeInvitationLink(ctx, consumeLink.ID, user.ID)
 	}
 
 	// Mirror platform_member values back onto the legacy user.Role /
