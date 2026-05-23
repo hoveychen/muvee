@@ -1940,10 +1940,24 @@ function ProjectAliasesPanel({ projectId }: { projectId: string }) {
   const [host, setHost] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [baseDomain, setBaseDomain] = useState('')
+  const [publicIPs, setPublicIPs] = useState<string[]>([])
+  const [project, setProject] = useState<Project | null>(null)
+  const [showGuide, setShowGuide] = useState(false)
+  const [showCloudflare, setShowCloudflare] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
 
   useEffect(() => {
     api.projects.aliases(projectId).then(setAliases).catch(e => setError(e.message))
+    api.runtime.config().then(cfg => {
+      setBaseDomain(cfg.base_domain || '')
+      setPublicIPs(cfg.public_ips || [])
+    }).catch(() => {})
+    api.projects.get(projectId).then(setProject).catch(() => {})
   }, [projectId])
+
+  const projectHost = project?.domain_prefix && baseDomain ? `${project.domain_prefix}.${baseDomain}` : ''
+  const primaryIP = publicIPs.find(ip => ip.includes('.')) || publicIPs[0] || ''
 
   const handleAdd = async () => {
     const trimmed = host.trim().toLowerCase()
@@ -1975,11 +1989,140 @@ function ProjectAliasesPanel({ projectId }: { projectId: string }) {
     }
   }
 
+  const handleCopy = async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(label)
+      setTimeout(() => setCopied(c => (c === label ? null : c)), 1500)
+    } catch {
+      // ignore
+    }
+  }
+
+  const copyableValue = (label: string, value: string) => (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '0.35rem',
+      padding: '0.15rem 0.45rem',
+      borderRadius: '4px',
+      background: 'var(--bg-hover)',
+      fontFamily: MONO,
+      fontSize: '0.8125rem',
+    }}>
+      <code>{value}</code>
+      <button
+        type="button"
+        onClick={() => handleCopy(label, value)}
+        title="Copy to clipboard"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--fg-muted)' }}
+      >
+        {copied === label ? <Check size={12} /> : <Copy size={12} />}
+      </button>
+    </span>
+  )
+
   return (
     <div>
       <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
-        Attach extra hostnames that route to this same project. Each host needs DNS pointing at this server: a subdomain (e.g. <code>app.example.com</code>) can use a CNAME to the project's built-in subdomain, but an apex domain (e.g. <code>example.com</code>) must use an A record to the server IP. A Let's Encrypt certificate is issued automatically on the first request after DNS resolves. Sign-in state is not shared between different hostnames — visitors will need to sign in once per host.
+        Attach extra hostnames that route to this same project. Each host needs DNS pointing at this server, then a Let's Encrypt certificate is issued automatically on the first request after DNS resolves. Sign-in state is not shared between different hostnames — visitors sign in once per host.
       </p>
+
+      <button
+        type="button"
+        onClick={() => setShowGuide(v => !v)}
+        className="btn-secondary"
+        style={{ fontSize: '0.8125rem', padding: '0.35rem 0.7rem', marginBottom: '0.75rem' }}
+      >
+        {showGuide ? <ChevronUp size={14} /> : <ChevronDown size={14} />} How to set up DNS for a new domain
+      </button>
+
+      {showGuide && (
+        <div style={{
+          padding: '0.85rem',
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          marginBottom: '0.85rem',
+          background: 'var(--bg-elevated)',
+          fontSize: '0.8125rem',
+          lineHeight: 1.6,
+        }}>
+          <p style={{ fontWeight: 600, marginBottom: '0.4rem' }}>Subdomain (e.g. <code>app.example.com</code>) — easiest path</p>
+          <p style={{ marginBottom: '0.4rem', color: 'var(--fg-muted)' }}>
+            At your DNS provider, add a single CNAME record:
+          </p>
+          <ul style={{ margin: '0 0 0.6rem 1.2rem', padding: 0, color: 'var(--fg-muted)' }}>
+            <li>Type: <code>CNAME</code></li>
+            <li>Name / host: the part before your apex (e.g. <code>app</code> for <code>app.example.com</code>)</li>
+            <li>Target / value: {projectHost ? copyableValue('cname-target', projectHost) : <code>{'<this project\'s built-in subdomain>'}</code>}</li>
+            <li>TTL: leave default (Auto / 300s is fine)</li>
+          </ul>
+
+          <p style={{ fontWeight: 600, margin: '0.85rem 0 0.4rem' }}>Apex / naked domain (e.g. <code>example.com</code> with nothing before it)</p>
+          <p style={{ marginBottom: '0.4rem', color: 'var(--fg-muted)' }}>
+            DNS forbids a CNAME on the apex, so use an A record pointing at the platform IP:
+          </p>
+          <ul style={{ margin: '0 0 0.6rem 1.2rem', padding: 0, color: 'var(--fg-muted)' }}>
+            <li>Type: <code>A</code></li>
+            <li>Name / host: <code>@</code> (i.e. the apex itself)</li>
+            <li>Target / value: {primaryIP ? copyableValue('apex-a', primaryIP) : <code>{'<resolving…>'}</code>}</li>
+            {publicIPs.length > 1 && (
+              <li style={{ fontStyle: 'italic' }}>
+                The platform has multiple addresses ({publicIPs.join(', ')}). Any one works; add one A record per address if you want redundancy.
+              </li>
+            )}
+          </ul>
+          <p style={{ color: 'var(--fg-muted)', marginBottom: '0.4rem' }}>
+            Some DNS providers offer an <code>ALIAS</code> or <code>ANAME</code> record type at the apex — if yours does, you can use it instead and point it at {projectHost ? <code>{projectHost}</code> : <code>{'<this project\'s built-in subdomain>'}</code>}; the provider will automatically follow the CNAME chain for you.
+          </p>
+
+          <p style={{ fontWeight: 600, margin: '0.85rem 0 0.4rem' }}>After saving the DNS record</p>
+          <ul style={{ margin: 0, padding: '0 0 0 1.2rem', color: 'var(--fg-muted)' }}>
+            <li>Add the host below — Traefik picks it up within ~5 seconds.</li>
+            <li>The first HTTPS request triggers a Let's Encrypt HTTP-01 challenge; expect a few seconds of "your connection is not private" while the cert is being issued, then it sticks.</li>
+            <li>If you hit a TLS error that persists past ~30 seconds, the most common cause is that DNS hasn't propagated yet. Check with <code>dig +short {'<your-host>'}</code>; it should return {primaryIP ? <code>{primaryIP}</code> : 'the IP above'} or this project's CNAME target.</li>
+          </ul>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setShowCloudflare(v => !v)}
+        className="btn-secondary"
+        style={{ fontSize: '0.8125rem', padding: '0.35rem 0.7rem', marginBottom: '0.75rem' }}
+      >
+        {showCloudflare ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Cloudflare quickstart
+      </button>
+
+      {showCloudflare && (
+        <div style={{
+          padding: '0.85rem',
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          marginBottom: '0.85rem',
+          background: 'var(--bg-elevated)',
+          fontSize: '0.8125rem',
+          lineHeight: 1.6,
+        }}>
+          <p style={{ marginBottom: '0.4rem' }}>
+            Cloudflare supports CNAME flattening, so you can use one record type for both subdomains and the apex. Steps inside the Cloudflare dashboard:
+          </p>
+          <ol style={{ margin: '0 0 0.6rem 1.2rem', padding: 0, color: 'var(--fg-muted)' }}>
+            <li>Open <strong>DNS → Records</strong> for your zone.</li>
+            <li>Click <strong>Add record</strong>. Type: <code>CNAME</code>, Name: <code>@</code> for apex or e.g. <code>app</code> for a subdomain, Target: {projectHost ? copyableValue('cf-target', projectHost) : <code>{'<this project\'s built-in subdomain>'}</code>}.</li>
+            <li>Proxy status: either is fine, but they have different trade-offs:
+              <ul style={{ margin: '0.25rem 0 0.25rem 1.2rem', padding: 0 }}>
+                <li><strong>DNS only</strong> (gray cloud) — simplest. The browser hits this platform directly with the Let's Encrypt cert we issue. Recommended unless you need Cloudflare's CDN/WAF.</li>
+                <li><strong>Proxied</strong> (orange cloud) — Cloudflare terminates TLS with its own cert. Go to <strong>SSL/TLS → Overview</strong> and set the encryption mode to <strong>Full (strict)</strong> so Cloudflare validates the origin cert against the public CA chain. <code>Flexible</code> will cause redirect loops; <code>Full</code> (non-strict) leaves the origin link unverified.</li>
+              </ul>
+            </li>
+            <li>Save. Cloudflare's edge picks the record up within seconds.</li>
+          </ol>
+          <p style={{ color: 'var(--fg-muted)' }}>
+            If you turn on the orange-cloud proxy <em>and</em> use <strong>Always Use HTTPS</strong> at Cloudflare, leave Traefik's HTTP→HTTPS redirect intact — both layers redirect cleanly. If you also enable <strong>HSTS</strong> at Cloudflare, do it after you've confirmed certs are working, since browsers will then refuse downgrades for the configured max-age.
+          </p>
+        </div>
+      )}
 
       <div className="flex gap-2" style={{ marginBottom: '0.75rem', flexWrap: 'wrap' }}>
         <input

@@ -173,6 +173,7 @@ export interface Dataset {
 export interface RuntimeConfig {
   dataset_nfs_base_path: string
   base_domain: string
+  public_ips?: string[]
   secrets_enabled: boolean
   server_version: string
 }

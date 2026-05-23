@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -72,6 +73,11 @@ type Server struct {
 	// recorder, so tests that construct a Server without StartBackgroundWorkers
 	// don't have to bother wiring this up.
 	visits *visitRecorder
+
+	// baseIPCache memoises DNS resolution of baseDomain (used by
+	// handleRuntimeConfig to surface the platform's public IPs to the
+	// Custom domains panel so users know what to point apex A records at).
+	baseIPCache baseDomainIPCache
 }
 
 type ServerConfig struct {
@@ -891,10 +897,49 @@ func (s *Server) handleListDownstreamProviders(w http.ResponseWriter, r *http.Re
 	jsonOK(w, mergeDownstreamProviders(s.auth.ListProviders(), cfg))
 }
 
+// baseDomainIPCache memoises the DNS resolution of baseDomain so the runtime
+// config endpoint doesn't issue a fresh lookup on every page load. 60s is
+// long enough to absorb a burst of dashboard visitors without staleness that
+// matters — operators updating DNS at the platform level are minutes-scale
+// events, not seconds-scale.
+type baseDomainIPCache struct {
+	mu       sync.Mutex
+	at       time.Time
+	resolved []string
+}
+
+func (c *baseDomainIPCache) get(baseDomain string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if time.Since(c.at) < 60*time.Second && c.resolved != nil {
+		return c.resolved
+	}
+	ips := resolveBaseDomainIPs(baseDomain)
+	c.resolved = ips
+	c.at = time.Now()
+	return ips
+}
+
+func resolveBaseDomainIPs(baseDomain string) []string {
+	baseDomain = strings.TrimSpace(baseDomain)
+	if baseDomain == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, baseDomain)
+	if err != nil {
+		return nil
+	}
+	sort.Strings(addrs)
+	return addrs
+}
+
 func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"dataset_nfs_base_path": s.datasetNFSBasePath,
 		"base_domain":           s.baseDomain,
+		"public_ips":            s.baseIPCache.get(s.baseDomain),
 		"secrets_enabled":       s.store.SecretsEnabled(),
 		"server_version":        s.serverVersion,
 	})
