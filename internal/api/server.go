@@ -3924,6 +3924,19 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Pre-fetch every project alias once and group by owning project so each
+	// deployment loop iteration can emit its alias routers without an extra DB
+	// roundtrip.
+	allAliases, err := s.store.ListAllProjectAliases(r.Context())
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	aliasesByProject := make(map[uuid.UUID][]*store.ProjectAlias, len(allAliases))
+	for _, a := range allAliases {
+		aliasesByProject[a.ProjectID] = append(aliasesByProject[a.ProjectID], a)
+	}
+
 	for _, dep := range deployments {
 		name := dep.DomainPrefix
 		host := fmt.Sprintf("%s.%s", dep.DomainPrefix, s.baseDomain)
@@ -3987,6 +4000,33 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			LoadBalancer: traefikLB{
 				Servers: []traefikServer{{URL: backendURL}},
 			},
+		}
+
+		// Emit one extra router per custom-domain alias attached to this
+		// deployment's project. Aliases share the project's backend service
+		// (defined above) and forward-auth middleware (mwName, defined inside
+		// the needsForwardAuth block — captured here by reading the primary
+		// router's Middlewares slice so we apply the same auth chain).
+		for i, a := range aliasesByProject[dep.ProjectID] {
+			aliasName := fmt.Sprintf("%s-alias-%d", name, i)
+			aliasTLS := &traefikTLS{
+				CertResolver: "letsencrypt",
+				Domains:      []traefikTLSDomain{{Main: a.Host}},
+			}
+			aliasRouter := traefikRouter{
+				Rule:        fmt.Sprintf("Host(`%s`)", a.Host),
+				EntryPoints: []string{"websecure"},
+				Service:     name,
+				TLS:         aliasTLS,
+				Middlewares: append([]string(nil), httpsRouter.Middlewares...),
+			}
+			if needsForwardAuth && dep.AuthBypassPaths != "" {
+				addBypassRouters(&cfg, aliasName, a.Host, aliasTLS, dep.AuthBypassPaths)
+			}
+			addDeviceFlowRouter(&cfg, aliasName, a.Host, aliasTLS)
+			// httpsRouter already had embed-bridge attached above; aliasRouter
+			// inherited it via the Middlewares copy, so no need to attach again.
+			cfg.HTTP.Routers[aliasName] = aliasRouter
 		}
 	}
 
