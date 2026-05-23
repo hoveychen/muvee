@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -72,6 +73,11 @@ type Server struct {
 	// recorder, so tests that construct a Server without StartBackgroundWorkers
 	// don't have to bother wiring this up.
 	visits *visitRecorder
+
+	// baseIPCache memoises DNS resolution of baseDomain (used by
+	// handleRuntimeConfig to surface the platform's public IPs to the
+	// Custom domains panel so users know what to point apex A records at).
+	baseIPCache baseDomainIPCache
 }
 
 type ServerConfig struct {
@@ -244,21 +250,29 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	base := strings.ToLower(s.baseDomain)
-	var prefix string
+	var p *store.Project
 	switch {
 	case base != "" && strings.HasSuffix(host, "."+base):
-		prefix = strings.TrimSuffix(host, "."+base)
+		prefix := strings.TrimSuffix(host, "."+base)
+		var err error
+		p, err = s.store.GetProjectByDomainPrefix(r.Context(), prefix)
+		if err != nil {
+			jsonErr(w, err, http.StatusInternalServerError)
+			return
+		}
 	case host == base:
 		jsonErr(w, fmt.Errorf("apex host carries no project"), http.StatusNotFound)
 		return
 	default:
-		jsonErr(w, fmt.Errorf("host %q is not under base domain", host), http.StatusBadRequest)
-		return
-	}
-	p, err := s.store.GetProjectByDomainPrefix(r.Context(), prefix)
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
+		// Not under the platform base_domain — could still be a custom-domain
+		// alias attached to a project. project_aliases enforces lowercase, and
+		// `host` is already lowercased above.
+		var err error
+		p, err = s.store.GetProjectByAliasHost(r.Context(), host)
+		if err != nil {
+			jsonErr(w, err, http.StatusInternalServerError)
+			return
+		}
 	}
 	if p == nil {
 		jsonErr(w, nil, http.StatusNotFound)
@@ -710,6 +724,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/projects/{id}/invitation-links", s.requireAuthorized(s.createProjectInvitationLink))
 		r.Delete("/api/projects/{id}/invitation-links/{linkId}", s.requireAuthorized(s.deleteProjectInvitationLink))
 		r.Get("/api/projects/{id}/invitation-links/{linkId}/uses", s.listProjectInvitationLinkUses)
+		r.Get("/api/projects/{id}/aliases", s.listProjectAliases)
+		r.Post("/api/projects/{id}/aliases", s.requireAuthorized(s.createProjectAlias))
+		r.Delete("/api/projects/{id}/aliases/{aliasId}", s.requireAuthorized(s.deleteProjectAlias))
 		r.Get("/api/projects/{id}/visits", s.listProjectVisits)
 		r.Get("/api/projects/{id}/access-requests", s.listProjectAccessRequests)
 		r.Post("/api/projects/{id}/access-requests", s.createAccessRequest)
@@ -880,10 +897,49 @@ func (s *Server) handleListDownstreamProviders(w http.ResponseWriter, r *http.Re
 	jsonOK(w, mergeDownstreamProviders(s.auth.ListProviders(), cfg))
 }
 
+// baseDomainIPCache memoises the DNS resolution of baseDomain so the runtime
+// config endpoint doesn't issue a fresh lookup on every page load. 60s is
+// long enough to absorb a burst of dashboard visitors without staleness that
+// matters — operators updating DNS at the platform level are minutes-scale
+// events, not seconds-scale.
+type baseDomainIPCache struct {
+	mu       sync.Mutex
+	at       time.Time
+	resolved []string
+}
+
+func (c *baseDomainIPCache) get(baseDomain string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if time.Since(c.at) < 60*time.Second && c.resolved != nil {
+		return c.resolved
+	}
+	ips := resolveBaseDomainIPs(baseDomain)
+	c.resolved = ips
+	c.at = time.Now()
+	return ips
+}
+
+func resolveBaseDomainIPs(baseDomain string) []string {
+	baseDomain = strings.TrimSpace(baseDomain)
+	if baseDomain == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, baseDomain)
+	if err != nil {
+		return nil
+	}
+	sort.Strings(addrs)
+	return addrs
+}
+
 func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"dataset_nfs_base_path": s.datasetNFSBasePath,
 		"base_domain":           s.baseDomain,
+		"public_ips":            s.baseIPCache.get(s.baseDomain),
 		"secrets_enabled":       s.store.SecretsEnabled(),
 		"server_version":        s.serverVersion,
 	})
@@ -3913,6 +3969,19 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Pre-fetch every project alias once and group by owning project so each
+	// deployment loop iteration can emit its alias routers without an extra DB
+	// roundtrip.
+	allAliases, err := s.store.ListAllProjectAliases(r.Context())
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	aliasesByProject := make(map[uuid.UUID][]*store.ProjectAlias, len(allAliases))
+	for _, a := range allAliases {
+		aliasesByProject[a.ProjectID] = append(aliasesByProject[a.ProjectID], a)
+	}
+
 	for _, dep := range deployments {
 		name := dep.DomainPrefix
 		host := fmt.Sprintf("%s.%s", dep.DomainPrefix, s.baseDomain)
@@ -3976,6 +4045,33 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			LoadBalancer: traefikLB{
 				Servers: []traefikServer{{URL: backendURL}},
 			},
+		}
+
+		// Emit one extra router per custom-domain alias attached to this
+		// deployment's project. Aliases share the project's backend service
+		// (defined above) and forward-auth middleware (mwName, defined inside
+		// the needsForwardAuth block — captured here by reading the primary
+		// router's Middlewares slice so we apply the same auth chain).
+		for i, a := range aliasesByProject[dep.ProjectID] {
+			aliasName := fmt.Sprintf("%s-alias-%d", name, i)
+			aliasTLS := &traefikTLS{
+				CertResolver: "letsencrypt",
+				Domains:      []traefikTLSDomain{{Main: a.Host}},
+			}
+			aliasRouter := traefikRouter{
+				Rule:        fmt.Sprintf("Host(`%s`)", a.Host),
+				EntryPoints: []string{"websecure"},
+				Service:     name,
+				TLS:         aliasTLS,
+				Middlewares: append([]string(nil), httpsRouter.Middlewares...),
+			}
+			if needsForwardAuth && dep.AuthBypassPaths != "" {
+				addBypassRouters(&cfg, aliasName, a.Host, aliasTLS, dep.AuthBypassPaths)
+			}
+			addDeviceFlowRouter(&cfg, aliasName, a.Host, aliasTLS)
+			// httpsRouter already had embed-bridge attached above; aliasRouter
+			// inherited it via the Middlewares copy, so no need to attach again.
+			cfg.HTTP.Routers[aliasName] = aliasRouter
 		}
 	}
 

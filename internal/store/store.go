@@ -2585,3 +2585,113 @@ func (s *Store) DeleteInvitationLink(ctx context.Context, id uuid.UUID) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM invitation_links WHERE id = $1`, id)
 	return err
 }
+
+// AddProjectAlias inserts a custom-domain alias for the given project. The
+// caller is responsible for normalising and validating host shape; the DB
+// CHECK enforces lowercase and UNIQUE catches cross-project collisions.
+func (s *Store) AddProjectAlias(ctx context.Context, projectID uuid.UUID, host string) (*ProjectAlias, error) {
+	var a ProjectAlias
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO project_aliases (id, project_id, host, created_at)
+		VALUES ($1, $2, $3, NOW())
+		RETURNING id, project_id, host, created_at
+	`, uuid.New(), projectID, host).Scan(&a.ID, &a.ProjectID, &a.Host, &a.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// RemoveProjectAlias deletes one alias by id. Returns nil even when no row
+// matched (idempotent for repeat clicks).
+func (s *Store) RemoveProjectAlias(ctx context.Context, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM project_aliases WHERE id = $1`, id)
+	return err
+}
+
+// ListProjectAliasesByProject returns the aliases attached to one project,
+// newest first.
+func (s *Store) ListProjectAliasesByProject(ctx context.Context, projectID uuid.UUID) ([]*ProjectAlias, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, project_id, host, created_at
+		FROM project_aliases
+		WHERE project_id = $1
+		ORDER BY created_at DESC
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*ProjectAlias, 0)
+	for rows.Next() {
+		var a ProjectAlias
+		if err := rows.Scan(&a.ID, &a.ProjectID, &a.Host, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &a)
+	}
+	return out, nil
+}
+
+// ListAllProjectAliases returns every alias paired with its owning project's
+// running-deployment-relevant fields. Used by the Traefik config generator to
+// emit one router per alias alongside the default `<prefix>.<base_domain>`
+// router, so callers don't need to issue N round-trips per deployment.
+func (s *Store) ListAllProjectAliases(ctx context.Context) ([]*ProjectAlias, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, project_id, host, created_at
+		FROM project_aliases
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*ProjectAlias, 0)
+	for rows.Next() {
+		var a ProjectAlias
+		if err := rows.Scan(&a.ID, &a.ProjectID, &a.Host, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &a)
+	}
+	return out, nil
+}
+
+// GetProjectAlias returns one alias by id (no project scoping). The caller
+// should check ProjectID against the owning project before mutating.
+func (s *Store) GetProjectAlias(ctx context.Context, id uuid.UUID) (*ProjectAlias, error) {
+	var a ProjectAlias
+	err := s.db.QueryRow(ctx, `
+		SELECT id, project_id, host, created_at
+		FROM project_aliases WHERE id = $1
+	`, id).Scan(&a.ID, &a.ProjectID, &a.Host, &a.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// GetProjectByAliasHost resolves a project by one of its alias hosts. Returns
+// (nil, nil) when no alias matches. The DB stores host lowercased, so the
+// caller must pass lowercase too.
+func (s *Store) GetProjectByAliasHost(ctx context.Context, host string) (*Project, error) {
+	var p Project
+	row := s.db.QueryRow(ctx, `
+		SELECT `+projectColumns+`
+		FROM projects p
+		JOIN project_aliases a ON a.project_id = p.id
+		WHERE a.host = $1
+	`, host)
+	err := scanProject(row, &p)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}

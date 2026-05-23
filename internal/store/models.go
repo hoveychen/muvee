@@ -595,6 +595,16 @@ type ProjectTraffic struct {
 	Referer    string    `db:"referer"      json:"referer"`
 }
 
+// ProjectAlias is an additional host name that routes to the same project as
+// the project's `<domain_prefix>.<base_domain>`. Stored lowercased; uniqueness
+// across all projects is enforced by the DB.
+type ProjectAlias struct {
+	ID        uuid.UUID `db:"id"         json:"id"`
+	ProjectID uuid.UUID `db:"project_id" json:"project_id"`
+	Host      string    `db:"host"       json:"host"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}
+
 // ContainerMetric is a single point-in-time sample of container resource usage
 // collected by the deploy agent via `docker stats --no-stream`.
 type ContainerMetric struct {

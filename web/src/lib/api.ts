@@ -111,6 +111,18 @@ export const api = {
     invitationLinkUses: (id: string, linkId: string) =>
       request<import('./types').InvitationLinkUse[]>(`/api/projects/${id}/invitation-links/${linkId}/uses`),
 
+    // Per-project custom-domain aliases. Each alias is an additional host that
+    // routes to the same backend as `<domain_prefix>.<base_domain>`.
+    aliases: (id: string) =>
+      request<import('./types').ProjectAlias[]>(`/api/projects/${id}/aliases`),
+    addAlias: (id: string, host: string) =>
+      request<import('./types').ProjectAlias>(`/api/projects/${id}/aliases`, {
+        method: 'POST',
+        body: JSON.stringify({ host }),
+      }),
+    deleteAlias: (id: string, aliasId: string) =>
+      request(`/api/projects/${id}/aliases/${aliasId}`, { method: 'DELETE' }),
+
     // Per-project visit log (recent unique visitors of the downstream service).
     visits: (id: string, limit = 100) =>
       request<import('./types').ProjectVisit[]>(`/api/projects/${id}/visits?limit=${limit}`),

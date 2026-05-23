@@ -173,6 +173,7 @@ export interface Dataset {
 export interface RuntimeConfig {
   dataset_nfs_base_path: string
   base_domain: string
+  public_ips?: string[]
   secrets_enabled: boolean
   server_version: string
 }
@@ -394,6 +395,13 @@ export interface InvitationLinkUse {
   user_email?: string
   user_name?: string
   avatar_url?: string
+}
+
+export interface ProjectAlias {
+  id: string
+  project_id: string
+  host: string
+  created_at: string
 }
 
 export type HealthStatus = 'ok' | 'warning' | 'error'
