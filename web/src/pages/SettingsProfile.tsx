@@ -53,7 +53,7 @@ export default function SettingsProfilePage() {
   const initial = (user.name || user.email || '?').charAt(0).toUpperCase()
 
   return (
-    <div style={{ padding: '1.5rem 2rem', maxWidth: '720px' }}>
+    <div style={{ maxWidth: '720px' }}>
       <h1 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>
         {t('settingsProfile.title')}
       </h1>
