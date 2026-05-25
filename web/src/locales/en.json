@@ -24,12 +24,28 @@
     "tunnels": "Tunnels",
     "users": "Users",
     "settings": "Settings",
+    "more": "More",
+    "profile": "Profile",
     "privateCloud": "private cloud",
     "logout": "Logout",
     "switchToLight": "Switch to light mode",
     "switchToDark": "Switch to dark mode",
     "switchToZh": "切换到中文",
-    "switchToEn": "Switch to English"
+    "switchToEn": "Switch to English",
+    "appearance": "Appearance",
+    "language": "Language",
+    "account": "Account",
+    "administration": "Administration"
+  },
+  "more": {
+    "heading": "More",
+    "sectionLabel": "Settings and shortcuts",
+    "themeLight": "Light mode",
+    "themeDark": "Dark mode",
+    "langLabelZh": "中文",
+    "langLabelEn": "English",
+    "signedInAs": "Signed in as",
+    "logoutConfirm": "Sign out of {{name}}?"
   },
   "common": {
     "loading": "Loading..."

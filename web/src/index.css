@@ -314,3 +314,150 @@ body {
   color: var(--fg-muted);
   border: 1px solid var(--border);
 }
+
+/* =============================================================
+ * Responsive layout primitives
+ * Mobile breakpoint: 768px (anything under is "mobile")
+ * ============================================================= */
+
+/* Sidebar is the default desktop chrome — hidden under 768px. */
+.app-sidebar { display: flex; }
+@media (max-width: 767px) {
+  .app-sidebar { display: none !important; }
+}
+
+/* Mobile-only chrome: top app bar + bottom tab bar.
+ * Hidden by default; shown when the viewport drops below 768px. */
+.mobile-topbar,
+.mobile-tabbar { display: none; }
+@media (max-width: 767px) {
+  .mobile-topbar { display: flex; }
+  .mobile-tabbar { display: flex; }
+}
+
+/* Top app bar */
+.mobile-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--sidebar-border);
+  min-height: 52px;
+}
+
+/* Bottom tab bar */
+.mobile-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  align-items: stretch;
+  justify-content: space-around;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--sidebar-border);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.mobile-tabbar a {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 4px 6px;
+  color: var(--sidebar-fg);
+  text-decoration: none;
+  font-size: 0.6875rem;
+  position: relative;
+  min-width: 0;
+  transition: color 120ms;
+}
+.mobile-tabbar a.active {
+  color: var(--sidebar-fg-active);
+}
+.mobile-tabbar a span.label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-tabbar a span.badge-dot {
+  position: absolute;
+  top: 4px;
+  right: calc(50% - 16px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-coral, var(--danger));
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Main content area
+ * Desktop keeps the historical 32px padding + 1200px cap.
+ * Mobile drops to 16px padding and reserves space at the bottom
+ * so the tab bar never covers content. */
+.app-main {
+  flex: 1;
+  min-width: 0;
+  padding: 32px;
+  max-width: 1200px;
+}
+@media (max-width: 767px) {
+  .app-main {
+    padding: 16px;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0));
+    max-width: 100%;
+  }
+}
+
+/* Page header — on mobile, allow the action button(s) to wrap below
+ * the title instead of squeezing the title. */
+@media (max-width: 767px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 12px;
+  }
+  .page-header .page-title { font-size: 1.25rem; }
+}
+
+/* Tables — keep them readable on narrow screens by allowing horizontal
+ * scroll inside their container instead of breaking the layout. */
+@media (max-width: 767px) {
+  .table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .table-container table { min-width: 640px; }
+}
+
+/* Card grids — components opting in via .card-grid get auto-fit on
+ * mobile so two-column layouts collapse to one column gracefully. */
+.card-grid {
+  display: grid;
+  gap: 16px;
+}
+@media (max-width: 767px) {
+  .card-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Helper to hide an element only on mobile or only on desktop. */
+@media (max-width: 767px) {
+  .hide-on-mobile { display: none !important; }
+}
+@media (min-width: 768px) {
+  .hide-on-desktop { display: none !important; }
+}
