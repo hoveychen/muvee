@@ -65,8 +65,8 @@ export default function PortalPage() {
   return (
     <div className="page-enter">
       {/* Hero */}
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.3 }}>
+      <div className="portal-hero" style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontWeight: 700, color: 'var(--fg-primary)', lineHeight: 1.3 }}>
           {t('portal.heading', { name: siteName })}
         </h1>
         <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', marginTop: '6px', lineHeight: 1.6 }}>
@@ -126,7 +126,7 @@ export default function PortalPage() {
           {t('portal.noResults')}
         </div>
       ) : (
-        <div style={{
+        <div className="portal-app-grid" style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
           gap: '16px',

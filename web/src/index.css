@@ -470,3 +470,19 @@ body {
   }
   .tokens-create-grid > * { width: 100%; }
 }
+
+/* Portal hero — smaller heading on mobile so it doesn't dwarf the rest of
+ * the page; on desktop keep the original 1.75rem. */
+.portal-hero h1 { font-size: 1.75rem; }
+@media (max-width: 767px) {
+  .portal-hero h1 { font-size: 1.375rem; }
+}
+
+/* Portal app card grid — tighter minmax on mobile to fit two cards per row
+ * comfortably even on a 360px screen. */
+@media (max-width: 767px) {
+  .portal-app-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+    gap: 12px !important;
+  }
+}
