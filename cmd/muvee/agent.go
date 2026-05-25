@@ -562,7 +562,7 @@ func runEnvInspect(ctx context.Context, task *store.Task) (string, error) {
 	if domainPrefix == "" {
 		return "", fmt.Errorf("env task missing domain_prefix")
 	}
-	containerName := "muvee-" + domainPrefix
+	containerName := resolveContainerName(ctx, domainPrefix)
 	out, err := exec.CommandContext(ctx, "docker", "inspect",
 		"--format", "{{json .Config.Env}}", containerName).Output()
 	if err != nil {
@@ -597,7 +597,7 @@ func runDescribe(ctx context.Context, task *store.Task) (string, error) {
 	if domainPrefix == "" {
 		return "", fmt.Errorf("describe task missing domain_prefix")
 	}
-	containerName := "muvee-" + domainPrefix
+	containerName := resolveContainerName(ctx, domainPrefix)
 	out, err := exec.CommandContext(ctx, "docker", "inspect",
 		"--format", "{{json .}}", containerName).Output()
 	if err != nil {
@@ -783,6 +783,26 @@ func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 	if resp != nil {
 		resp.Body.Close()
 	}
+}
+
+// resolveContainerName returns the actual Docker container name for a muvee
+// domain prefix. For regular projects the container is always named
+// "muvee-<prefix>". For compose projects only the exposed-service container
+// carries the muvee.domain_prefix label, so we find it with docker ps -a
+// (includes stopped containers) filtered by that label. Falls back to
+// "muvee-<prefix>" when no labelled container is found.
+func resolveContainerName(ctx context.Context, domainPrefix string) string {
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
+		"--filter", "label=muvee.domain_prefix="+domainPrefix,
+		"--format", "{{.Names}}").Output()
+	if err != nil {
+		return "muvee-" + domainPrefix
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return "muvee-" + domainPrefix
+	}
+	return strings.SplitN(line, "\n", 2)[0]
 }
 
 // listMuveeContainerNames returns the names of all running containers tagged
