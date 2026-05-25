@@ -1208,6 +1208,12 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
     defineRoute('GET', '/auth/providers', () => [
       { name: 'github', display_name: 'GitHub', auth_url: '/auth/github' },
     ]),
+
+    // ---------- /api/auth/downstream-providers ----------
+    // Used by ProjectDetail's Auth tab to render the per-project allow-list
+    // of identity providers. An empty array is a valid "no providers
+    // restricted" response, so the EnabledProvidersField renders cleanly.
+    defineRoute('GET', '/api/auth/downstream-providers', () => []),
   ]
 }
 
