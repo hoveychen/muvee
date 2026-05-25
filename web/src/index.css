@@ -486,3 +486,12 @@ body {
     gap: 12px !important;
   }
 }
+
+/* ProjectDetail tab strip — many tabs overflow narrow screens, so the
+ * container scrolls horizontally with a subtle scrollbar. */
+.project-tabs {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.project-tabs::-webkit-scrollbar { height: 4px; }
+.project-tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }

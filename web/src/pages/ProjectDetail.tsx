@@ -151,17 +151,17 @@ export default function ProjectDetail() {
         >
           <ArrowLeft size={14} /> {t('projectDetail.backToProjects')}
         </button>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between" style={{ flexWrap: 'wrap', gap: '8px' }}>
+          <div className="flex items-center gap-3" style={{ minWidth: 0, flex: '1 1 200px' }}>
             <div
               className="w-2.5 h-2.5 rounded-full"
               style={{ background: color, flexShrink: 0 }}
             />
-            <h1 className="page-title" style={{ fontSize: '1.5rem' }}>
+            <h1 className="page-title" style={{ fontSize: '1.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               {project.name}
             </h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
             <a
               href={`https://${project.domain_prefix}.${baseDomain}`}
               target="_blank"
@@ -216,7 +216,7 @@ export default function ProjectDetail() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-0 mb-0" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="flex gap-0 mb-0 project-tabs" style={{ borderBottom: '1px solid var(--border)', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {(isTunnel ? [
           ['traffic', Activity, t('projectDetail.tabs.traffic')],
           ['config', Settings, t('projectDetail.tabs.config')],
@@ -256,6 +256,8 @@ export default function ProjectDetail() {
               marginBottom: '-1px',
               fontWeight: tab === key ? 600 : 400,
               fontSize: '0.875rem',
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
             }}
           >
             <Icon size={15} />
