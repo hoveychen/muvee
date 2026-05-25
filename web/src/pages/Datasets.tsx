@@ -88,7 +88,7 @@ export default function Datasets() {
           <p style={{ color: 'var(--fg-muted)', fontSize: '0.875rem', marginTop: '0.5rem' }}>{t('datasets.emptyHint')}</p>
         </div>
       ) : (
-        <div className="table-container">
+        <div className="table-container mobile-card-table">
           <table className="w-full border-collapse">
             <thead>
               <tr>

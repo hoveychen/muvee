@@ -114,7 +114,7 @@ export default function SecretsPage() {
         <div className="table-container">
           {/* Table header */}
           <div
-            className="grid gap-4 px-5 py-3"
+            className="grid gap-4 px-5 py-3 hide-on-mobile"
             style={{
               gridTemplateColumns: '1fr 120px 180px 48px',
               minWidth: 600,
@@ -147,7 +147,7 @@ function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: 
 
   return (
     <div
-      className="grid gap-4 px-5 py-4 items-center"
+      className="secret-row grid gap-4 px-5 py-4 items-center mobile-stack"
       style={{
         gridTemplateColumns: '1fr 120px 180px 48px',
         minWidth: 600,

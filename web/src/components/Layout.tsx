@@ -926,7 +926,7 @@ export function UsersPage() {
         </div>
       )}
 
-      <div className="table-container">
+      <div className="table-container mobile-card-table">
         <table>
           <thead>
             <tr>

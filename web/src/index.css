@@ -495,3 +495,90 @@ body {
 }
 .project-tabs::-webkit-scrollbar { height: 4px; }
 .project-tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Project list row — on mobile, restructure as a 2-row card:
+ *  Row 1: status dot + name + status badge (right-aligned)
+ *  Row 2: meta strip (branch+repo | owner | domain | last-deploy time)
+ * All meta items become visible (no more hidden md/lg classes). */
+@media (max-width: 767px) {
+  .project-row {
+    flex-wrap: wrap;
+    gap: 8px 12px !important;
+    padding: 14px 16px !important;
+    align-items: flex-start !important;
+  }
+  /* Status dot stays inline with the name on the first line */
+  .project-row > div:first-child {
+    margin-top: 6px;
+  }
+  /* Name takes remaining width on row 1 */
+  .project-row > .flex-1 {
+    flex: 1 1 60% !important;
+  }
+  /* Status badge sits on row 1 next to the name (order 0). The meta items
+   * below get higher orders so they wrap onto fresh lines, leaving the
+   * status badge sharing the top line with name. */
+  .project-row .project-status {
+    margin-left: auto;
+    order: 0;
+  }
+  .project-row .project-meta-owner,
+  .project-row .project-meta-domain,
+  .project-row .project-meta-time {
+    display: flex !important;
+    flex: 1 1 100%;
+    max-width: 100% !important;
+  }
+  .project-row .project-meta-owner { order: 2; }
+  .project-row .project-meta-domain { order: 3; }
+  .project-row .project-meta-time {
+    order: 4;
+    text-align: left !important;
+    min-width: 0 !important;
+  }
+}
+
+/* Generic "table → card" transform for tables marked .mobile-card-table.
+ * On mobile the header is hidden, each row becomes a stacked card, and
+ * each cell takes a full line — all columns become visible without
+ * horizontal scrolling. */
+@media (max-width: 767px) {
+  .mobile-card-table table { min-width: 0 !important; }
+  .mobile-card-table thead { display: none; }
+  .mobile-card-table tbody tr {
+    display: block;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .mobile-card-table tbody tr:last-child { border-bottom: none; }
+  .mobile-card-table tbody td {
+    display: block;
+    padding: 3px 0 !important;
+    border: none !important;
+    text-align: left !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .mobile-card-table tbody td:empty { display: none; }
+  /* Stop the parent .table-container from offering horizontal scroll
+   * once content is stacked — it would create a visual artifact. */
+  .mobile-card-table {
+    overflow-x: visible !important;
+  }
+}
+
+/* The same idea for grid-based "table-like" rows that don't use <table>.
+ * Authors opt-in by adding the .mobile-stack class to the grid container;
+ * on mobile it switches from grid to a vertical stack. */
+@media (max-width: 767px) {
+  .mobile-stack {
+    display: flex !important;
+    flex-direction: column !important;
+    grid-template-columns: none !important;
+    min-width: 0 !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
+    padding: 14px 16px !important;
+  }
+  .mobile-stack > * { max-width: 100%; }
+}

@@ -129,6 +129,7 @@ export default function TunnelsPage() {
       <div className="table-container">
         {/* Header */}
         <div
+          className="hide-on-mobile"
           style={{
             display: 'grid',
             gridTemplateColumns: '2fr 2fr 80px 100px 80px',
@@ -154,6 +155,7 @@ export default function TunnelsPage() {
           return (
             <div
               key={h.id}
+              className="mobile-stack"
               style={{
                 display: 'grid',
                 gridTemplateColumns: '2fr 2fr 80px 100px 80px',
