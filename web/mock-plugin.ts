@@ -1214,6 +1214,149 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
     // of identity providers. An empty array is a valid "no providers
     // restricted" response, so the EnabledProvidersField renders cleanly.
     defineRoute('GET', '/api/auth/downstream-providers', () => []),
+
+    // ---------- /api/me/tokens ---------- (personal API tokens for muveectl)
+    // Mirror of the legacy /api/tokens routes; the frontend now hits
+    // /api/me/tokens (post-account-token rename). Reuses state.tokens so
+    // creating/deleting through either path stays consistent.
+    defineRoute('GET', '/api/me/tokens', () => state.tokens),
+    defineRoute('POST', '/api/me/tokens', ({ body }) => {
+      const token: MockApiToken = {
+        id: makeId(),
+        name: (body.name as string) || 'New Token',
+        last_used_at: null,
+        created_at: isoNow(),
+      }
+      state.tokens.push(token)
+      return { ...token, token: `mock-token-${makeId()}` }
+    }),
+    defineRoute('DELETE', '/api/me/tokens/:id', ({ params }) => {
+      const idx = state.tokens.findIndex((t) => t.id === params.id)
+      if (idx !== -1) state.tokens.splice(idx, 1)
+      return {}
+    }),
+
+    // ---------- /api/access-requests/pending ----------
+    // Layout polls this every 60s to badge the Projects nav item with the
+    // number of access requests awaiting the current user's approval.
+    // Returns empty by default; admins can demo non-zero counts by
+    // manually adding entries here.
+    defineRoute('GET', '/api/access-requests/pending', () => []),
+
+    // ---------- Per-project access lists (used by ProjectDetail Users tab) ----------
+    // access-users  : explicit allow-list members (besides the owner)
+    // visits        : people who reached the deployed service
+    // access-requests : "request access" submissions for this project
+    // invitation-links: per-project sign-up links
+    defineRoute('GET', '/api/projects/:id/access-users', ({ params }) => {
+      // Return one demo accessor so the Users tab renders a real row.
+      const proj = state.projects.find((p) => p.id === params.id)
+      if (!proj) return []
+      return [
+        {
+          project_id: params.id,
+          user_id: 'usr-002',
+          added_by: 'usr-001',
+          added_at: SEED_TIME,
+          email: 'alice@example.com',
+          name: 'Alice Chen',
+          avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=alice',
+        },
+      ]
+    }),
+    defineRoute('POST', '/api/projects/:id/access-users', ({ body }) => ({
+      project_id: 'mock',
+      user_id: (body.user_id as string) || 'usr-new',
+      added_at: isoNow(),
+      email: (body.email as string) || 'new@example.com',
+      name: 'New Member',
+      avatar_url: '',
+    })),
+    defineRoute('DELETE', '/api/projects/:id/access-users/:userId', () => ({})),
+
+    defineRoute('GET', '/api/projects/:id/visits', ({ params }) => {
+      return [
+        {
+          project_id: params.id,
+          user_id: 'usr-002',
+          first_seen_at: SEED_TIME,
+          last_seen_at: SEED_TIME2,
+          visit_count: 12,
+          email: 'alice@example.com',
+          name: 'Alice Chen',
+          avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=alice',
+          in_allow_list: true,
+        },
+        {
+          project_id: params.id,
+          user_id: 'usr-003',
+          first_seen_at: SEED_TIME,
+          last_seen_at: SEED_TIME,
+          visit_count: 3,
+          email: 'bob@example.com',
+          name: 'Bob Wang',
+          avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=bob',
+          in_allow_list: false,
+        },
+      ]
+    }),
+
+    defineRoute('GET', '/api/projects/:id/access-requests', ({ params }) => {
+      return [
+        {
+          id: 'preq-001',
+          project_id: params.id,
+          user_id: 'usr-003',
+          reason: 'Need access to debug the staging service.',
+          status: 'pending',
+          requested_at: SEED_TIME2,
+          user_email: 'bob@example.com',
+          user_name: 'Bob Wang',
+          user_avatar_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=bob',
+        },
+      ]
+    }),
+    defineRoute('POST', '/api/projects/:id/access-requests/:reqId/approve', ({ params }) => ({
+      id: params.reqId, status: 'approved', decided_at: isoNow(),
+    })),
+    defineRoute('POST', '/api/projects/:id/access-requests/:reqId/deny', ({ params }) => ({
+      id: params.reqId, status: 'denied', decided_at: isoNow(),
+    })),
+
+    defineRoute('GET', '/api/projects/:id/invitation-links', ({ params }) => {
+      return [
+        {
+          id: 'inv-001',
+          token: 'demo-invite-token',
+          project_id: params.id,
+          created_at: SEED_TIME,
+          expires_at: null,
+          used_at: null,
+          used_by_email: null,
+        },
+      ]
+    }),
+    defineRoute('POST', '/api/projects/:id/invitation-links', ({ params }) => ({
+      id: makeId(),
+      token: `demo-${makeId()}`,
+      project_id: params.id,
+      created_at: isoNow(),
+      expires_at: null,
+      used_at: null,
+      used_by_email: null,
+    })),
+    defineRoute('DELETE', '/api/projects/:id/invitation-links/:linkId', () => ({})),
+    defineRoute('GET', '/api/projects/:id/invitation-links/:linkId/uses', () => []),
+
+    // ---------- /api/projects/:id/workspace ----------
+    // Returns a flat directory listing for the requested path. The mock
+    // is intentionally minimal: the Workspace tab needs *something*
+    // visible to verify mobile layout (file rows, sizes, mtimes).
+    defineRoute('GET', '/api/projects/:id/workspace', () => [
+      { name: 'logs', size: 0, is_dir: true, mod_time: Math.floor(Date.now() / 1000) - 3600 },
+      { name: 'output.txt', size: 12_345, is_dir: false, mod_time: Math.floor(Date.now() / 1000) - 1800 },
+      { name: 'checkpoint.pt', size: 524_288_000, is_dir: false, mod_time: Math.floor(Date.now() / 1000) - 7200 },
+    ]),
   ]
 }
 

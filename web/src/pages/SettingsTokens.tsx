@@ -193,7 +193,7 @@ export default function SettingsTokensPage() {
           </p>
         </div>
       ) : (
-        <div className="table-container">
+        <div className="table-container mobile-card-table">
           <table className="w-full border-collapse">
             <thead>
               <tr>
