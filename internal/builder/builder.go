@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -120,6 +121,15 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 			_ = os.Remove(f)
 		}
 	}()
+	// Propagate proxy env vars into the build so RUN commands (pip, apt-get, etc.)
+	// use the same proxy as the builder container. BuildKit only picks these up
+	// via --build-arg, not from the CLI process environment.
+	// Controlled by BUILDER_PROXY_PASSTHROUGH (default: enabled).
+	proxyArgs, proxyLog := collectProxyBuildArgs()
+	logFn(proxyLog)
+	log.Print(proxyLog)
+	buildArgs = append(buildArgs, proxyArgs...)
+
 	buildArgs = append(buildArgs, filepath.Dir(dockerfilePath))
 	if err := runCmd(ctx, logFn, "docker", buildArgs...); err != nil {
 		return "", fmt.Errorf("docker build: %w", err)
@@ -185,4 +195,51 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// collectProxyBuildArgs returns --build-arg flags for any proxy env vars that
+// are currently set to a non-empty value, together with a human-readable log
+// line. Returns nil args when passthrough is disabled or no proxy vars are set.
+func collectProxyBuildArgs() (args []string, logLine string) {
+	return collectProxyBuildArgsFrom(os.Getenv)
+}
+
+// collectProxyBuildArgsFrom is the pure-function core of collectProxyBuildArgs.
+// Accepting getenv makes it testable without modifying process environment.
+//
+// The returned args slice is ready to append into a docker-buildx args list:
+//
+//	["--build-arg", "HTTP_PROXY=http://...", "--build-arg", "HTTPS_PROXY=http://...", ...]
+func collectProxyBuildArgsFrom(getenv func(string) string) (args []string, logLine string) {
+	if !buildProxyPassthroughFor(getenv) {
+		actual := getenv("BUILDER_PROXY_PASSTHROUGH")
+		return nil, fmt.Sprintf("[proxy] passthrough disabled (BUILDER_PROXY_PASSTHROUGH=%s); build will not inherit proxy settings", actual)
+	}
+	var keys []string
+	for _, v := range []string{
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY",
+		"http_proxy", "https_proxy", "no_proxy", "all_proxy", "ftp_proxy",
+	} {
+		if val := getenv(v); val != "" {
+			args = append(args, "--build-arg", v+"="+val)
+			keys = append(keys, v)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, "[proxy] passthrough enabled but no proxy vars are set; build will use direct network access"
+	}
+	return args, fmt.Sprintf("[proxy] forwarding into build: %s", strings.Join(keys, ", "))
+}
+
+// buildProxyPassthroughFor is the core of the proxy-passthrough decision.
+// Accepting getenv makes it testable without modifying process environment.
+// Set BUILDER_PROXY_PASSTHROUGH=false/0/no/off to disable; any other value
+// (including unset or empty) keeps the default-on behaviour.
+func buildProxyPassthroughFor(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("BUILDER_PROXY_PASSTHROUGH"))) {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
