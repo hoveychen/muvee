@@ -151,17 +151,17 @@ export default function ProjectDetail() {
         >
           <ArrowLeft size={14} /> {t('projectDetail.backToProjects')}
         </button>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between" style={{ flexWrap: 'wrap', gap: '8px' }}>
+          <div className="flex items-center gap-3" style={{ minWidth: 0, flex: '1 1 200px' }}>
             <div
               className="w-2.5 h-2.5 rounded-full"
               style={{ background: color, flexShrink: 0 }}
             />
-            <h1 className="page-title" style={{ fontSize: '1.5rem' }}>
+            <h1 className="page-title" style={{ fontSize: '1.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               {project.name}
             </h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
             <a
               href={`https://${project.domain_prefix}.${baseDomain}`}
               target="_blank"
@@ -216,7 +216,7 @@ export default function ProjectDetail() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-0 mb-0" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="flex gap-0 mb-0 project-tabs" style={{ borderBottom: '1px solid var(--border)', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {(isTunnel ? [
           ['traffic', Activity, t('projectDetail.tabs.traffic')],
           ['config', Settings, t('projectDetail.tabs.config')],
@@ -246,6 +246,7 @@ export default function ProjectDetail() {
           <button
             key={key}
             onClick={() => setTab(key)}
+            data-active={tab === key}
             className="flex items-center gap-2 px-4 py-3 text-sm transition-all duration-150"
             style={{
               color: tab === key ? 'var(--fg-primary)' : 'var(--fg-muted)',
@@ -256,6 +257,8 @@ export default function ProjectDetail() {
               marginBottom: '-1px',
               fontWeight: tab === key ? 600 : 400,
               fontSize: '0.875rem',
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
             }}
           >
             <Icon size={15} />
@@ -1868,8 +1871,8 @@ function ProjectInvitationLinksPanel({ projectId, disabled, domainPrefix, baseDo
                 background: 'var(--bg-elevated)',
                 opacity: active ? 1 : 0.65,
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem' }}>
-                  <div style={{ minWidth: 0, fontSize: '0.8125rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 0, fontSize: '0.8125rem', flex: '1 1 220px' }}>
                     <div>
                       <span style={{ fontWeight: 500 }}>Uses:</span> {maxLabel}
                       {!active && <span style={{ marginLeft: '0.6rem', color: 'var(--danger)', fontSize: '0.75rem' }}>
@@ -1881,7 +1884,7 @@ function ProjectInvitationLinksPanel({ projectId, disabled, domainPrefix, baseDo
                       {link.invited_by_email && ` · by ${link.invited_by_email}`}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                  <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
                     <button
                       type="button"
                       onClick={() => toggleUses(link.id)}
@@ -2811,7 +2814,7 @@ function SecretsTab({
                           {t('projectDetail.secrets.useForBuild')}
                         </label>
                         {binding.use_for_build && (
-                          <div className="flex items-center gap-2">
+                          <div className="secret-binding-row flex items-center gap-2">
                             <span className="form-label" style={{ marginBottom: 0, fontSize: '0.8125rem' }}>
                               {t('projectDetail.secrets.buildSecretId')}
                             </span>
@@ -2857,7 +2860,7 @@ function SecretsTab({
                               {t('projectDetail.secrets.useForGitHttps')}
                             </label>
                             {binding.use_for_git && (
-                              <div className="flex items-center gap-2">
+                              <div className="secret-binding-row flex items-center gap-2">
                                 <span className="form-label" style={{ marginBottom: 0, fontSize: '0.8125rem' }}>
                                   {t('projectDetail.secrets.username')}
                                 </span>

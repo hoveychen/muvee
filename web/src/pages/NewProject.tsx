@@ -634,7 +634,7 @@ export default function NewProject() {
           {/* Project Type selector */}
           <div>
             <label className="form-label">{t('newProject.fields.projectType').toUpperCase()}</label>
-            <div className="flex gap-2">
+            <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
               {([
                 { id: 'deployment' as const, icon: Globe, label: t('newProject.projectType.deployment') },
                 { id: 'compose' as const, icon: Layers, label: t('newProject.projectType.compose') },
@@ -645,8 +645,9 @@ export default function NewProject() {
                   key={opt.id}
                   type="button"
                   onClick={() => setProjectType(opt.id)}
-                  className="flex items-center gap-2 flex-1"
+                  className="flex items-center gap-2"
                   style={{
+                    flex: '1 1 calc(50% - 4px)', minWidth: 0,
                     fontSize: '0.875rem', padding: '0.55rem 0.75rem',
                     borderRadius: '6px', cursor: 'pointer',
                     border: `1px solid ${projectType === opt.id ? 'var(--accent)' : 'var(--border)'}`,

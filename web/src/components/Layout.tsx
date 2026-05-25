@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Home, LayoutGrid, Database, KeyRound, Key, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle, Copy, Check, Globe, ShieldAlert, Clock, Loader, Mail, Link2, Trash2, Plus } from 'lucide-react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Home, LayoutGrid, Database, KeyRound, Key, Server, Users, LogOut, Sun, Moon, Languages, Settings, CheckCircle, AlertCircle, XCircle, Copy, Check, Globe, ShieldAlert, Clock, Loader, Mail, Link2, Trash2, Plus, MoreHorizontal } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/theme'
 import { useSettings } from '../lib/settings'
@@ -13,6 +13,7 @@ const MONO = 'var(--font-mono)'
 export default function Layout({ children }: { children?: ReactNode }) {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const { theme, toggleTheme } = useTheme()
   const { t, i18n } = useTranslation()
   const { settings, loading } = useSettings()
@@ -87,6 +88,40 @@ export default function Layout({ children }: { children?: ReactNode }) {
   const userNavItems = ALL_NAV_ITEMS.filter(item => !item.adminOnly && !item.hidden && (isAuthorized || !item.requireAuth))
   const adminNavItems = ALL_NAV_ITEMS.filter(item => item.adminOnly && !item.hidden)
 
+  // Mobile bottom-tab anchors: Home / Projects / Datasets / Secrets-or-Tokens / More.
+  // When secrets are disabled at runtime, fall back to the access-tokens entry so
+  // the 4th tab is never empty. Unauthorized users only see Home + More.
+  const secretsEnabled = runtimeConfig === null || runtimeConfig.secrets_enabled
+  const mobileTabs: { to: string; icon: typeof Home; label: string; requireAuth: boolean; badgeCount?: number }[] = isAuthorized
+    ? [
+        { to: '/portal', icon: Home, label: t('nav.portal'), requireAuth: false },
+        { to: '/projects', icon: LayoutGrid, label: t('nav.projects'), requireAuth: true, badgeCount: pendingCount },
+        { to: '/datasets', icon: Database, label: t('nav.datasets'), requireAuth: true },
+        secretsEnabled
+          ? { to: '/secrets', icon: KeyRound, label: t('nav.secrets'), requireAuth: true }
+          : { to: '/settings/tokens', icon: Key, label: t('nav.tokens'), requireAuth: true },
+        { to: '/more', icon: MoreHorizontal, label: t('nav.more'), requireAuth: false },
+      ]
+    : [
+        { to: '/portal', icon: Home, label: t('nav.portal'), requireAuth: false },
+        { to: '/more', icon: MoreHorizontal, label: t('nav.more'), requireAuth: false },
+      ]
+
+  // The "More" tab is the catch-all for any route not covered by the other
+  // bottom tabs (settings, admin, profile, …) — keep it visually active there.
+  const primaryTabPrefixes = mobileTabs.filter(t => t.to !== '/more').map(t => t.to)
+  const onPrimaryTab = primaryTabPrefixes.some(p => location.pathname === p || location.pathname.startsWith(p + '/'))
+  const moreIsActive = !onPrimaryTab
+
+  // Best-effort page title for the mobile top bar — derived from whichever nav
+  // entry the current path matches, falling back to the site name.
+  const currentTitleSource = ALL_NAV_ITEMS.find(item => location.pathname === item.to || location.pathname.startsWith(item.to + '/'))
+  const mobileTitle = location.pathname === '/more'
+    ? t('nav.more')
+    : location.pathname.startsWith('/settings/profile')
+      ? t('nav.profile')
+      : currentTitleSource?.label || settings.site_name || 'muvee'
+
   const handleLogout = async () => {
     await fetch('/auth/logout', { method: 'POST', credentials: 'include' })
     navigate('/login')
@@ -113,9 +148,9 @@ export default function Layout({ children }: { children?: ReactNode }) {
 
   return (
     <div className="flex min-h-screen" style={{ background: 'var(--bg-base)' }}>
-      {/* Sidebar */}
+      {/* Sidebar — desktop only (hidden under 768px via .app-sidebar CSS) */}
       <aside
-        className="flex flex-col w-60 flex-shrink-0"
+        className="app-sidebar flex flex-col w-60 flex-shrink-0"
         style={{
           background: 'var(--sidebar-bg)',
           position: 'sticky',
@@ -279,10 +314,58 @@ export default function Layout({ children }: { children?: ReactNode }) {
         )}
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 min-w-0 p-8" style={{ maxWidth: '1200px' }}>
-        {children ?? <Outlet />}
-      </main>
+      {/* Main column — top app bar (mobile only) + page content + bottom tab bar (mobile only) */}
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* Mobile top app bar */}
+        <header className="mobile-topbar">
+          <img
+            src={settings.logo_url || '/icon.png'}
+            alt={settings.site_name || 'muvee'}
+            style={{ width: 28, height: 28, borderRadius: 6, flexShrink: 0, objectFit: 'contain' }}
+          />
+          <div style={{ flex: 1, minWidth: 0, fontSize: '0.9375rem', fontWeight: 600, color: 'var(--fg-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {mobileTitle}
+          </div>
+          {user && (
+            <NavLink
+              to="/settings/profile"
+              title={user.email}
+              style={{ display: 'flex', alignItems: 'center', textDecoration: 'none', flexShrink: 0 }}
+            >
+              {user.avatar_url ? (
+                <img src={user.avatar_url} alt="" style={{ width: 30, height: 30, borderRadius: '50%' }} />
+              ) : (
+                <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--sidebar-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: 'var(--sidebar-fg-active)', fontWeight: 600 }}>
+                  {(user.name || user.email || '?').charAt(0).toUpperCase()}
+                </div>
+              )}
+            </NavLink>
+          )}
+        </header>
+
+        {/* Page content */}
+        <main className="app-main">
+          {children ?? <Outlet />}
+        </main>
+
+        {/* Mobile bottom tab bar */}
+        <nav className="mobile-tabbar" aria-label="primary">
+          {mobileTabs.map(({ to, icon: Icon, label, badgeCount }) => {
+            const active = to === '/more'
+              ? moreIsActive
+              : (location.pathname === to || location.pathname.startsWith(to + '/'))
+            return (
+              <NavLink key={to} to={to} className={active ? 'active' : undefined}>
+                <Icon size={20} />
+                <span className="label">{label}</span>
+                {badgeCount && badgeCount > 0 ? (
+                  <span className="badge-dot">{badgeCount > 9 ? '9+' : badgeCount}</span>
+                ) : null}
+              </NavLink>
+            )
+          })}
+        </nav>
+      </div>
     </div>
   )
 }
@@ -419,9 +502,9 @@ export function NodesPage() {
           const hasIssues = healthChecks?.some(c => c.status !== 'ok')
           return (
             <div key={n.id} style={{ borderBottom: i < nodes.length - 1 ? '1px solid var(--border)' : 'none', padding: '16px 20px' }}>
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4" style={{ flexWrap: 'wrap' }}>
                 <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: online ? 'var(--success)' : 'var(--fg-muted)', flexShrink: 0 }} className={online ? 'status-running' : ''} />
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: '1 1 240px', minWidth: 0 }}>
                   <div style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{n.hostname}</div>
                   <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
                     <span className="badge-neutral" style={{ fontSize: '0.75rem', marginRight: '8px' }}>{n.role}</span>
@@ -434,7 +517,7 @@ export function NodesPage() {
                   </div>
                 </div>
                 {m && (
-                  <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <MetricBar pct={cpuPct} label={t('nodes.cpu')} />
                     <MetricBar pct={memPct} label={t('nodes.mem')} />
                     <MetricBar pct={diskPct} label={t('nodes.disk')} />
@@ -442,7 +525,7 @@ export function NodesPage() {
                 )}
               </div>
               {m && (
-                <div style={{ display: 'flex', gap: '24px', marginTop: '10px', paddingLeft: '26px' }}>
+                <div style={{ display: 'flex', gap: '24px', marginTop: '10px', paddingLeft: '26px', flexWrap: 'wrap' }}>
                   <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                     <span style={{ fontWeight: 500, color: 'var(--fg-primary)' }}>{t('nodes.cpu')}</span>{' '}
                     <span style={{ fontFamily: MONO }}>{cpuPct.toFixed(1)}%</span>
@@ -671,7 +754,7 @@ export function UsersPage() {
 
       {/* Invitations management (invite mode only) */}
       {isInviteMode && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+        <div className="card-grid" style={{ gridTemplateColumns: '1fr 1fr', marginBottom: '24px' }}>
           {/* Email white-list */}
           <div className="card">
             <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -843,7 +926,7 @@ export function UsersPage() {
         </div>
       )}
 
-      <div className="table-container">
+      <div className="table-container mobile-card-table">
         <table>
           <thead>
             <tr>

@@ -16,6 +16,7 @@ import NewDataset from './pages/NewDataset'
 import SecretsPage from './pages/Secrets'
 import SettingsTokensPage from './pages/SettingsTokens'
 import SettingsProfilePage from './pages/SettingsProfile'
+import MorePage from './pages/More'
 import OnboardPage from './pages/Onboard'
 import AdminSettingsPage from './pages/AdminSettings'
 import TunnelsPage from './pages/Tunnels'
@@ -69,6 +70,7 @@ function App() {
             <Route path="/tunnels" element={<TunnelsPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/admin/settings" element={<AdminSettingsPage />} />
+            <Route path="/more" element={<MorePage />} />
           </Route>
         </Routes>
       </AuthProvider>

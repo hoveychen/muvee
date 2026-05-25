@@ -83,7 +83,7 @@ export default function SettingsTokensPage() {
   }
 
   return (
-    <div style={{ padding: '1.5rem 2rem', maxWidth: '960px' }}>
+    <div style={{ maxWidth: '960px' }}>
       <h1 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>
         {t('settingsTokens.title')}
       </h1>
@@ -93,7 +93,7 @@ export default function SettingsTokensPage() {
 
       {/* Create form */}
       <div className="card" style={{ padding: '1rem', marginBottom: '1rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '0.5rem', alignItems: 'end' }}>
+        <div className="tokens-create-grid" style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '0.5rem', alignItems: 'end' }}>
           <div>
             <label style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', display: 'block', marginBottom: '0.25rem' }}>
               {t('settingsTokens.nameLabel')}
@@ -193,7 +193,7 @@ export default function SettingsTokensPage() {
           </p>
         </div>
       ) : (
-        <div className="table-container">
+        <div className="table-container mobile-card-table">
           <table className="w-full border-collapse">
             <thead>
               <tr>

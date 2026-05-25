@@ -24,12 +24,28 @@
     "tunnels": "隧道",
     "users": "用户",
     "settings": "设置",
+    "more": "更多",
+    "profile": "个人资料",
     "privateCloud": "私有云",
     "logout": "退出登录",
     "switchToLight": "切换到亮色模式",
     "switchToDark": "切换到暗色模式",
     "switchToZh": "切换到中文",
-    "switchToEn": "Switch to English"
+    "switchToEn": "Switch to English",
+    "appearance": "外观",
+    "language": "语言",
+    "account": "账号",
+    "administration": "管理"
+  },
+  "more": {
+    "heading": "更多",
+    "sectionLabel": "设置与快捷入口",
+    "themeLight": "亮色模式",
+    "themeDark": "暗色模式",
+    "langLabelZh": "中文",
+    "langLabelEn": "English",
+    "signedInAs": "登录身份",
+    "logoutConfirm": "确认退出 {{name}} 吗？"
   },
   "common": {
     "loading": "加载中..."

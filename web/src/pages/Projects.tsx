@@ -95,7 +95,7 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
   return (
     <Link
       to={`/projects/${project.id}`}
-      className="flex items-center gap-5 px-5 py-4 transition-all duration-150"
+      className="project-row flex items-center gap-5 px-5 py-4 transition-all duration-150"
       style={{
         background: 'var(--bg-card)',
         textDecoration: 'none',
@@ -161,7 +161,7 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
       {/* Owner */}
       {project.owner_name && (
         <div
-          className="hidden md:flex items-center gap-1 flex-shrink-0"
+          className="project-meta-owner hidden md:flex items-center gap-1 flex-shrink-0"
           style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
           title={project.owner_email || project.owner_name}
         >
@@ -171,18 +171,18 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
       )}
 
       {/* Domain */}
-      <div className="hidden md:flex items-center gap-1 flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
+      <div className="project-meta-domain hidden md:flex items-center gap-1 flex-shrink-0" style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
         <Globe size={11} />
         {project.domain_prefix}.domain
       </div>
 
       {/* Status badge */}
-      <div className={`flex-shrink-0 ${statusBadgeClass(status)}`}>
+      <div className={`project-status flex-shrink-0 ${statusBadgeClass(status)}`}>
         {STATUS_LABELS[status]}
       </div>
 
       {/* Time */}
-      <div className="hidden lg:block flex-shrink-0" style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', minWidth: '60px', textAlign: 'right' }}>
+      <div className="project-meta-time hidden lg:block flex-shrink-0" style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', minWidth: '60px', textAlign: 'right' }}>
         {latestDeploy ? timeAgo(latestDeploy.updated_at) : '—'}
       </div>
     </Link>

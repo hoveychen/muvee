@@ -332,7 +332,7 @@ function AppleProviderCard({
           Enabled
         </label>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="card-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <Field label="Services ID (client_id)"
           value={social.apple_client_id}
           onChange={v => setSocial({ ...social, apple_client_id: v })}
@@ -550,7 +550,7 @@ export default function AdminSettingsPage() {
         <h1 className="page-title">{t('adminSettings.heading')}</h1>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
+      <div className="card-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
 
         {/* ── Branding ─────────────────────────────────────────────────────── */}
         <section className="card">
