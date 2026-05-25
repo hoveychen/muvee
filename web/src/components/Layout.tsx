@@ -502,9 +502,9 @@ export function NodesPage() {
           const hasIssues = healthChecks?.some(c => c.status !== 'ok')
           return (
             <div key={n.id} style={{ borderBottom: i < nodes.length - 1 ? '1px solid var(--border)' : 'none', padding: '16px 20px' }}>
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4" style={{ flexWrap: 'wrap' }}>
                 <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: online ? 'var(--success)' : 'var(--fg-muted)', flexShrink: 0 }} className={online ? 'status-running' : ''} />
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: '1 1 240px', minWidth: 0 }}>
                   <div style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--fg-primary)' }}>{n.hostname}</div>
                   <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '2px' }}>
                     <span className="badge-neutral" style={{ fontSize: '0.75rem', marginRight: '8px' }}>{n.role}</span>
@@ -517,7 +517,7 @@ export function NodesPage() {
                   </div>
                 </div>
                 {m && (
-                  <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <MetricBar pct={cpuPct} label={t('nodes.cpu')} />
                     <MetricBar pct={memPct} label={t('nodes.mem')} />
                     <MetricBar pct={diskPct} label={t('nodes.disk')} />
@@ -525,7 +525,7 @@ export function NodesPage() {
                 )}
               </div>
               {m && (
-                <div style={{ display: 'flex', gap: '24px', marginTop: '10px', paddingLeft: '26px' }}>
+                <div style={{ display: 'flex', gap: '24px', marginTop: '10px', paddingLeft: '26px', flexWrap: 'wrap' }}>
                   <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
                     <span style={{ fontWeight: 500, color: 'var(--fg-primary)' }}>{t('nodes.cpu')}</span>{' '}
                     <span style={{ fontFamily: MONO }}>{cpuPct.toFixed(1)}%</span>
@@ -754,7 +754,7 @@ export function UsersPage() {
 
       {/* Invitations management (invite mode only) */}
       {isInviteMode && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+        <div className="card-grid" style={{ gridTemplateColumns: '1fr 1fr', marginBottom: '24px' }}>
           {/* Email white-list */}
           <div className="card">
             <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

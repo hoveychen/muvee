@@ -461,3 +461,12 @@ body {
 @media (min-width: 768px) {
   .hide-on-desktop { display: none !important; }
 }
+
+/* The "create token" form row collapses from 3 columns to a stack on mobile,
+ * so the inputs and button each get a full line. */
+@media (max-width: 767px) {
+  .tokens-create-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .tokens-create-grid > * { width: 100%; }
+}

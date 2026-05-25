@@ -117,6 +117,7 @@ export default function SecretsPage() {
             className="grid gap-4 px-5 py-3"
             style={{
               gridTemplateColumns: '1fr 120px 180px 48px',
+              minWidth: 600,
               borderBottom: '1px solid var(--border)',
               fontSize: '0.75rem',
               fontWeight: 600,
@@ -149,6 +150,7 @@ function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: 
       className="grid gap-4 px-5 py-4 items-center"
       style={{
         gridTemplateColumns: '1fr 120px 180px 48px',
+        minWidth: 600,
         borderBottom: index < total - 1 ? '1px solid var(--border)' : 'none',
         transition: 'background 0.1s',
         background: 'var(--bg-card)',
