@@ -246,6 +246,7 @@ export default function ProjectDetail() {
           <button
             key={key}
             onClick={() => setTab(key)}
+            data-active={tab === key}
             className="flex items-center gap-2 px-4 py-3 text-sm transition-all duration-150"
             style={{
               color: tab === key ? 'var(--fg-primary)' : 'var(--fg-muted)',

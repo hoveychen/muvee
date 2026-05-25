@@ -487,14 +487,41 @@ body {
   }
 }
 
-/* ProjectDetail tab strip — many tabs overflow narrow screens, so the
- * container scrolls horizontally with a subtle scrollbar. */
+/* ProjectDetail tab strip — on desktop the tabs sit on one row with a
+ * faint scrollbar if they ever overflow; on mobile we let them wrap so
+ * every tab stays visible without horizontal scrolling. */
 .project-tabs {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 .project-tabs::-webkit-scrollbar { height: 4px; }
 .project-tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+@media (max-width: 767px) {
+  .project-tabs {
+    flex-wrap: wrap !important;
+    overflow-x: visible !important;
+    border-bottom: none !important;
+    gap: 4px 6px !important;
+    margin-bottom: 8px !important;
+  }
+  .project-tabs button {
+    padding: 6px 10px !important;
+    font-size: 0.8125rem !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 6px !important;
+    margin-bottom: 0 !important;
+    background: var(--bg-card) !important;
+  }
+  /* Active tab on mobile uses a filled accent background instead of an
+   * underline, since wrapped tabs don't share a single baseline. */
+  .project-tabs button.tab-active,
+  .project-tabs button[data-active="true"] {
+    color: #fff !important;
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+  }
+}
 
 /* Project list row — on mobile, restructure as a 2-row card:
  *  Row 1: status dot + name + status badge (right-aligned)
