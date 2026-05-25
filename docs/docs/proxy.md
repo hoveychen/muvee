@@ -13,12 +13,12 @@ If your muvee deployment runs in a network that requires an HTTP proxy to reach 
 | Service | Why it needs proxy access |
 |---------|--------------------------|
 | `muvee-authservice` | Calls external OAuth provider APIs: Google, Feishu/Lark, WeCom, DingTalk, Discord, Facebook, Apple, Twitter |
-| `muvee-agent-builder` | Clones project source code via `git clone` over HTTPS |
+| `muvee-agent-builder` | Clones project source code via `git clone` over HTTPS; forwards proxy into docker builds so `RUN` commands (pip, apt-get, curl, npm…) inside Dockerfiles use the same proxy |
 
-:::note Docker operations are not affected
-`docker buildx build`, `docker pull`, and `docker push` go through the host Docker daemon socket — they are **not** affected by the proxy environment variables in `.proxy.env`. Configure the host `dockerd` proxy separately if needed.
+:::note What is not affected
+`docker pull` and `docker push` go through the host Docker daemon socket — configure the host `dockerd` proxy separately if needed.
 
-SSH-based git clones are also not affected by HTTP proxy settings. Use HTTPS + token authentication (via the muvee Secrets mechanism) instead.
+SSH-based git clones are not affected by HTTP proxy settings. Use HTTPS + token authentication (via the muvee Secrets mechanism) instead.
 :::
 
 ## Setup
@@ -39,6 +39,32 @@ no_proxy=localhost,127.0.0.1,127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 ```
 
 Both uppercase (`HTTP_PROXY`) and lowercase (`http_proxy`) forms are provided because different tools have different conventions: Go's `net/http` reads both, `git` (libcurl) reads only lowercase.
+
+## Build-time proxy passthrough
+
+When a proxy is configured, muvee automatically forwards `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` into every `docker buildx build` invocation as `--build-arg` values. This means `RUN` commands inside your Dockerfile — `pip install`, `apt-get`, `curl`, `npm install`, etc. — use the proxy without any Dockerfile changes required.
+
+Each deployment log shows a `[proxy]` line confirming the proxy state before the build starts:
+
+```
+[proxy] forwarding into build: HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy
+```
+
+or, when no proxy is configured:
+
+```
+[proxy] passthrough enabled but no proxy vars are set; build will use direct network access
+```
+
+### Disabling build-time passthrough
+
+If you want the build environment isolated from the proxy (for example, the proxy is only needed for `git clone` or OAuth calls, not for package downloads), set in `.proxy.env`:
+
+```env
+BUILDER_PROXY_PASSTHROUGH=false
+```
+
+Accepted false values: `false`, `0`, `no`, `off` (case-insensitive). Any other value, or leaving the variable unset, keeps passthrough enabled.
 
 ## NO_PROXY — internal services
 

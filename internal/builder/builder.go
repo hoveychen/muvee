@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -120,6 +121,15 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 			_ = os.Remove(f)
 		}
 	}()
+	// Propagate proxy env vars into the build so RUN commands (pip, apt-get, etc.)
+	// use the same proxy as the builder container. BuildKit only picks these up
+	// via --build-arg, not from the CLI process environment.
+	// Controlled by BUILDER_PROXY_PASSTHROUGH (default: enabled).
+	proxyArgs, proxyLog := collectProxyBuildArgs()
+	logFn(proxyLog)
+	log.Print(proxyLog)
+	buildArgs = append(buildArgs, proxyArgs...)
+
 	buildArgs = append(buildArgs, filepath.Dir(dockerfilePath))
 	if err := runCmd(ctx, logFn, "docker", buildArgs...); err != nil {
 		return "", fmt.Errorf("docker build: %w", err)
@@ -185,4 +195,49 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// collectProxyBuildArgs returns --build-arg flags for any proxy env vars that
+// are currently set to a non-empty value, together with a human-readable log
+// line describing what was injected (or why nothing was injected).
+//
+// Returns nil args when passthrough is disabled
+// (BUILDER_PROXY_PASSTHROUGH=false/0/no/off) or when no proxy vars are set.
+//
+// The returned args slice is ready to append into a docker-buildx args list:
+//
+//	["--build-arg", "HTTP_PROXY=http://...", "--build-arg", "HTTPS_PROXY=http://...", ...]
+func collectProxyBuildArgs() (args []string, logLine string) {
+	if !buildProxyPassthrough() {
+		return nil, "[proxy] passthrough disabled (BUILDER_PROXY_PASSTHROUGH=false); build will not inherit proxy settings"
+	}
+	var keys []string
+	for _, v := range []string{
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY",
+		"http_proxy", "https_proxy", "no_proxy", "all_proxy", "ftp_proxy",
+	} {
+		if val := os.Getenv(v); val != "" {
+			args = append(args, "--build-arg", v+"="+val)
+			keys = append(keys, v)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, "[proxy] passthrough enabled but no proxy vars are set; build will use direct network access"
+	}
+	return args, fmt.Sprintf("[proxy] forwarding into build: %s", strings.Join(keys, ", "))
+}
+
+// buildProxyPassthrough reports whether proxy env vars should be forwarded into
+// docker builds as --build-arg values.
+//
+// Enabled by default. Set BUILDER_PROXY_PASSTHROUGH=false (or 0 / no / off)
+// in .proxy.env to opt out. Any other value, including an empty string or an
+// unset variable, keeps the default-on behaviour.
+func buildProxyPassthrough() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILDER_PROXY_PASSTHROUGH"))) {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
 }

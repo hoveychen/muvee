@@ -88,3 +88,5 @@ release/
 /authservice
 /muveectl
 /server
+migration/
+arch-test/
