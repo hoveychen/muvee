@@ -594,6 +594,16 @@ body {
   }
 }
 
+/* Secrets-binding form rows (ProjectDetail > Secrets tab) — on desktop the
+ * label / input / hint sit inline; on mobile we let each label+input group
+ * fill the line and push the trailing hint text onto its own row by
+ * letting the inner flex container wrap. */
+@media (max-width: 767px) {
+  .secret-binding-row { flex-wrap: wrap !important; }
+  .secret-binding-row input.form-input { width: auto !important; flex: 1 1 140px !important; }
+  .secret-binding-row > span:last-child { flex: 1 1 100%; }
+}
+
 /* The same idea for grid-based "table-like" rows that don't use <table>.
  * Authors opt-in by adding the .mobile-stack class to the grid container;
  * on mobile it switches from grid to a vertical stack. */
