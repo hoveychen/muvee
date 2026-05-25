@@ -199,24 +199,28 @@ func min(a, b int) int {
 
 // collectProxyBuildArgs returns --build-arg flags for any proxy env vars that
 // are currently set to a non-empty value, together with a human-readable log
-// line describing what was injected (or why nothing was injected).
-//
-// Returns nil args when passthrough is disabled
-// (BUILDER_PROXY_PASSTHROUGH=false/0/no/off) or when no proxy vars are set.
+// line. Returns nil args when passthrough is disabled or no proxy vars are set.
+func collectProxyBuildArgs() (args []string, logLine string) {
+	return collectProxyBuildArgsFrom(os.Getenv)
+}
+
+// collectProxyBuildArgsFrom is the pure-function core of collectProxyBuildArgs.
+// Accepting getenv makes it testable without modifying process environment.
 //
 // The returned args slice is ready to append into a docker-buildx args list:
 //
 //	["--build-arg", "HTTP_PROXY=http://...", "--build-arg", "HTTPS_PROXY=http://...", ...]
-func collectProxyBuildArgs() (args []string, logLine string) {
-	if !buildProxyPassthrough() {
-		return nil, "[proxy] passthrough disabled (BUILDER_PROXY_PASSTHROUGH=false); build will not inherit proxy settings"
+func collectProxyBuildArgsFrom(getenv func(string) string) (args []string, logLine string) {
+	if !buildProxyPassthroughFor(getenv) {
+		actual := getenv("BUILDER_PROXY_PASSTHROUGH")
+		return nil, fmt.Sprintf("[proxy] passthrough disabled (BUILDER_PROXY_PASSTHROUGH=%s); build will not inherit proxy settings", actual)
 	}
 	var keys []string
 	for _, v := range []string{
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY",
 		"http_proxy", "https_proxy", "no_proxy", "all_proxy", "ftp_proxy",
 	} {
-		if val := os.Getenv(v); val != "" {
+		if val := getenv(v); val != "" {
 			args = append(args, "--build-arg", v+"="+val)
 			keys = append(keys, v)
 		}
@@ -227,14 +231,12 @@ func collectProxyBuildArgs() (args []string, logLine string) {
 	return args, fmt.Sprintf("[proxy] forwarding into build: %s", strings.Join(keys, ", "))
 }
 
-// buildProxyPassthrough reports whether proxy env vars should be forwarded into
-// docker builds as --build-arg values.
-//
-// Enabled by default. Set BUILDER_PROXY_PASSTHROUGH=false (or 0 / no / off)
-// in .proxy.env to opt out. Any other value, including an empty string or an
-// unset variable, keeps the default-on behaviour.
-func buildProxyPassthrough() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILDER_PROXY_PASSTHROUGH"))) {
+// buildProxyPassthroughFor is the core of the proxy-passthrough decision.
+// Accepting getenv makes it testable without modifying process environment.
+// Set BUILDER_PROXY_PASSTHROUGH=false/0/no/off to disable; any other value
+// (including unset or empty) keeps the default-on behaviour.
+func buildProxyPassthroughFor(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("BUILDER_PROXY_PASSTHROUGH"))) {
 	case "false", "0", "no", "off":
 		return false
 	default:
