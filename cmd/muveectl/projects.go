@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -148,6 +149,8 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("expose-service", "", "Compose service name to expose via the muvee router")
 	cmd.Flags().Int("expose-port", 0, "Container port on the exposed service to publish")
 	cmd.Flags().String("image-ref", "", "OCI image reference (e.g. ghcr.io/foo/bar:latest); presence selects the image-only project type")
+	cmd.Flags().Bool("build-only", false, "Build + push a Docker image only (no container started, no host port, no route); downstream compose/image projects reference the resulting last_image_tag")
+	cmd.Flags().String("triggers-redeploy-of", "", "Comma-separated downstream project IDs to auto-redeploy after a successful build push (build-only projects)")
 	cmd.Flags().Int("container-port", 0, "Container port to publish (image-only project type; default 8080)")
 	cmd.Flags().String("memory-limit", "", "Container memory limit (e.g. 4g, 512m)")
 	cmd.Flags().String("volume-mount-path", "", "Container path for the persistent named volume (compose/image projects)")
@@ -245,6 +248,25 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		v, _ := cmd.Flags().GetString("image-ref")
 		p["image_ref"] = v
 	}
+	if cmd.Flags().Changed("build-only") {
+		if v, _ := cmd.Flags().GetBool("build-only"); v {
+			p["project_type"] = "build"
+		}
+	}
+	if cmd.Flags().Changed("triggers-redeploy-of") {
+		v, _ := cmd.Flags().GetString("triggers-redeploy-of")
+		ids := []string{}
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				ids = append(ids, part)
+			}
+		}
+		// Encode as JSON array string so it round-trips through the existing
+		// triggers_redeploy_of TEXT column.
+		b, _ := json.Marshal(ids)
+		p["triggers_redeploy_of"] = string(b)
+	}
 	if cmd.Flags().Changed("container-port") {
 		v, _ := cmd.Flags().GetInt("container-port")
 		p["container_port"] = v
@@ -340,12 +362,16 @@ var projectsCreateCmd = &cobra.Command{
 		domainOnly, _ := cmd.Flags().GetBool("domain-only")
 		composeMode, _ := cmd.Flags().GetBool("compose")
 		imageMode := cmd.Flags().Changed("image-ref")
+		buildOnly, _ := cmd.Flags().GetBool("build-only")
 		isHosted, _ := cmd.Flags().GetString("git-source")
 		if domainOnly && composeMode {
 			return fmt.Errorf("--domain-only and --compose are mutually exclusive")
 		}
 		if imageMode && (domainOnly || composeMode) {
 			return fmt.Errorf("--image-ref is mutually exclusive with --domain-only / --compose")
+		}
+		if buildOnly && (domainOnly || composeMode || imageMode) {
+			return fmt.Errorf("--build-only is mutually exclusive with --domain-only / --compose / --image-ref")
 		}
 		if imageMode {
 			if cmd.Flags().Changed("git-url") || cmd.Flags().Changed("git-source") {
@@ -362,6 +388,15 @@ var projectsCreateCmd = &cobra.Command{
 			if !cmd.Flags().Changed("expose-port") {
 				return fmt.Errorf("--expose-port is required for compose projects")
 			}
+		} else if buildOnly {
+			if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
+				return fmt.Errorf("--git-url is required for build-only projects (or use --git-source hosted)")
+			}
+			for _, bad := range []string{"container-port", "expose-port", "expose-service", "auth-required", "memory-limit", "volume-mount-path", "fixed-port", "fixed-node"} {
+				if cmd.Flags().Changed(bad) {
+					return fmt.Errorf("--%s is not allowed with --build-only (build projects don't serve traffic)", bad)
+				}
+			}
 		} else if domainOnly {
 			if !cmd.Flags().Changed("domain") {
 				return fmt.Errorf("--domain is required when --domain-only is set")
@@ -370,7 +405,7 @@ var projectsCreateCmd = &cobra.Command{
 				return fmt.Errorf("--git-url and --git-source are not allowed with --domain-only")
 			}
 		} else if isHosted != "hosted" && !cmd.Flags().Changed("git-url") {
-			return fmt.Errorf("--git-url is required (or use --git-source hosted, --domain-only, --compose, or --image-ref)")
+			return fmt.Errorf("--git-url is required (or use --git-source hosted, --domain-only, --compose, --image-ref, or --build-only)")
 		}
 		if cmd.Flags().Changed("fixed-port") != cmd.Flags().Changed("fixed-node") {
 			return fmt.Errorf("--fixed-port and --fixed-node must be set together")
