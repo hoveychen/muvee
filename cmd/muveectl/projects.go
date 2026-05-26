@@ -78,6 +78,7 @@ func init() {
 	projectsCmd.AddCommand(projectsUpdateCmd)
 	projectsCmd.AddCommand(projectsDeleteCmd)
 	projectsCmd.AddCommand(projectsDeployCmd)
+	projectsCmd.AddCommand(projectsLatestImageCmd)
 	projectsCmd.AddCommand(projectsDeploymentsCmd)
 	projectsCmd.AddCommand(projectsLogsCmd)
 	projectsCmd.AddCommand(projectsRuntimeLogsCmd)
@@ -457,6 +458,43 @@ var projectsGetCmd = &cobra.Command{
 		if pushURL := str(result, "git_push_url"); pushURL != "" {
 			fmt.Printf("Git Push URL:  %s\n", pushURL)
 		}
+		if tag := str(result, "last_image_tag"); tag != "" {
+			fmt.Printf("Last Image:    %s\n", tag)
+		}
+		if trig := str(result, "triggers_redeploy_of"); trig != "" && trig != "[]" {
+			fmt.Printf("Auto-chain:    %s\n", trig)
+		}
+		return nil
+	},
+}
+
+// ─── Latest Image ────────────────────────────────────────────────────────────
+
+// projectsLatestImageCmd prints `last_image_tag` for a build-only project in a
+// shape suitable for shell pipelines, e.g.
+//
+//	HUB_IMAGE=$(muveectl projects latest-image hub-builder)
+var projectsLatestImageCmd = &cobra.Command{
+	Use:   "latest-image ID-OR-NAME",
+	Short: "Print the last image tag built by a build-only project",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := requireAuth(); err != nil {
+			return err
+		}
+		id, err := resolveProjectRef(cl, args[0])
+		if err != nil {
+			return err
+		}
+		result, err := cl.do("GET", "/api/projects/"+id, nil)
+		if err != nil {
+			return err
+		}
+		tag := str(result, "last_image_tag")
+		if tag == "" {
+			return fmt.Errorf("project %s has no last_image_tag yet (deploy it at least once)", args[0])
+		}
+		fmt.Println(tag)
 		return nil
 	},
 }
