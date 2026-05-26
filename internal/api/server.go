@@ -1793,8 +1793,74 @@ func validateProject(p *store.Project) error {
 			return nil
 		}
 		return validateDomainPrefix(p.DomainPrefix)
+	case store.ProjectTypeBuild:
+		// Build projects only run the builder; they don't launch a container,
+		// don't allocate a host port, and don't register a Traefik route. The
+		// resulting image tag is exposed via `last_image_tag` for downstream
+		// compose / image projects to consume.
+		if p.GitSource == "" {
+			p.GitSource = store.GitSourceExternal
+		}
+		if p.GitSource != store.GitSourceExternal && p.GitSource != store.GitSourceHosted {
+			return fmt.Errorf("git_source must be 'external' or 'hosted'")
+		}
+		if p.GitSource == store.GitSourceExternal && p.GitURL == "" {
+			return fmt.Errorf("git_url is required for build projects")
+		}
+		if p.GitSource == store.GitSourceHosted {
+			p.GitURL = ""
+		}
+		if strings.TrimSpace(p.GitBranch) == "" {
+			p.GitBranch = "main"
+		}
+		if strings.TrimSpace(p.DockerfilePath) == "" {
+			p.DockerfilePath = "Dockerfile"
+		}
+		// Reject fields that don't apply to build-only projects so a caller
+		// can't accidentally pin behaviour they won't get.
+		if p.ContainerPort != 0 {
+			return fmt.Errorf("container_port is not allowed for build projects (they do not serve traffic)")
+		}
+		if p.ExposePort != 0 || p.ExposeService != "" {
+			return fmt.Errorf("expose_port / expose_service are not allowed for build projects")
+		}
+		if p.AuthRequired {
+			return fmt.Errorf("auth_required is not allowed for build projects")
+		}
+		if p.AuthAllowedDomains != "" || p.AuthBypassPaths != "" {
+			return fmt.Errorf("auth_* fields are not allowed for build projects")
+		}
+		if p.ImageRef != "" {
+			return fmt.Errorf("image_ref is not allowed for build projects")
+		}
+		if p.ComposeFilePath != "" {
+			return fmt.Errorf("compose_file_path is not allowed for build projects")
+		}
+		if p.MemoryLimit != "" {
+			return fmt.Errorf("memory_limit is not allowed for build projects (no container is started)")
+		}
+		if p.VolumeMountPath != "" {
+			return fmt.Errorf("volume_mount_path is not allowed for build projects")
+		}
+		if p.FixedHostPort != nil || p.FixedNodeID != nil {
+			return fmt.Errorf("fixed_host_port / fixed_node_id are not allowed for build projects")
+		}
+		// access_mode is irrelevant (nothing is routed) but we accept the
+		// default 'public' for schema consistency; reject anything else so
+		// admins don't think 'private' would gate access to /api/projects/<id>.
+		if p.AccessMode != store.ProjectAccessModePublic {
+			return fmt.Errorf("access_mode must be 'public' for build projects (no route is registered)")
+		}
+		if p.DomainPrefix == "" {
+			if err := validateDomainPrefix(p.Name); err != nil {
+				return fmt.Errorf("domain_prefix is required because project name %q cannot be used as a subdomain: %w", p.Name, err)
+			}
+			p.DomainPrefix = p.Name
+			return nil
+		}
+		return validateDomainPrefix(p.DomainPrefix)
 	default:
-		return fmt.Errorf("project_type must be 'deployment', 'domain_only', 'compose', or 'image'")
+		return fmt.Errorf("project_type must be 'deployment', 'domain_only', 'compose', 'image', or 'build'")
 	}
 }
 
@@ -1918,7 +1984,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For hosted repos: initialize a bare git repo and set the sentinel git_url.
-	if (p.ProjectType == store.ProjectTypeDeployment || p.ProjectType == store.ProjectTypeCompose) && p.GitSource == store.GitSourceHosted {
+	if (p.ProjectType == store.ProjectTypeDeployment || p.ProjectType == store.ProjectTypeCompose || p.ProjectType == store.ProjectTypeBuild) && p.GitSource == store.GitSourceHosted {
 		if s.gitRepoBasePath == "" {
 			jsonErr(w, fmt.Errorf("hosted git repositories are not enabled on this server (GIT_REPO_BASE_PATH not set)"), 400)
 			return
@@ -1932,7 +1998,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if (created.ProjectType == store.ProjectTypeDeployment || created.ProjectType == store.ProjectTypeCompose) && created.GitSource == store.GitSourceHosted {
+	if (created.ProjectType == store.ProjectTypeDeployment || created.ProjectType == store.ProjectTypeCompose || created.ProjectType == store.ProjectTypeBuild) && created.GitSource == store.GitSourceHosted {
 		repoPath := gitrepo.RepoPath(s.gitRepoBasePath, created.ID)
 		if err := gitrepo.InitBareRepo(repoPath); err != nil {
 			// Clean up the project if repo init fails.
@@ -2036,11 +2102,12 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ProjectType = existing.ProjectType
-	// last_tracked_commit_sha and last_tracked_image_digests are server-managed
-	// — never accept them from the client. Forcing a redeploy must go through
-	// POST /api/projects/:id/deploy.
+	// last_tracked_commit_sha, last_tracked_image_digests, and last_image_tag
+	// are server-managed — never accept them from the client. Forcing a
+	// redeploy must go through POST /api/projects/:id/deploy.
 	p.LastTrackedCommitSHA = existing.LastTrackedCommitSHA
 	p.LastTrackedImageDigests = existing.LastTrackedImageDigests
+	p.LastImageTag = existing.LastImageTag
 	// Auto-deploy can only be enabled for project types that actually deploy.
 	if p.AutoDeployEnabled && existing.ProjectType == store.ProjectTypeDomainOnly {
 		jsonErr(w, fmt.Errorf("auto_deploy_enabled is not supported for domain_only projects"), 400)

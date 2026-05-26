@@ -676,3 +676,135 @@ func TestValidateProject_Compose_RejectsBogusGitSource(t *testing.T) {
 		t.Errorf("expected git_source error, got %v", err)
 	}
 }
+
+// ─── Build-only projects ─────────────────────────────────────────────────────
+
+func TestValidateProject_Build_ExternalDefaults(t *testing.T) {
+	p := store.Project{
+		Name:        "hub-builder",
+		ProjectType: store.ProjectTypeBuild,
+		GitURL:      "https://github.com/foo/bar.git",
+	}
+	if err := validateProject(&p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.GitSource != store.GitSourceExternal {
+		t.Errorf("expected git_source default external, got %q", p.GitSource)
+	}
+	if p.GitBranch != "main" {
+		t.Errorf("expected git_branch defaulted to main, got %q", p.GitBranch)
+	}
+	if p.DockerfilePath != "Dockerfile" {
+		t.Errorf("expected dockerfile_path defaulted, got %q", p.DockerfilePath)
+	}
+	if p.DomainPrefix != "hub-builder" {
+		t.Errorf("expected domain_prefix defaulted to name, got %q", p.DomainPrefix)
+	}
+}
+
+func TestValidateProject_Build_HostedClearsGitURL(t *testing.T) {
+	p := store.Project{
+		Name:        "hub-builder",
+		ProjectType: store.ProjectTypeBuild,
+		GitSource:   store.GitSourceHosted,
+		GitURL:      "https://leftover",
+	}
+	if err := validateProject(&p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.GitURL != "" {
+		t.Errorf("expected hosted build to clear git_url, got %q", p.GitURL)
+	}
+}
+
+func TestValidateProject_Build_ExternalRequiresGitURL(t *testing.T) {
+	p := store.Project{
+		Name:        "hub-builder",
+		ProjectType: store.ProjectTypeBuild,
+	}
+	err := validateProject(&p)
+	if err == nil {
+		t.Fatal("expected error for external build without git_url")
+	}
+	if !strings.Contains(err.Error(), "git_url") {
+		t.Errorf("expected git_url error, got %v", err)
+	}
+}
+
+func TestValidateProject_Build_RejectsContainerPort(t *testing.T) {
+	p := store.Project{
+		Name:          "hub-builder",
+		ProjectType:   store.ProjectTypeBuild,
+		GitURL:        "https://example.com/x.git",
+		ContainerPort: 8080,
+	}
+	err := validateProject(&p)
+	if err == nil || !strings.Contains(err.Error(), "container_port") {
+		t.Fatalf("expected container_port error, got %v", err)
+	}
+}
+
+func TestValidateProject_Build_RejectsExposeFields(t *testing.T) {
+	p := store.Project{
+		Name:          "hub-builder",
+		ProjectType:   store.ProjectTypeBuild,
+		GitURL:        "https://example.com/x.git",
+		ExposeService: "web",
+	}
+	err := validateProject(&p)
+	if err == nil || !strings.Contains(err.Error(), "expose") {
+		t.Fatalf("expected expose error, got %v", err)
+	}
+}
+
+func TestValidateProject_Build_RejectsAuthRequired(t *testing.T) {
+	p := store.Project{
+		Name:         "hub-builder",
+		ProjectType:  store.ProjectTypeBuild,
+		GitURL:       "https://example.com/x.git",
+		AuthRequired: true,
+	}
+	err := validateProject(&p)
+	if err == nil || !strings.Contains(err.Error(), "auth_required") {
+		t.Fatalf("expected auth_required error, got %v", err)
+	}
+}
+
+func TestValidateProject_Build_RejectsImageRef(t *testing.T) {
+	p := store.Project{
+		Name:        "hub-builder",
+		ProjectType: store.ProjectTypeBuild,
+		GitURL:      "https://example.com/x.git",
+		ImageRef:    "ghcr.io/foo:latest",
+	}
+	err := validateProject(&p)
+	if err == nil || !strings.Contains(err.Error(), "image_ref") {
+		t.Fatalf("expected image_ref error, got %v", err)
+	}
+}
+
+func TestValidateProject_Build_RejectsMemoryLimit(t *testing.T) {
+	p := store.Project{
+		Name:        "hub-builder",
+		ProjectType: store.ProjectTypeBuild,
+		GitURL:      "https://example.com/x.git",
+		MemoryLimit: "4g",
+	}
+	err := validateProject(&p)
+	if err == nil || !strings.Contains(err.Error(), "memory_limit") {
+		t.Fatalf("expected memory_limit error, got %v", err)
+	}
+}
+
+func TestValidateProject_Build_RejectsPrivateAccessMode(t *testing.T) {
+	p := store.Project{
+		Name:        "hub-builder",
+		ProjectType: store.ProjectTypeBuild,
+		GitURL:      "https://example.com/x.git",
+		AccessMode:  store.ProjectAccessModePrivate,
+	}
+	err := validateProject(&p)
+	if err == nil || !strings.Contains(err.Error(), "access_mode") {
+		t.Fatalf("expected access_mode error, got %v", err)
+	}
+}

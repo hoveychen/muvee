@@ -286,11 +286,52 @@ func checkBuildCompletions(ctx context.Context, st *store.Store, sched *schedule
 			continue
 		}
 		_ = st.SetDeploymentImageTag(ctx, r.deploymentID, res.ImageTag)
+		// Build-only projects stop here: no container start, no host port, no
+		// Traefik route. The image tag is recorded on the project for
+		// downstream compose/image projects to consume, and any opted-in
+		// downstream projects (triggers_redeploy_of) are kicked off as
+		// independent deployments.
+		if project.ProjectType == store.ProjectTypeBuild {
+			_ = st.SetProjectLastImageTag(ctx, project.ID, res.ImageTag)
+			_ = st.UpdateDeploymentStatus(ctx, r.deploymentID, store.DeploymentStatusRunning, "")
+			_ = st.SetDeploymentHostPort(ctx, r.deploymentID, 0)
+			autoTriggerDownstreamRedeploys(ctx, st, sched, project)
+			_ = st.UpdateTaskStatus(ctx, r.taskID, store.TaskStatusCompleted, r.result+"_dispatched")
+			continue
+		}
 		_ = st.UpdateDeploymentStatus(ctx, r.deploymentID, store.DeploymentStatusDeploying, "")
 		if err := sched.DispatchDeploy(ctx, deployment, project, res.ImageTag); err != nil {
 			fmt.Printf("dispatch deploy error: %v\n", err)
 			_ = st.UpdateDeploymentStatus(ctx, r.deploymentID, store.DeploymentStatusFailed, err.Error())
 		}
 		_ = st.UpdateTaskStatus(ctx, r.taskID, store.TaskStatusCompleted, r.result+"_dispatched")
+	}
+}
+
+// autoTriggerDownstreamRedeploys parses the build project's triggers_redeploy_of
+// JSON array and fires a TriggerDeployment for each listed downstream project.
+// Failures are logged but do not block — the build itself is already complete,
+// and a downstream that can't deploy now is a problem on its own.
+func autoTriggerDownstreamRedeploys(ctx context.Context, st *store.Store, sched *scheduler.Scheduler, project *store.Project) {
+	raw := project.TriggersRedeployOf
+	if raw == "" || raw == "[]" {
+		return
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		log.Printf("build %s: malformed triggers_redeploy_of (%q): %v", project.ID, raw, err)
+		return
+	}
+	for _, idStr := range ids {
+		downstreamID, err := uuid.Parse(idStr)
+		if err != nil {
+			log.Printf("build %s: triggers_redeploy_of entry %q is not a UUID: %v", project.ID, idStr, err)
+			continue
+		}
+		if _, err := sched.TriggerDeployment(ctx, downstreamID, "build-chain"); err != nil {
+			log.Printf("build %s: auto-chain redeploy of %s failed: %v", project.ID, downstreamID, err)
+		} else {
+			log.Printf("build %s: auto-chain redeploy of %s dispatched", project.ID, downstreamID)
+		}
 	}
 }

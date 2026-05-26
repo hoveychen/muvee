@@ -63,6 +63,11 @@ const (
 	ProjectTypeDomainOnly ProjectType = "domain_only"
 	ProjectTypeCompose    ProjectType = "compose"
 	ProjectTypeImage      ProjectType = "image"
+	// ProjectTypeBuild only builds + pushes a Docker image to muvee's own
+	// registry. It does not launch a container, allocate a host port, or
+	// register a Traefik route. Downstream `compose` / `image` projects
+	// consume the result via the `last_image_tag` field.
+	ProjectTypeBuild ProjectType = "build"
 )
 
 type Project struct {
@@ -101,6 +106,17 @@ type Project struct {
 	ImageRef string `db:"image_ref"         json:"image_ref"`
 	// AutoDeployEnabled opts the project into automatic redeploy on new commits.
 	AutoDeployEnabled bool `db:"auto_deploy_enabled" json:"auto_deploy_enabled"`
+	// LastImageTag is the most recently built+pushed image tag for a
+	// ProjectTypeBuild project (e.g. "registry.local:5000/<id>:abc12345"). Set
+	// immediately after `docker buildx build --push` succeeds; consumed by
+	// downstream compose / image projects via env-var injection. Empty for all
+	// other project types.
+	LastImageTag string `db:"last_image_tag" json:"last_image_tag"`
+	// TriggersRedeployOf is a JSON-encoded array of project UUIDs the server
+	// auto-triggers a redeploy of after a successful build push. Empty array
+	// `[]` (the default) disables the auto-chain. Only meaningful for
+	// ProjectTypeBuild.
+	TriggersRedeployOf string `db:"triggers_redeploy_of" json:"triggers_redeploy_of"`
 	// LastTrackedCommitSHA is the SHA we last triggered a deployment for via the
 	// auto-deploy watcher. Compared against the live remote HEAD to decide
 	// whether a fresh deployment is needed. Server-managed: never accepted from
