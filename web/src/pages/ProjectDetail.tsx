@@ -137,6 +137,7 @@ export default function ProjectDetail() {
   const isTunnel = project.project_type === 'domain_only'
   const isCompose = project.project_type === 'compose'
   const isImage = project.project_type === 'image'
+  const isBuild = project.project_type === 'build'
   const latestDeploy = deployments[0]
   const color = isTunnel ? 'var(--accent)' : statusColor(latestDeploy?.status ?? 'pending')
 
@@ -162,6 +163,7 @@ export default function ProjectDetail() {
             </h1>
           </div>
           <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
+            {!isBuild && (
             <a
               href={`https://${project.domain_prefix}.${baseDomain}`}
               target="_blank"
@@ -172,6 +174,7 @@ export default function ProjectDetail() {
               <ExternalLink size={14} />
               {t('projectDetail.visit')}
             </a>
+            )}
             {!isTunnel && (
             <button
               onClick={handleDeploy}
@@ -185,9 +188,11 @@ export default function ProjectDetail() {
             )}
           </div>
         </div>
+        {!isBuild && (
         <div className="page-subtitle" style={{ marginTop: '0.4rem', marginLeft: '1.75rem' }}>
           <span style={{ fontFamily: MONO }}>{project.domain_prefix}.{baseDomain}</span>
         </div>
+        )}
         {!isTunnel && project.git_source === 'hosted' && project.git_push_url && (
           <PushUrlBadge url={project.git_push_url} projectId={project.id} />
         )}
@@ -213,6 +218,23 @@ export default function ProjectDetail() {
             })}
           </div>
         )}
+        {isBuild && (
+          <div style={{ marginTop: '0.5rem', marginLeft: '1.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', maxWidth: '720px' }}>
+            <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>{t('projectDetail.buildHint')}</div>
+            <div style={{ fontSize: '0.8125rem', display: 'flex', gap: '0.4rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--fg-muted)' }}>{t('projectDetail.buildLastImage')}:</span>
+              {project.last_image_tag
+                ? <span style={{ fontFamily: MONO, color: 'var(--fg-primary)', wordBreak: 'break-all' }}>{project.last_image_tag}</span>
+                : <span style={{ color: 'var(--fg-muted)', fontStyle: 'italic' }}>{t('projectDetail.buildNoImage')}</span>}
+            </div>
+            <div style={{ fontSize: '0.8125rem', display: 'flex', gap: '0.4rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--fg-muted)' }}>{t('projectDetail.buildAutoChain')}:</span>
+              {project.triggers_redeploy_of && project.triggers_redeploy_of !== '[]'
+                ? <span style={{ fontFamily: MONO, color: 'var(--fg-primary)' }}>{project.triggers_redeploy_of}</span>
+                : <span style={{ color: 'var(--fg-muted)', fontStyle: 'italic' }}>{t('projectDetail.buildAutoChainEmpty')}</span>}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -223,6 +245,15 @@ export default function ProjectDetail() {
           ['branding', Palette, t('projectDetail.tabs.branding')],
           ['auth', Shield, t('projectDetail.tabs.auth')],
           ['users', Users, 'Users'],
+          ['tokens', Key, t('projectDetail.tabs.tokens')],
+        ] as const : isBuild ? [
+          // Build-only projects don't serve traffic; only deploy/config/repo/
+          // secrets/tokens make sense. Branding/auth/users/datasets/workspace
+          // are intentionally hidden.
+          ['deploy', Rocket, t('projectDetail.tabs.deployments')],
+          ['config', Settings, t('projectDetail.tabs.config')],
+          ...(project.git_source === 'hosted' ? [['repository', GitBranch, t('projectDetail.tabs.repository')] as const] : []),
+          ['secrets', KeyRound, t('projectDetail.tabs.secrets')],
           ['tokens', Key, t('projectDetail.tabs.tokens')],
         ] as const : [
           ['deploy', Rocket, t('projectDetail.tabs.deployments')],
@@ -744,6 +775,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
   const isCompose = form.project_type === 'compose'
   const isImage = form.project_type === 'image'
   const isTunnelType = form.project_type === 'domain_only'
+  const isBuildType = form.project_type === 'build'
 
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(['identity']))
   const toggleSection = (id: string) =>
@@ -862,6 +894,22 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
             </div>
           )}
           {!isCompose && !isImage && field(t('projectDetail.config.dockerfilePath'), 'dockerfile_path')}
+          {isBuildType && (
+            <div>
+              <label className="form-label">{t('newProject.fields.triggersRedeployOf').toUpperCase()}</label>
+              <input
+                type="text"
+                value={(form.triggers_redeploy_of ?? '') as string}
+                onChange={e => onChange({ ...form, triggers_redeploy_of: e.target.value })}
+                placeholder="[]"
+                className="form-input w-full"
+                style={{ fontFamily: MONO }}
+              />
+              <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.fields.triggersRedeployOfHint')}
+              </p>
+            </div>
+          )}
           {isCompose && (
             <div>
               <label className="form-label">{t('projectDetail.config.pinnedNode').toUpperCase()}</label>
@@ -915,7 +963,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
         </>
       ))}
 
-      {!isCompose && !isTunnelType && renderSection('runtime', t('projectDetail.config.sections.runtime'), (
+      {!isCompose && !isTunnelType && !isBuildType && renderSection('runtime', t('projectDetail.config.sections.runtime'), (
         <>
           {field(t('projectDetail.config.memoryLimit'), 'memory_limit', t('projectDetail.config.memoryLimitHint'))}
           {field(t('projectDetail.config.volumeMountPath'), 'volume_mount_path', t('projectDetail.config.volumeMountPathHint'))}
@@ -957,7 +1005,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
             )}
           </div>
 
-          {!isTunnelType && (isAdmin || form.fixed_host_port) && (
+          {!isTunnelType && !isBuildType && (isAdmin || form.fixed_host_port) && (
             <div>
               <label className="form-label">
                 {t('projectDetail.config.fixedPort').toUpperCase()}

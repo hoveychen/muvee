@@ -13,7 +13,7 @@ export interface User {
 export interface Project {
   id: string
   name: string
-  project_type: 'deployment' | 'domain_only' | 'compose' | 'image'
+  project_type: 'deployment' | 'domain_only' | 'compose' | 'image' | 'build'
   git_url: string
   git_branch: string
   git_source: 'external' | 'hosted'
@@ -51,6 +51,14 @@ export interface Project {
   // image-digest watcher uses to detect upstream image updates for compose
   // projects. Server-managed, read-only.
   last_tracked_image_digests: string
+  // last_image_tag is the most recently built+pushed image tag for a 'build'
+  // project (e.g. "registry.local:5000/<id>:abc12345"). Server-managed,
+  // read-only. Empty for all other project types.
+  last_image_tag?: string
+  // triggers_redeploy_of is a JSON-encoded array of downstream project UUIDs
+  // the server auto-redeploys after a successful build push (build projects
+  // only). Empty array "[]" disables the auto-chain.
+  triggers_redeploy_of?: string
   // access_mode controls who can reach the deployed downstream service:
   //   'public'  — any authenticated muvee user (default, legacy behaviour)
   //   'private' — only project owner, system admins, and explicitly allowed users

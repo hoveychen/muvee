@@ -117,6 +117,11 @@
     "composePinned": "已固定到部署节点 — 卷数据可在重新部署时保留",
     "composeUnpinned": "尚未固定 — 首次部署时会固定到一个节点",
     "imageHint": "现成镜像：{{ref}}（端口 {{port}}）",
+    "buildHint": "仅构建项目：构建并推送镜像后停止，不启动容器、不接路由。",
+    "buildLastImage": "最新镜像",
+    "buildNoImage": "尚未构建出镜像 — 至少触发一次部署",
+    "buildAutoChain": "联动重新部署",
+    "buildAutoChainEmpty": "未配置 — 推送完成后不会自动触发下游",
     "pushUrl": "GIT 推送地址",
     "pushUrlHint": "使用任意用户名和您的 API 令牌作为密码。",
     "pushUrlGenerateToken": "生成令牌",
@@ -384,7 +389,9 @@
       "imageRef": "镜像地址",
       "imageRefHint": "OCI 镜像引用（例如 ghcr.io/owner/repo:tag、docker.io/redis:7-alpine）。",
       "containerPort": "容器端口",
-      "containerPortHint": "镜像在容器内监听的端口，默认 8080。"
+      "containerPortHint": "镜像在容器内监听的端口，默认 8080。",
+      "triggersRedeployOf": "构建成功后联动重新部署",
+      "triggersRedeployOfHint": "逗号分隔的下游项目 ID（compose 或 image 类型）。该构建项目成功推送镜像后，server 会自动触发这些项目重新部署。留空则不联动。"
     },
     "projectType": {
       "deployment": "容器部署",
@@ -393,7 +400,9 @@
       "image": "现成镜像",
       "imageHint": "直接绑定一个 OCI 镜像（Docker Hub、GHCR 等），不需要 git 仓库或构建。开启 auto-deploy 后，镜像 digest 一变就会自动重新部署。",
       "tunnel": "隧道（仅域名）",
-      "tunnelHint": "预留一个域名前缀用于隧道访问。无需 Git 仓库或容器，流量通过 muveectl tunnel 从本地转发。"
+      "tunnelHint": "预留一个域名前缀用于隧道访问。无需 Git 仓库或容器，流量通过 muveectl tunnel 从本地转发。",
+      "build": "仅构建镜像",
+      "buildHint": "只把 Dockerfile 构建并推送到 muvee 内置 registry，不启动容器、不分配端口、不接路由。下游 compose / 镜像项目通过 last_image_tag 引用这个镜像。"
     },
     "gitSource": {
       "external": "外部仓库",
