@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key, Layers, Package } from 'lucide-react'
+import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key, Layers, Package, Wrench } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Node as DeployNode, Project, Secret } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
@@ -284,7 +284,8 @@ function PrivateRepoSection({
 // ─── Main NewProject component ────────────────────────────────────────────────
 
 export default function NewProject() {
-  const [projectType, setProjectType] = useState<'deployment' | 'domain_only' | 'compose' | 'image'>('deployment')
+  const [projectType, setProjectType] = useState<'deployment' | 'domain_only' | 'compose' | 'image' | 'build'>('deployment')
+  const [triggersRedeployOf, setTriggersRedeployOf] = useState('')
   const [form, setForm] = useState<Partial<Project>>({
     git_source: 'external',
     git_branch: 'main',
@@ -395,6 +396,25 @@ export default function NewProject() {
           project_type: 'image',
           ...fixedPortPayload(),
         }
+      } else if (projectType === 'build') {
+        const buildHosted = form.git_source === 'hosted'
+        const ids = triggersRedeployOf
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean)
+        payload = {
+          name: form.name,
+          domain_prefix: form.domain_prefix,
+          git_branch: form.git_branch,
+          git_source: buildHosted ? 'hosted' : 'external',
+          dockerfile_path: form.dockerfile_path || 'Dockerfile',
+          description: form.description,
+          icon: form.icon,
+          tags: form.tags,
+          project_type: 'build',
+          triggers_redeploy_of: JSON.stringify(ids),
+          ...(buildHosted ? {} : { git_url: form.git_url }),
+        }
       } else {
         payload = { ...form, project_type: 'deployment', ...fixedPortPayload() }
       }
@@ -414,6 +434,12 @@ export default function NewProject() {
       }
       // image projects bind a pre-built image — no credentials needed.
       if (projectType === 'image') {
+        navigate(`/projects/${project.id}`)
+        return
+      }
+      // build projects skip credential setup. Hosted build still surfaces the
+      // push URL (shared screen below); external build just navigates.
+      if (projectType === 'build' && project.git_source !== 'hosted') {
         navigate(`/projects/${project.id}`)
         return
       }
@@ -639,6 +665,7 @@ export default function NewProject() {
                 { id: 'deployment' as const, icon: Globe, label: t('newProject.projectType.deployment') },
                 { id: 'compose' as const, icon: Layers, label: t('newProject.projectType.compose') },
                 { id: 'image' as const, icon: Package, label: t('newProject.projectType.image') },
+                { id: 'build' as const, icon: Wrench, label: t('newProject.projectType.build') },
                 { id: 'domain_only' as const, icon: Radio, label: t('newProject.projectType.tunnel') },
               ]).map(opt => (
                 <button
@@ -675,10 +702,15 @@ export default function NewProject() {
                 {t('newProject.projectType.imageHint')}
               </p>
             )}
+            {projectType === 'build' && (
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.projectType.buildHint')}
+              </p>
+            )}
           </div>
 
-          {/* Git Source selector — deployment + compose */}
-          {(projectType === 'deployment' || projectType === 'compose') && (
+          {/* Git Source selector — deployment + compose + build */}
+          {(projectType === 'deployment' || projectType === 'compose' || projectType === 'build') && (
           <div>
             <label className="form-label">{t('newProject.fields.gitSource').toUpperCase()}</label>
             <div className="flex gap-2">
@@ -723,8 +755,8 @@ export default function NewProject() {
             />
           </div>
 
-          {/* Git URL — for deployment+external and compose */}
-          {((projectType === 'deployment' || projectType === 'compose') && !isHosted) && (
+          {/* Git URL — for deployment+external, compose, and build */}
+          {((projectType === 'deployment' || projectType === 'compose' || projectType === 'build') && !isHosted) && (
             <div>
               {fieldLabel(t('newProject.fields.gitUrl'))}
               <input
@@ -747,8 +779,8 @@ export default function NewProject() {
             />
           )}
 
-          {/* Branch — for deployment+external and compose */}
-          {((projectType === 'deployment' || projectType === 'compose') && !isHosted) && (
+          {/* Branch — for deployment+external, compose, and build */}
+          {((projectType === 'deployment' || projectType === 'compose' || projectType === 'build') && !isHosted) && (
             <div>
               {fieldLabel(t('newProject.fields.gitBranch'), false)}
               <input
@@ -904,8 +936,8 @@ export default function NewProject() {
             </p>
           </div>
 
-          {/* Dockerfile path — deployment only */}
-          {projectType === 'deployment' && (
+          {/* Dockerfile path — deployment + build */}
+          {(projectType === 'deployment' || projectType === 'build') && (
           <div>
             {fieldLabel(t('newProject.fields.dockerfilePath'), false)}
             <input
@@ -915,6 +947,23 @@ export default function NewProject() {
               className="form-input"
             />
           </div>
+          )}
+
+          {/* Build-only: triggers_redeploy_of */}
+          {projectType === 'build' && (
+            <div>
+              {fieldLabel(t('newProject.fields.triggersRedeployOf'), false)}
+              <input
+                value={triggersRedeployOf}
+                onChange={e => setTriggersRedeployOf(e.target.value)}
+                placeholder="<project-uuid>, <project-uuid>"
+                className="form-input"
+                style={{ fontFamily: MONO, fontSize: '0.8125rem' }}
+              />
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.fields.triggersRedeployOfHint')}
+              </p>
+            </div>
           )}
 
           {/* Memory limit — deployment / image */}
@@ -949,8 +998,8 @@ export default function NewProject() {
           </div>
           )}
 
-          {/* Admin-only fixed-port binding (not applicable to domain_only) */}
-          {isAdmin && projectType !== 'domain_only' && (
+          {/* Admin-only fixed-port binding (not applicable to domain_only / build) */}
+          {isAdmin && projectType !== 'domain_only' && projectType !== 'build' && (
             <div>
               <label className="form-label">{t('projectDetail.config.fixedPort').toUpperCase()}</label>
               <div className="flex flex-col gap-2">

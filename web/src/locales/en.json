@@ -117,6 +117,11 @@
     "composePinned": "pinned to a deploy node — volumes survive redeploys",
     "composeUnpinned": "unpinned — first deploy will pin to a node",
     "imageHint": "Pre-built image: {{ref}} (port {{port}})",
+    "buildHint": "Build-only project: builds and pushes an image, then stops. No container, no host port, no route.",
+    "buildLastImage": "Latest Image",
+    "buildNoImage": "No image built yet — trigger a deploy at least once",
+    "buildAutoChain": "Auto-redeploys",
+    "buildAutoChainEmpty": "Not configured — no downstream redeploys after a successful push",
     "pushUrl": "GIT PUSH URL",
     "pushUrlHint": "Use any username and your API token as the password.",
     "pushUrlGenerateToken": "Generate Token",
@@ -384,7 +389,9 @@
       "imageRef": "Image Reference",
       "imageRefHint": "OCI image reference (e.g. ghcr.io/owner/repo:tag, docker.io/redis:7-alpine).",
       "containerPort": "Container Port",
-      "containerPortHint": "Port the image listens on inside the container (default: 8080)."
+      "containerPortHint": "Port the image listens on inside the container (default: 8080).",
+      "triggersRedeployOf": "Auto-redeploy downstream projects",
+      "triggersRedeployOfHint": "Comma-separated downstream project IDs (compose or image) to auto-redeploy once this build pushes successfully. Leave blank to disable the chain."
     },
     "projectType": {
       "deployment": "Container Deployment",
@@ -393,7 +400,9 @@
       "image": "Pre-built Image",
       "imageHint": "Bind a single OCI image (Docker Hub, GHCR, etc.) — no git repo or build. Auto-deploy watches the image digest and redeploys when it changes.",
       "tunnel": "Tunnel (Domain Only)",
-      "tunnelHint": "Reserve a domain prefix for tunnel access. No git repo or container — traffic is forwarded from your local machine via muveectl tunnel."
+      "tunnelHint": "Reserve a domain prefix for tunnel access. No git repo or container — traffic is forwarded from your local machine via muveectl tunnel.",
+      "build": "Build Image Only",
+      "buildHint": "Only build and push a Dockerfile to muvee's internal registry. No container, no host port, no route. Downstream compose / image projects reference the result via last_image_tag."
     },
     "gitSource": {
       "external": "External Repo",
