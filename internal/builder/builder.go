@@ -130,7 +130,7 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 	log.Print(proxyLog)
 	buildArgs = append(buildArgs, proxyArgs...)
 
-	buildArgs = append(buildArgs, filepath.Dir(dockerfilePath))
+	buildArgs = append(buildArgs, workDir)
 	if err := runCmd(ctx, logFn, "docker", buildArgs...); err != nil {
 		return "", fmt.Errorf("docker build: %w", err)
 	}
