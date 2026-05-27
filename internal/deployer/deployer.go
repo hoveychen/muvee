@@ -209,3 +209,89 @@ func runCmd(ctx context.Context, logFn func(string), name string, args ...string
 	}
 	return err
 }
+
+// proxyVarKeys is the canonical set of HTTP proxy environment variable names
+// that docker compose v2 forwards from the calling process into containers when
+// the user's compose file explicitly inherits them — via value-less environment
+// entries (`environment: - HTTP_PROXY`) or YAML interpolation (`${HTTP_PROXY}`).
+// Kept in sync with internal/builder/builder.go's collectProxyBuildArgsFrom
+// list so both sides of the pipeline are consistent.
+var proxyVarKeys = map[string]bool{
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
+	"ALL_PROXY": true, "FTP_PROXY": true,
+	"http_proxy": true, "https_proxy": true, "no_proxy": true,
+	"all_proxy": true, "ftp_proxy": true,
+}
+
+// envWithoutProxy returns the process environment with all standard HTTP/HTTPS
+// proxy variables stripped. User compose files commonly inherit proxy vars from
+// the calling process via value-less environment entries (`environment: - HTTP_PROXY`)
+// or YAML variable interpolation (`${HTTP_PROXY}`); stripping them here ensures
+// that user containers cannot accidentally route Docker-internal traffic
+// (e.g. hub-server, redis) through an external proxy when using those patterns.
+//
+// Note: `docker run` (single-container path in deployer.go) does NOT need this
+// treatment — muvee never passes proxy vars as explicit -e flags to docker run,
+// so the single-container path is unaffected. This function is only called on
+// the compose subcommand path where the user's compose file controls inheritance.
+func envWithoutProxy() []string {
+	result := make([]string, 0, len(os.Environ()))
+	for _, e := range os.Environ() {
+		key := strings.SplitN(e, "=", 2)[0]
+		if !proxyVarKeys[key] {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// envForCompose returns the environment to pass to docker compose subprocesses.
+// By default proxy variables are stripped (see envWithoutProxy). When
+// DEPLOYER_PROXY_PASSTHROUGH is set to a truthy value (true/1/yes/on), the
+// standard proxy variables are re-added from the agent process using an explicit
+// whitelist — no other agent-private variables (AGENT_SECRET, DB credentials,
+// tokens, etc.) are ever exposed to user containers.
+//
+// DEPLOYER_PROXY_PASSTHROUGH defaults to false (opposite of
+// BUILDER_PROXY_PASSTHROUGH, which defaults to true) because compose deploys
+// containers that communicate over Docker-internal networks where an external
+// proxy would break intra-service calls. Enable only if user containers
+// explicitly need external proxy access and the NO_PROXY list covers all
+// internal Docker service names.
+func envForCompose() []string {
+	base := envWithoutProxy()
+	if !deployerProxyPassthrough() {
+		return base
+	}
+	for k := range proxyVarKeys {
+		if v := os.Getenv(k); v != "" {
+			base = append(base, k+"="+v)
+		}
+	}
+	return base
+}
+
+// deployerProxyPassthrough reports whether DEPLOYER_PROXY_PASSTHROUGH is set
+// to a truthy value. Symmetric with buildProxyPassthroughFor in builder.go but
+// with inverted default: deploy passthrough is off by default.
+func deployerProxyPassthrough() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEPLOYER_PROXY_PASSTHROUGH"))) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// runCmdCompose runs a docker compose subcommand with proxy variables stripped
+// from the subprocess environment (or selectively re-added when
+// DEPLOYER_PROXY_PASSTHROUGH is enabled). Use runCmd for non-compose commands.
+func runCmdCompose(ctx context.Context, logFn func(string), name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = envForCompose()
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		logFn(string(out))
+	}
+	return err
+}

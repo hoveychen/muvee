@@ -14,11 +14,14 @@ If your muvee deployment runs in a network that requires an HTTP proxy to reach 
 |---------|--------------------------|
 | `muvee-authservice` | Calls external OAuth provider APIs: Google, Feishu/Lark, WeCom, DingTalk, Discord, Facebook, Apple, Twitter |
 | `muvee-agent-builder` | Clones project source code via `git clone` over HTTPS; forwards proxy into docker builds so `RUN` commands (pip, apt-get, curl, npm…) inside Dockerfiles use the same proxy |
+| `muvee-agent-deploy` | Clones the project's compose repository via `git clone` over HTTPS to fetch the latest compose files before each deployment |
 
 :::note What is not affected
 `docker pull` and `docker push` go through the host Docker daemon socket — configure the host `dockerd` proxy separately if needed.
 
 SSH-based git clones are not affected by HTTP proxy settings. Use HTTPS + token authentication (via the muvee Secrets mechanism) instead.
+
+User containers started by the deploy agent do **not** inherit the agent's proxy settings by default. See [Deploy-time proxy isolation](#deploy-time-proxy-isolation) below.
 :::
 
 ## Setup
@@ -66,6 +69,52 @@ BUILDER_PROXY_PASSTHROUGH=false
 
 Accepted false values: `false`, `0`, `no`, `off` (case-insensitive). Any other value, or leaving the variable unset, keeps passthrough enabled.
 
+## Deploy-time proxy isolation
+
+When deploying a compose project, `muvee-agent-deploy` runs `docker compose pull` and `docker compose up`. Docker Compose v2 forwards proxy variables from the calling process into containers when the user's compose file explicitly requests inheritance — via value-less `environment` entries or YAML variable interpolation:
+
+```yaml title="common patterns that inherit proxy from the host"
+services:
+  myapp:
+    environment:
+      - HTTP_PROXY          # value-less: inherits from calling process
+      - HTTPS_PROXY
+    # or YAML interpolation:
+    # environment:
+    #   HTTP_PROXY: ${HTTP_PROXY}
+```
+
+When the deploy agent has `HTTP_PROXY` set and a user compose file uses either pattern, the agent's proxy leaks into user containers. This can break intra-service calls to internal Docker-network hostnames like `hub-server` or `redis` that must not go through an external proxy.
+
+**By default, muvee strips all proxy variables before calling `docker compose`**, so user containers start with a clean proxy-free environment regardless of what their compose files declare. The agent's proxy is used only for the preceding `git clone` step.
+
+If you use `HTTP_PROXY: ${HTTP_PROXY}` or `environment: - HTTP_PROXY` in your compose file expecting the deploy-node proxy to be available, it will resolve to an empty string. To give your containers proxy access, set it explicitly in your compose file or via a muvee project secret:
+
+```yaml title="docker-compose.yml (user project)"
+services:
+  myapp:
+    image: myimage
+    environment:
+      HTTP_PROXY: "http://my-proxy:3128"
+      NO_PROXY: "localhost,127.0.0.1,10.0.0.0/8"
+```
+
+### Enabling passthrough (opt-in)
+
+If your user containers genuinely need to inherit the deploy-node proxy — for example, every deployed project on this node should use the same corporate proxy — set in `.proxy.env`:
+
+```env
+DEPLOYER_PROXY_PASSTHROUGH=true
+```
+
+Accepted truthy values: `true`, `1`, `yes`, `on` (case-insensitive). Any other value, or leaving it unset, keeps isolation enabled (default).
+
+:::warning Passthrough requires a complete NO_PROXY list
+When passthrough is enabled, ensure `NO_PROXY` covers all Docker-internal service names used by your compose projects (e.g. `hub-server`, `redis`, `minio`). Omitting them will cause those services to route through the external proxy and fail with connection timeouts.
+:::
+
+Only the standard proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, `FTP_PROXY` and their lowercase forms) are forwarded. Agent-private variables (`AGENT_SECRET`, database credentials, tokens, etc.) are never exposed to user containers regardless of this setting.
+
 ## NO_PROXY — internal services
 
 The `NO_PROXY` list ensures that traffic between muvee's own services is never routed through the proxy:
@@ -94,7 +143,7 @@ The annotated reference template is in `.proxy.env.example`.
 
 ## Multi-node deployments
 
-For multi-node setups (`docker-compose.agent-builder.yml`), the same `.proxy.env` approach applies:
+For multi-node setups (`docker-compose.agent-builder.yml` / `docker-compose.agent-deploy.yml`), the same `.proxy.env` approach applies:
 
 - **If you `git clone` the repo on each agent node**: the empty `.proxy.env` is already there — edit it to configure proxy settings if needed.
 - **If you ship only the compose file to the node** (e.g., via `scp`): create an empty `.proxy.env` alongside it first — it is required by `env_file:` even when no proxy is used:

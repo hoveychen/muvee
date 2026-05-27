@@ -1,6 +1,7 @@
 package deployer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,6 +140,118 @@ LISTEN   0        128      127.0.0.1:53         0.0.0.0:*
 	estab := "ESTAB  0  0  10.0.0.1:9999  10.0.0.2:443"
 	if portIsListening(estab, 9999) {
 		t.Error("portIsListening must only flag LISTEN rows")
+	}
+}
+
+func TestEnvWithoutProxy(t *testing.T) {
+	// Must match proxyVarKeys in deployer.go and collectProxyBuildArgsFrom in builder.go.
+	proxyVars := []string{
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY",
+		"http_proxy", "https_proxy", "no_proxy", "all_proxy", "ftp_proxy",
+	}
+	for _, k := range proxyVars {
+		t.Setenv(k, "http://proxy.example.com:3128")
+	}
+	t.Setenv("SOME_OTHER_VAR", "keep-me")
+
+	result := envWithoutProxy()
+
+	for _, e := range result {
+		key := strings.SplitN(e, "=", 2)[0]
+		for _, banned := range proxyVars {
+			if key == banned {
+				t.Errorf("envWithoutProxy() must not contain %s, but got %q", banned, e)
+			}
+		}
+	}
+
+	found := false
+	for _, e := range result {
+		if e == "SOME_OTHER_VAR=keep-me" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("envWithoutProxy() dropped SOME_OTHER_VAR, which should have been preserved")
+	}
+}
+
+func TestDeployerProxyPassthrough(t *testing.T) {
+	for _, tc := range []struct {
+		val  string
+		want bool
+	}{
+		{"true", true}, {"1", true}, {"yes", true}, {"on", true},
+		{"TRUE", true}, {"YES", true},
+		{"false", false}, {"0", false}, {"no", false}, {"off", false},
+		{"", false}, {"anything-else", false},
+	} {
+		t.Setenv("DEPLOYER_PROXY_PASSTHROUGH", tc.val)
+		if got := deployerProxyPassthrough(); got != tc.want {
+			t.Errorf("deployerProxyPassthrough() with %q = %v, want %v", tc.val, got, tc.want)
+		}
+	}
+}
+
+func TestEnvForCompose_DefaultStripsProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.example.com:3128")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.com:3128")
+	t.Setenv("ALL_PROXY", "socks5://proxy.example.com:1080")
+	t.Setenv("DEPLOYER_PROXY_PASSTHROUGH", "")
+
+	result := envForCompose()
+	for _, e := range result {
+		key := strings.SplitN(e, "=", 2)[0]
+		if proxyVarKeys[key] {
+			t.Errorf("envForCompose() default must strip proxy vars, but found %q", e)
+		}
+	}
+}
+
+func TestEnvForCompose_PassthroughAddsWhitelistOnly(t *testing.T) {
+	// Passthrough re-adds proxy vars that envWithoutProxy stripped.
+	// Non-proxy vars (e.g. PATH) are already present in the base; the
+	// passthrough whitelist adds only the proxy vars, nothing else.
+	t.Setenv("HTTP_PROXY", "http://proxy.example.com:3128")
+	t.Setenv("ALL_PROXY", "socks5://proxy.example.com:1080")
+	t.Setenv("DEPLOYER_PROXY_PASSTHROUGH", "true")
+
+	result := envForCompose()
+
+	proxyCount := 0
+	for _, e := range result {
+		key := strings.SplitN(e, "=", 2)[0]
+		if key == "HTTP_PROXY" || key == "ALL_PROXY" {
+			proxyCount++
+		}
+	}
+	if proxyCount != 2 {
+		t.Errorf("envForCompose() with passthrough=true must include HTTP_PROXY and ALL_PROXY, got %d of 2", proxyCount)
+	}
+}
+
+// TestRunCmdCompose_StripsProxyFromSubprocess verifies that the env wiring in
+// runCmdCompose actually reaches the subprocess: a child process should not see
+// HTTP_PROXY even when the parent process has it set.
+func TestRunCmdCompose_StripsProxyFromSubprocess(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.example.com:3128")
+	t.Setenv("DEPLOYER_PROXY_PASSTHROUGH", "")
+
+	var captured string
+	logFn := func(line string) { captured += line }
+
+	// Use "env" to dump the subprocess environment and capture it via logFn.
+	// "env" is a POSIX utility available on all Linux/macOS systems.
+	if err := runCmdCompose(context.Background(), logFn, "env"); err != nil {
+		t.Fatalf("runCmdCompose(env): %v", err)
+	}
+
+	for _, line := range strings.Split(captured, "\n") {
+		key := strings.SplitN(line, "=", 2)[0]
+		if proxyVarKeys[key] {
+			t.Errorf("subprocess saw proxy var %q; runCmdCompose must strip it", line)
+		}
 	}
 }
 
