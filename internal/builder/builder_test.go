@@ -482,3 +482,135 @@ exit 1
 			buildCtx, wantCtx, fPath, args)
 	}
 }
+
+// installDockerArgsShim drops a shim binary at <tempdir>/{git,docker} that:
+//   - `git clone ... <dst>`  → mkdir -p <dst>
+//   - `git -C <dir> rev-parse HEAD` → emit a fake sha
+//   - `docker ...` → dump argv (one per line) to argsFile, exit 0
+//
+// It returns the argsFile path. PATH is set so the shim wins over real git/docker.
+// Extracted so memory-limit / future buildx-argv tests can share it.
+func installDockerArgsShim(t *testing.T) (argsFile string) {
+	t.Helper()
+	stubDir := t.TempDir()
+	argsFile = filepath.Join(stubDir, "docker.args")
+
+	shim := fmt.Sprintf(`#!/bin/sh
+case "${0##*/}" in
+  git)
+    case "$1" in
+      clone)
+        last=
+        for a in "$@"; do last="$a"; done
+        mkdir -p "$last" || exit 1
+        exit 0
+        ;;
+      -C)
+        if [ "$3" = "rev-parse" ]; then
+          echo "fakecommitsha1"
+          exit 0
+        fi
+        ;;
+    esac
+    exit 1
+    ;;
+  docker)
+    : > %q
+    for a in "$@"; do printf '%%s\n' "$a" >> %q; done
+    exit 0
+    ;;
+esac
+exit 1
+`, argsFile, argsFile)
+
+	shimPath := filepath.Join(stubDir, "shim.sh")
+	if err := os.WriteFile(shimPath, []byte(shim), 0o755); err != nil {
+		t.Fatalf("write shim: %v", err)
+	}
+	for _, name := range []string{"git", "docker"} {
+		if err := os.Symlink(shimPath, filepath.Join(stubDir, name)); err != nil {
+			t.Fatalf("symlink %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", stubDir+":"+os.Getenv("PATH"))
+	return argsFile
+}
+
+// readDockerArgs returns the argv lines from the shim's dump file.
+func readDockerArgs(t *testing.T, argsFile string) []string {
+	t.Helper()
+	data, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", argsFile, err)
+	}
+	return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+}
+
+// flagValue returns the value following the first occurrence of `flag` in args,
+// or "" if the flag is absent or has no following arg.
+func flagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// TestBuild_AppendsMemoryLimit locks in that `BuildConfig.MemoryLimit` is
+// forwarded to `docker buildx build` as both `--memory <N>` and
+// `--memory-swap <N>` (matching deployer.go's pattern, which sets swap to the
+// same value to fully disable swapping under pressure). Without this the
+// builder runs unconstrained and a single build can OOM the host — which is
+// what happened on the Seoul deploy node when a new project was first
+// deployed.
+func TestBuild_AppendsMemoryLimit(t *testing.T) {
+	t.Run("limit set appends --memory and --memory-swap", func(t *testing.T) {
+		argsFile := installDockerArgsShim(t)
+
+		cfg := BuildConfig{
+			ProjectID:      "test-memlimit",
+			GitURL:         "https://example.invalid/repo.git",
+			GitBranch:      "main",
+			DockerfilePath: "Dockerfile",
+			RegistryAddr:   "registry.test.local",
+			MemoryLimit:    "3g",
+		}
+		if _, err := Build(context.Background(), cfg, func(string) {}); err != nil {
+			t.Fatalf("Build failed: %v", err)
+		}
+
+		args := readDockerArgs(t, argsFile)
+		if got := flagValue(args, "--memory"); got != "3g" {
+			t.Errorf("--memory = %q, want %q\nfull args: %v", got, "3g", args)
+		}
+		if got := flagValue(args, "--memory-swap"); got != "3g" {
+			t.Errorf("--memory-swap = %q, want %q (must equal --memory to disable swap)\nfull args: %v",
+				got, "3g", args)
+		}
+	})
+
+	t.Run("empty limit emits no memory flags", func(t *testing.T) {
+		argsFile := installDockerArgsShim(t)
+
+		cfg := BuildConfig{
+			ProjectID:      "test-memlimit-empty",
+			GitURL:         "https://example.invalid/repo.git",
+			GitBranch:      "main",
+			DockerfilePath: "Dockerfile",
+			RegistryAddr:   "registry.test.local",
+			// MemoryLimit intentionally unset.
+		}
+		if _, err := Build(context.Background(), cfg, func(string) {}); err != nil {
+			t.Fatalf("Build failed: %v", err)
+		}
+
+		args := readDockerArgs(t, argsFile)
+		if slices.Contains(args, "--memory") {
+			t.Errorf("--memory must NOT appear when MemoryLimit is empty\nfull args: %v", args)
+		}
+		if slices.Contains(args, "--memory-swap") {
+			t.Errorf("--memory-swap must NOT appear when MemoryLimit is empty\nfull args: %v", args)
+		}
+	})
+}

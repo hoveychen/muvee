@@ -31,6 +31,10 @@ type BuildConfig struct {
 	// BuildSecrets are passed to docker buildx via --secret id=<key>,src=<tempfile>.
 	// Inside Dockerfile they are available at /run/secrets/<key>.
 	BuildSecrets map[string]string
+	// MemoryLimit caps the build's RAM via buildx `--memory` / `--memory-swap`
+	// so one project's build cannot OOM the shared host. Same string format as
+	// docker (e.g. "3g", "512m"). Empty means no limit.
+	MemoryLimit string
 }
 
 func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, error) {
