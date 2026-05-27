@@ -3,6 +3,8 @@ package builder
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -371,4 +373,112 @@ func TestCollectProxyBuildArgs(t *testing.T) {
 			t.Errorf("log should mention HTTP_PROXY, got %q", msg)
 		}
 	})
+}
+
+// ── Build() integration ───────────────────────────────────────────────────────
+
+// TestBuild_UsesRepoRootAsContext locks in that the final positional argument
+// passed to `docker buildx build` is the cloned-repo root (workDir), not the
+// dockerfile's parent directory. Reproduces the bug where a project with
+// DockerfilePath="subdir/My.Dockerfile" sent only `<workDir>/subdir` as build
+// context, causing every `COPY <path>` outside that subdir to 404.
+//
+// Strategy: drop a single shim binary into a tempdir, symlink both `git` and
+// `docker` to it, front-load PATH. The shim fakes the minimum:
+//   - `git clone ... <dst>` → mkdir -p <dst>
+//   - `git -C <dir> rev-parse HEAD` → emit a fake 14-char sha
+//   - `docker ...` → dump argv (one per line) into a known file, exit 0
+//
+// Then we read the dumped argv, locate the `-f` flag value (the absolute
+// dockerfile path the builder synthesised), and assert the last positional
+// equals workDir — derived by stripping the relative DockerfilePath from the
+// -f value. Using a 2-segment relative path makes the bug observable: the
+// buggy code returns the 1-segment parent, the fix returns the 2-segment
+// grandparent.
+func TestBuild_UsesRepoRootAsContext(t *testing.T) {
+	stubDir := t.TempDir()
+	argsFile := filepath.Join(stubDir, "docker.args")
+
+	shim := fmt.Sprintf(`#!/bin/sh
+case "${0##*/}" in
+  git)
+    case "$1" in
+      clone)
+        last=
+        for a in "$@"; do last="$a"; done
+        mkdir -p "$last" || exit 1
+        exit 0
+        ;;
+      -C)
+        # $1=-C $2=<dir> $3=rev-parse $4=<ref>
+        if [ "$3" = "rev-parse" ]; then
+          echo "fakecommitsha1"
+          exit 0
+        fi
+        ;;
+    esac
+    exit 1
+    ;;
+  docker)
+    : > %q
+    for a in "$@"; do printf '%%s\n' "$a" >> %q; done
+    exit 0
+    ;;
+esac
+exit 1
+`, argsFile, argsFile)
+
+	shimPath := filepath.Join(stubDir, "shim.sh")
+	if err := os.WriteFile(shimPath, []byte(shim), 0o755); err != nil {
+		t.Fatalf("write shim: %v", err)
+	}
+	for _, name := range []string{"git", "docker"} {
+		if err := os.Symlink(shimPath, filepath.Join(stubDir, name)); err != nil {
+			t.Fatalf("symlink %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", stubDir+":"+os.Getenv("PATH"))
+
+	cfg := BuildConfig{
+		ProjectID:      "test-bcrr",
+		GitURL:         "https://example.invalid/repo.git",
+		GitBranch:      "main",
+		DockerfilePath: "subdir/My.Dockerfile",
+		RegistryAddr:   "registry.test.local",
+	}
+	var logs []string
+	_, err := Build(context.Background(), cfg, func(s string) { logs = append(logs, s) })
+	if err != nil {
+		t.Fatalf("Build failed: %v\nlogs:\n%s", err, strings.Join(logs, "\n"))
+	}
+
+	data, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", argsFile, err)
+	}
+	args := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+	var fPath string
+	for i, a := range args {
+		if a == "-f" && i+1 < len(args) {
+			fPath = args[i+1]
+			break
+		}
+	}
+	if fPath == "" {
+		t.Fatalf("no -f flag in docker args: %v", args)
+	}
+
+	buildCtx := args[len(args)-1]
+	const rel = "/subdir/My.Dockerfile"
+	if !strings.HasSuffix(fPath, rel) {
+		t.Fatalf("-f path %q does not end with %q", fPath, rel)
+	}
+	wantCtx := strings.TrimSuffix(fPath, rel)
+
+	if buildCtx != wantCtx {
+		t.Errorf("build context = %q; want %q (= repo-root workDir, NOT dockerfile parent dir).\n"+
+			"-f = %q\nfull docker args: %v",
+			buildCtx, wantCtx, fPath, args)
+	}
 }
