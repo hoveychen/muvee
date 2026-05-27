@@ -251,6 +251,8 @@ services:
     command: ["agent"]
     restart: unless-stopped
     hostname: muvee-agent-deploy
+    env_file:
+      - .proxy.env
     environment:
       NODE_ROLE: deploy
       CONTROL_PLANE_URL: http://muvee-server:8080

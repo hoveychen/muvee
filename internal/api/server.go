@@ -3811,10 +3811,17 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 			if errMsg == "" {
 				errMsg = "task failed"
 			}
-			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusFailed, errMsg)
-			if dep, derr := s.store.GetDeployment(r.Context(), task.DeploymentID); derr == nil && dep != nil {
-				projectevents.Push(dep.ProjectID, projectevents.TypeDeployFailed, projectevents.SeverityError,
-					fmt.Sprintf("%s task failed: %s", task.Type, errMsg))
+			// Only build and deploy failures represent a deployment going wrong.
+			// Inspection tasks (describe, env, runtime_logs, restart) failing must
+			// not flip a healthy deployment to failed — e.g. a describe task on a
+			// compose project previously used the wrong container name and caused
+			// false-negative failures.
+			if task.Type == store.TaskTypeBuild || task.Type == store.TaskTypeDeploy {
+				_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusFailed, errMsg)
+				if dep, derr := s.store.GetDeployment(r.Context(), task.DeploymentID); derr == nil && dep != nil {
+					projectevents.Push(dep.ProjectID, projectevents.TypeDeployFailed, projectevents.SeverityError,
+						fmt.Sprintf("%s task failed: %s", task.Type, errMsg))
+				}
 			}
 		}
 		jsonOK(w, map[string]string{"status": "ok"})
