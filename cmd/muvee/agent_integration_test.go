@@ -353,6 +353,307 @@ func TestRunEnvInspect_ComposeProject(t *testing.T) {
 	t.Logf("runEnvInspect (compose) OK: %d env vars", len(envMap))
 }
 
+// ─── runRuntimeLogs ──────────────────────────────────────────────────────────
+
+// TestRunRuntimeLogs_ComposeProject verifies that runRuntimeLogs resolves the
+// container name via label for compose-style containers.
+// Before the fix this produced "No such container" output even for running
+// containers because the name "muvee-<prefix>" doesn't exist for compose projects.
+func TestRunRuntimeLogs_ComposeProject(t *testing.T) {
+	ctx := context.Background()
+	sfx := randSuffix()
+	domainPrefix := "tst-logs-cmp-" + sfx
+	composeContainerName := "muveeproj-" + sfx + "-server-1"
+
+	// Write a known log line, then keep the container alive.
+	dockerRunDetached(t, composeContainerName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"--label", "muvee.expose_port=8080",
+		"alpine", "sh", "-c", "echo hello-from-compose && sleep 300",
+	)
+
+	task := &store.Task{Payload: map[string]interface{}{
+		"domain_prefix": domainPrefix,
+		"tail":          float64(50),
+	}}
+	result, err := runRuntimeLogs(ctx, task)
+	if err != nil {
+		t.Fatalf("runRuntimeLogs (compose project) FAILED — this is the bug: %v", err)
+	}
+	if strings.Contains(result, "No such container") {
+		t.Errorf("runRuntimeLogs returned 'No such container' for a running compose container: %s", result)
+	}
+	if !strings.Contains(result, "hello-from-compose") {
+		t.Errorf("expected log output to contain 'hello-from-compose', got: %s", result)
+	}
+	t.Logf("runRuntimeLogs (compose) OK: %d bytes", len(result))
+}
+
+// ─── runRestart ──────────────────────────────────────────────────────────────
+
+// TestRunRestart_ComposeProject verifies that runRestart resolves the container
+// name via label for compose-style containers and actually restarts it.
+// Before the fix, restart silently did nothing (the "No such container" branch
+// returned success with the docker error message as body).
+//
+// NOTE: docker restart does NOT increment RestartCount (that counter tracks
+// automatic restarts triggered by the restart policy, not manual docker restart
+// calls). We use State.StartedAt as the restart witness instead — it always
+// advances after a successful docker restart.
+func TestRunRestart_ComposeProject(t *testing.T) {
+	ctx := context.Background()
+	sfx := randSuffix()
+	domainPrefix := "tst-restart-cmp-" + sfx
+	composeContainerName := "muveeproj-" + sfx + "-server-1"
+
+	dockerRunDetached(t, composeContainerName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"--label", "muvee.expose_port=8080",
+		"alpine", "sleep", "300",
+	)
+
+	// Capture State.StartedAt before restart. docker restart always updates it,
+	// even when the container was already running.
+	beforeOut, err := exec.Command("docker", "inspect",
+		"--format", "{{.State.StartedAt}}", composeContainerName).Output()
+	if err != nil {
+		t.Fatalf("docker inspect before restart: %v", err)
+	}
+	beforeStartedAt := strings.TrimSpace(string(beforeOut))
+
+	task := &store.Task{Payload: map[string]interface{}{"domain_prefix": domainPrefix}}
+	result, taskErr := runRestart(ctx, task)
+	if taskErr != nil {
+		t.Fatalf("runRestart (compose project) FAILED: %v", taskErr)
+	}
+	if strings.Contains(result, "No such container") {
+		t.Errorf("runRestart returned 'No such container' for a running compose container — label lookup not working: %s", result)
+	}
+
+	afterOut, err := exec.Command("docker", "inspect",
+		"--format", "{{.State.StartedAt}}", composeContainerName).Output()
+	if err != nil {
+		t.Fatalf("docker inspect after restart: %v", err)
+	}
+	afterStartedAt := strings.TrimSpace(string(afterOut))
+	if beforeStartedAt == afterStartedAt {
+		t.Errorf("State.StartedAt unchanged (%s); docker restart did not target the correct container", beforeStartedAt)
+	}
+	t.Logf("runRestart (compose) OK: StartedAt %s → %s, result=%q", beforeStartedAt, afterStartedAt, result)
+}
+
+// ─── runRuntimeLogs (additional) ─────────────────────────────────────────────
+
+// TestRunRuntimeLogs_RegularProject verifies that runRuntimeLogs works for a
+// regular (non-compose) project whose container is named "muvee-<prefix>".
+func TestRunRuntimeLogs_RegularProject(t *testing.T) {
+	ctx := context.Background()
+	domainPrefix := "tst-logs-reg-" + randSuffix()
+	containerName := "muvee-" + domainPrefix
+
+	dockerRunDetached(t, containerName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"alpine", "sh", "-c", "echo regular-log-line && sleep 300",
+	)
+
+	task := &store.Task{Payload: map[string]interface{}{
+		"domain_prefix": domainPrefix,
+		"tail":          float64(10),
+	}}
+	result, err := runRuntimeLogs(ctx, task)
+	if err != nil {
+		t.Fatalf("runRuntimeLogs (regular): %v", err)
+	}
+	if !strings.Contains(result, "regular-log-line") {
+		t.Errorf("expected 'regular-log-line' in output, got: %s", result)
+	}
+	t.Logf("runRuntimeLogs (regular) OK: %d bytes", len(result))
+}
+
+// TestRunRuntimeLogs_StoppedComposeContainer verifies that docker logs still
+// works after a container has exited — logs are persisted regardless of state.
+func TestRunRuntimeLogs_StoppedComposeContainer(t *testing.T) {
+	ctx := context.Background()
+	sfx := randSuffix()
+	domainPrefix := "tst-logs-stopped-" + sfx
+	composeContainerName := "muveeproj-" + sfx + "-worker-1"
+
+	dockerRunDetached(t, composeContainerName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"alpine", "sh", "-c", "echo stopped-container-log && exit 0",
+	)
+	// Wait for container to exit.
+	exec.Command("docker", "wait", composeContainerName).Run() //nolint:errcheck
+
+	task := &store.Task{Payload: map[string]interface{}{
+		"domain_prefix": domainPrefix,
+		"tail":          float64(20),
+	}}
+	result, err := runRuntimeLogs(ctx, task)
+	if err != nil {
+		t.Fatalf("runRuntimeLogs (stopped compose): %v", err)
+	}
+	if strings.Contains(result, "No such container") {
+		t.Errorf("stopped container should not return 'No such container': %s", result)
+	}
+	if !strings.Contains(result, "stopped-container-log") {
+		t.Errorf("expected 'stopped-container-log' in output, got: %s", result)
+	}
+	t.Logf("runRuntimeLogs (stopped compose) OK: %d bytes", len(result))
+}
+
+// TestRunRuntimeLogs_NoSuchContainer verifies the soft-success path: when no
+// container exists for the prefix, "No such container" is returned as the body
+// with no error — the CLI should print it rather than showing a task failure.
+func TestRunRuntimeLogs_NoSuchContainer(t *testing.T) {
+	ctx := context.Background()
+	domainPrefix := "tst-logs-absent-" + randSuffix()
+
+	task := &store.Task{Payload: map[string]interface{}{"domain_prefix": domainPrefix}}
+	result, err := runRuntimeLogs(ctx, task)
+	if err != nil {
+		t.Fatalf("runRuntimeLogs (absent) must not return error, got: %v", err)
+	}
+	if !strings.Contains(result, "No such container") {
+		t.Errorf("expected 'No such container' in result body, got: %q", result)
+	}
+	t.Logf("runRuntimeLogs (absent) soft-success OK: %q", result)
+}
+
+// ─── runRestart (additional) ──────────────────────────────────────────────────
+
+// TestRunRestart_RegularProject verifies that runRestart works for a regular
+// (non-compose) project container named "muvee-<prefix>".
+func TestRunRestart_RegularProject(t *testing.T) {
+	ctx := context.Background()
+	domainPrefix := "tst-restart-reg-" + randSuffix()
+	containerName := "muvee-" + domainPrefix
+
+	dockerRunDetached(t, containerName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"alpine", "sleep", "300",
+	)
+
+	beforeOut, err := exec.Command("docker", "inspect",
+		"--format", "{{.State.StartedAt}}", containerName).Output()
+	if err != nil {
+		t.Fatalf("docker inspect before restart: %v", err)
+	}
+	beforeStartedAt := strings.TrimSpace(string(beforeOut))
+
+	task := &store.Task{Payload: map[string]interface{}{"domain_prefix": domainPrefix}}
+	result, taskErr := runRestart(ctx, task)
+	if taskErr != nil {
+		t.Fatalf("runRestart (regular): %v", taskErr)
+	}
+	if strings.Contains(result, "No such container") {
+		t.Errorf("runRestart returned 'No such container' for a running regular container: %s", result)
+	}
+
+	afterOut, err := exec.Command("docker", "inspect",
+		"--format", "{{.State.StartedAt}}", containerName).Output()
+	if err != nil {
+		t.Fatalf("docker inspect after restart: %v", err)
+	}
+	afterStartedAt := strings.TrimSpace(string(afterOut))
+	if beforeStartedAt == afterStartedAt {
+		t.Errorf("State.StartedAt unchanged after restart: %s", beforeStartedAt)
+	}
+	t.Logf("runRestart (regular) OK: StartedAt %s → %s", beforeStartedAt, afterStartedAt)
+}
+
+// TestRunRestart_StoppedComposeContainer verifies that runRestart starts a
+// stopped container and that State.StartedAt advances.
+func TestRunRestart_StoppedComposeContainer(t *testing.T) {
+	ctx := context.Background()
+	sfx := randSuffix()
+	domainPrefix := "tst-restart-stopped-" + sfx
+	composeContainerName := "muveeproj-" + sfx + "-app-1"
+
+	dockerRunDetached(t, composeContainerName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"alpine", "echo", "done",
+	)
+	exec.Command("docker", "wait", composeContainerName).Run() //nolint:errcheck
+
+	beforeOut, _ := exec.Command("docker", "inspect",
+		"--format", "{{.State.StartedAt}}", composeContainerName).Output()
+	beforeStartedAt := strings.TrimSpace(string(beforeOut))
+
+	task := &store.Task{Payload: map[string]interface{}{"domain_prefix": domainPrefix}}
+	result, taskErr := runRestart(ctx, task)
+	if taskErr != nil {
+		t.Fatalf("runRestart (stopped compose): %v", taskErr)
+	}
+	if strings.Contains(result, "No such container") {
+		t.Errorf("runRestart returned 'No such container' for a stopped compose container: %s", result)
+	}
+
+	afterOut, err := exec.Command("docker", "inspect",
+		"--format", "{{.State.StartedAt}}", composeContainerName).Output()
+	if err != nil {
+		t.Fatalf("docker inspect after restart: %v", err)
+	}
+	afterStartedAt := strings.TrimSpace(string(afterOut))
+	if beforeStartedAt == afterStartedAt {
+		t.Errorf("State.StartedAt unchanged; restart may not have succeeded: %s", beforeStartedAt)
+	}
+	t.Logf("runRestart (stopped compose) OK: StartedAt %s → %s", beforeStartedAt, afterStartedAt)
+}
+
+// TestRunRestart_NoSuchContainer verifies the soft-success path: a restart for
+// a non-existent prefix returns a body containing "No such container" but no
+// error, matching the soft-success contract of runRuntimeLogs.
+func TestRunRestart_NoSuchContainer(t *testing.T) {
+	ctx := context.Background()
+	domainPrefix := "tst-restart-absent-" + randSuffix()
+
+	task := &store.Task{Payload: map[string]interface{}{"domain_prefix": domainPrefix}}
+	result, err := runRestart(ctx, task)
+	if err != nil {
+		t.Fatalf("runRestart (absent) must not return error, got: %v", err)
+	}
+	if !strings.Contains(result, "No such container") {
+		t.Errorf("expected 'No such container' in result body, got: %q", result)
+	}
+	t.Logf("runRestart (absent) soft-success OK: %q", result)
+}
+
+// ─── resolveContainerName (multi-match) ──────────────────────────────────────
+
+// TestResolveContainerName_MultiMatch verifies the newest-first heuristic:
+// when a stale stopped container and a newer running container both carry the
+// same muvee.domain_prefix label, resolveContainerName returns the newer one.
+// This mirrors the real scenario where a previous compose deploy was not fully
+// cleaned up and a fresh deploy created a new container.
+func TestResolveContainerName_MultiMatch(t *testing.T) {
+	ctx := context.Background()
+	sfx := randSuffix()
+	domainPrefix := "tst-multi-" + sfx
+	staleName := "muveeproj-" + sfx + "-old-1"
+	newName := "muveeproj-" + sfx + "-new-1"
+
+	// Create the "stale" container first, then stop it.
+	dockerRunDetached(t, staleName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"alpine", "echo", "stale",
+	)
+	exec.Command("docker", "wait", staleName).Run() //nolint:errcheck
+
+	// Create the "new" container after — this must be returned.
+	dockerRunDetached(t, newName,
+		"--label", "muvee.domain_prefix="+domainPrefix,
+		"alpine", "sleep", "300",
+	)
+
+	got := resolveContainerName(ctx, domainPrefix)
+	if got != newName {
+		t.Errorf("resolveContainerName(%q) = %q, want newest %q (stale=%q)",
+			domainPrefix, got, newName, staleName)
+	}
+	t.Logf("resolveContainerName (multi-match) OK: returned %q over stale %q", newName, staleName)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func parseDescribeResult(t *testing.T, raw string) map[string]interface{} {

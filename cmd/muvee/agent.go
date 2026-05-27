@@ -497,7 +497,7 @@ func runRuntimeLogs(ctx context.Context, task *store.Task) (string, error) {
 	if domainPrefix == "" {
 		return "", fmt.Errorf("runtime_logs task missing domain_prefix")
 	}
-	containerName := "muvee-" + domainPrefix
+	containerName := resolveContainerName(ctx, domainPrefix)
 
 	args := []string{"logs"}
 	if tail := intVal(task.Payload, "tail"); tail > 0 {
@@ -533,7 +533,7 @@ func runRestart(ctx context.Context, task *store.Task) (string, error) {
 	if domainPrefix == "" {
 		return "", fmt.Errorf("restart task missing domain_prefix")
 	}
-	containerName := "muvee-" + domainPrefix
+	containerName := resolveContainerName(ctx, domainPrefix)
 	cmd := exec.CommandContext(ctx, "docker", "restart", containerName)
 	out, err := cmd.CombinedOutput()
 	body := strings.TrimSpace(string(out))
@@ -791,6 +791,11 @@ func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 // carries the muvee.domain_prefix label, so we find it with docker ps -a
 // (includes stopped containers) filtered by that label. Falls back to
 // "muvee-<prefix>" when no labelled container is found.
+//
+// Multi-match: if two containers share the same label (e.g. a stale stopped
+// container from a previous deploy alongside a new one), docker ps -a returns
+// them newest-first; we take the first line as a best-effort heuristic. This
+// is uncommon because CleanupCompose uses --remove-orphans.
 func resolveContainerName(ctx context.Context, domainPrefix string) string {
 	out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
 		"--filter", "label=muvee.domain_prefix="+domainPrefix,
