@@ -226,12 +226,12 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	}
 
 	logFn(fmt.Sprintf("Pulling compose images for project %s...", projectName))
-	if err := runCmd(ctx, logFn, "docker", composeArgs("pull")...); err != nil {
+	if err := runCmdCompose(ctx, logFn, "docker", composeArgs("pull")...); err != nil {
 		return 0, fmt.Errorf("docker compose pull: %w", err)
 	}
 
 	logFn("Starting compose project (docker compose up -d)...")
-	if err := runCmd(ctx, logFn, "docker", composeArgs("up", "-d", "--remove-orphans")...); err != nil {
+	if err := runCmdCompose(ctx, logFn, "docker", composeArgs("up", "-d", "--remove-orphans")...); err != nil {
 		return 0, fmt.Errorf("docker compose up: %w", err)
 	}
 
@@ -264,7 +264,7 @@ func CleanupCompose(ctx context.Context, projectID, domainPrefix, composeFilePat
 		"--project-directory", workDir,
 		"down", "-v", "--remove-orphans",
 	}
-	if err := runCmd(ctx, logFn, "docker", args...); err != nil {
+	if err := runCmdCompose(ctx, logFn, "docker", args...); err != nil {
 		// down failures are not fatal — the project may already be gone.
 		logFn(fmt.Sprintf("compose down warning: %v", err))
 	}
@@ -296,7 +296,7 @@ func StopCompose(ctx context.Context, projectID, domainPrefix, composeFilePath, 
 		"--project-directory", workDir,
 		"down", "--remove-orphans",
 	}
-	return runCmd(ctx, logFn, "docker", args...)
+	return runCmdCompose(ctx, logFn, "docker", args...)
 }
 
 // composeProjectName mirrors the convention used for single-container deploys
@@ -313,7 +313,9 @@ func composeHostPort(ctx context.Context, projectName, composePath, overridePath
 		"--project-directory", workDir,
 		"port", service, strconv.Itoa(containerPort),
 	}
-	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = envForCompose()
+	out, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("docker compose port: %w", err)
 	}
@@ -324,6 +326,11 @@ func composeHostPort(ctx context.Context, projectName, composePath, overridePath
 // dir already exists, it's removed first so the deploy starts from a clean
 // checkout (named volumes survive because they live in docker, not in the
 // work dir).
+//
+// git clone intentionally inherits the full os.Environ() (including proxy
+// vars) so it can reach external git hosts. The subsequent docker compose
+// pull/up calls use runCmdCompose which strips proxy vars — the two paths
+// have deliberately different proxy treatment.
 func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn func(string)) error {
 	if err := os.RemoveAll(workDir); err != nil {
 		return fmt.Errorf("clean work dir: %w", err)
