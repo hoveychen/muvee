@@ -341,6 +341,7 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr, controlPlaneU
 		GitUsername:    str(p, "git_username"),
 		GitToken:       str(p, "git_token"),
 		BuildSecrets:   buildSecrets,
+		MemoryLimit:    builder.MemoryLimitFromEnv(),
 	}
 	imageTag, err := builder.Build(ctx, cfg, logFn)
 	if err != nil {

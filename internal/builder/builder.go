@@ -38,6 +38,12 @@ type BuildConfig struct {
 }
 
 func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, error) {
+	limiter := DefaultBuildLimiter()
+	if err := limiter.Acquire(ctx); err != nil {
+		return "", fmt.Errorf("acquire build slot: %w", err)
+	}
+	defer limiter.Release()
+
 	workDir, err := os.MkdirTemp("", "muvee-build-"+cfg.ProjectID+"-*")
 	if err != nil {
 		return "", fmt.Errorf("mktemp: %w", err)

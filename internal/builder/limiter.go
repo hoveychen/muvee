@@ -2,14 +2,20 @@ package builder
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // defaultBuildMaxConcurrent is the fallback cap when BUILDER_MAX_CONCURRENT is
 // unset, blank, unparseable, or non-positive. Picked low because builds on a
 // shared host compete with the running deployments for RAM.
 const defaultBuildMaxConcurrent = 1
+
+// defaultBuildMemoryLimit is the fallback value for BUILDER_MEMORY_LIMIT.
+// Mirrors deployer.Config.MemoryLimit's format (any string docker accepts).
+const defaultBuildMemoryLimit = "3g"
 
 // BuildLimiter caps the number of concurrent builds. Acquire blocks until a
 // slot is available or the context is cancelled; every successful Acquire must
@@ -59,4 +65,32 @@ func parseBuildMaxConcurrent(getenv func(string) string) int {
 		return defaultBuildMaxConcurrent
 	}
 	return n
+}
+
+// parseBuildMemoryLimit reads BUILDER_MEMORY_LIMIT from the injected getenv,
+// trimming whitespace. Empty / unset values fall back to defaultBuildMemoryLimit
+// so the cap can never be silently dropped by a missing env var.
+func parseBuildMemoryLimit(getenv func(string) string) string {
+	if raw := strings.TrimSpace(getenv("BUILDER_MEMORY_LIMIT")); raw != "" {
+		return raw
+	}
+	return defaultBuildMemoryLimit
+}
+
+// MemoryLimitFromEnv returns the value callers should put into
+// BuildConfig.MemoryLimit, read from the process environment.
+func MemoryLimitFromEnv() string { return parseBuildMemoryLimit(os.Getenv) }
+
+var (
+	defaultLimiterOnce sync.Once
+	defaultLimiter     *BuildLimiter
+)
+
+// DefaultBuildLimiter returns the process-wide limiter used by Build(). Its
+// capacity is read once from BUILDER_MAX_CONCURRENT via parseBuildMaxConcurrent.
+func DefaultBuildLimiter() *BuildLimiter {
+	defaultLimiterOnce.Do(func() {
+		defaultLimiter = NewBuildLimiter(parseBuildMaxConcurrent(os.Getenv))
+	})
+	return defaultLimiter
 }

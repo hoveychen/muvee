@@ -680,6 +680,34 @@ func TestBuildLimiter_AcquireRespectsContext(t *testing.T) {
 	lim.Release() // first slot
 }
 
+// ── parseBuildMemoryLimit ─────────────────────────────────────────────────────
+
+func TestParseBuildMemoryLimit(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		// Defaulting paths: unset / blank / whitespace → fallback.
+		{name: "<unset>", env: map[string]string{}, want: "3g"},
+		{name: `""`, env: map[string]string{"BUILDER_MEMORY_LIMIT": ""}, want: "3g"},
+		{name: `"  "`, env: map[string]string{"BUILDER_MEMORY_LIMIT": "  "}, want: "3g"},
+		// Explicit values pass through (with trim).
+		{name: "4g", env: map[string]string{"BUILDER_MEMORY_LIMIT": "4g"}, want: "4g"},
+		{name: `" 6g "`, env: map[string]string{"BUILDER_MEMORY_LIMIT": " 6g "}, want: "6g"},
+		{name: "512m", env: map[string]string{"BUILDER_MEMORY_LIMIT": "512m"}, want: "512m"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parseBuildMemoryLimit(envFrom(tc.env)); got != tc.want {
+				t.Errorf("BUILDER_MEMORY_LIMIT=%q: got %q, want %q",
+					tc.env["BUILDER_MEMORY_LIMIT"], got, tc.want)
+			}
+		})
+	}
+}
+
 // ── parseBuildMaxConcurrent ───────────────────────────────────────────────────
 
 func TestParseBuildMaxConcurrent(t *testing.T) {
