@@ -77,8 +77,20 @@ func TestServesSDKAtScriptPath(t *testing.T) {
 		t.Errorf("Content-Type: got %q", ct)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "embed:meta") || !strings.Contains(body, "postMessage") {
-		t.Errorf("body missing expected SDK markers: first 80 = %q", body[:min(80, len(body))])
+	// One smoke marker per SDK component so a missing concat (e.g. the v2
+	// const dropped, html2canvas const renamed) trips this test rather than
+	// surfacing only at runtime in the iframe.
+	wantMarkers := []string{
+		"embed:meta",                 // v0 meta upstream
+		"embed:selection",            // v1 selection upstream (also matches v2)
+		"embed:selection-screenshot", // v2 selection-screenshot upstream
+		"html2canvas",                // v2 dependency: bundled UMD must be present
+		"postMessage",                // generic shape sanity
+	}
+	for _, marker := range wantMarkers {
+		if !strings.Contains(body, marker) {
+			t.Errorf("body missing SDK marker %q (body length=%d)", marker, len(body))
+		}
 	}
 }
 

@@ -181,11 +181,24 @@ func (r *responseRecorder) flush(rw http.ResponseWriter) {
 	rw.Write(r.body.Bytes())
 }
 
-// sdkScript is the body of /_embed-bridge.js. Kept in sync with
-// muvee/web/public/_embed-bridge.js — when that file changes, the constant
-// here must be updated too. No runtime fs read because yaegi-loaded plugins
-// shouldn't pull external files at startup (the path would be sandbox-
-// dependent).
+// sdkScript is the body of /_embed-bridge.js.
+//
+// Originally a mirror of muvee/web/public/_embed-bridge.js, but diverged
+// starting with the v1 `embed:selection` + v2 `embed:selection-screenshot`
+// listeners (proposal: agent-workspace/docs/proposals/
+// muvee-embed-bridge-selection-screenshot.md). The traefik plugin is now
+// the authoritative SDK surface for muvee-deployed apps — the web/public
+// file retains the meta-only listener for dev/standalone access.
+//
+// No runtime fs read because yaegi-loaded plugins shouldn't pull external
+// files at startup (the path would be sandbox-dependent).
+//
+// Layout, in order, of the body served at /_embed-bridge.js:
+//   1. Meta upstream (embed:meta) — title/url, this const body.
+//   2. html2canvasBundle (separate file html2canvas.go) — DOM rasterizer
+//      needed by v2; defines the global `html2canvas` function.
+//   3. sdkSelectionScripts (below) — v1 `embed:selection` text fallback
+//      plus v2 `embed:selection-screenshot` viewport raster.
 const sdkScript = `// _embed-bridge.js — bridge SDK injected by muvee traefik plugin so any
 // muvee-deployed app surfaces its real <title> + URL to a host page that
 // iframes it (e.g. agent-workspace ` + "`/embed`" + ` page).
@@ -239,5 +252,175 @@ const sdkScript = `// _embed-bridge.js — bridge SDK injected by muvee traefik 
   patch("replaceState");
   window.addEventListener("popstate", function () { setTimeout(send, 0); });
   window.addEventListener("hashchange", function () { setTimeout(send, 0); });
+})();
+` + html2canvasBundle + sdkSelectionScripts
+
+// sdkSelectionScripts is the v1 + v2 selection-upstream blocks concatenated
+// onto sdkScript after html2canvasBundle. v1 sends `embed:selection` (plain
+// text + the surrounding paragraph) and is the always-on fallback. v2 sends
+// `embed:selection-screenshot` (PNG/JPEG data URL + viewport-relative bbox)
+// and runs in parallel; shell-side dedupes by event-arrival order so the
+// user only sees one toast per selection.
+//
+// Both listeners ship verbatim from agent-workspace/docs/embed-bridge-
+// protocol.md § SDK reference — do NOT diverge from that spec without
+// updating the protocol doc first.
+const sdkSelectionScripts = `
+// embed:selection — v1 text-only upstream (always-on fallback for pages
+// where html2canvas can't rasterize, e.g. tainted canvases).
+(function () {
+  let timer = null;
+  let lastText = '';
+
+  document.addEventListener('selectionchange', () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel) return;
+      let text = sel.toString().trim();
+      if (!text || text === lastText) return;
+      if (text.length > 4096) text = text.slice(0, 4096) + '…';
+      lastText = text;
+
+      // surrounding: textContent of the block-level element the selection
+      // anchors inside; gives the agent paragraph-level context.
+      let surrounding;
+      try {
+        let node = sel.anchorNode;
+        while (node && node !== document.body) {
+          if (
+            node.nodeType === 1 &&
+            /^(P|DIV|ARTICLE|SECTION|LI|TD|BLOCKQUOTE)$/.test(node.tagName)
+          ) {
+            surrounding = node.textContent.trim();
+            if (surrounding.length > 2048) {
+              surrounding = surrounding.slice(0, 2048) + '…';
+            }
+            break;
+          }
+          node = node.parentNode;
+        }
+      } catch (e) {
+        /* ignore */
+      }
+
+      parent.postMessage(
+        {
+          type: 'embed:selection',
+          text,
+          url: location.href,
+          title: document.title,
+          surrounding,
+        },
+        '*',
+      );
+    }, 300);
+  });
+})();
+
+// embed:selection-screenshot — v2 viewport raster upstream. Runs only when
+// html2canvas is present and the canvas isn't tainted by cross-origin
+// assets; otherwise drops the event silently and lets v1 cover it.
+(function () {
+  if (typeof html2canvas !== 'function') return;
+
+  let timer = null;
+  let lastFingerprint = '';
+
+  async function captureSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const text = sel.toString().trim();
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+
+    // Document-relative red overlay so html2canvas captures it as part of
+    // the body raster; removed immediately after capture.
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:absolute',
+      'left:' + (rect.left + window.scrollX) + 'px',
+      'top:' + (rect.top + window.scrollY) + 'px',
+      'width:' + rect.width + 'px',
+      'height:' + rect.height + 'px',
+      'outline:2px solid red',
+      'background:rgba(255,0,0,.15)',
+      'pointer-events:none',
+      'z-index:2147483647',
+    ].join(';');
+    document.body.appendChild(overlay);
+
+    let canvas;
+    try {
+      canvas = await html2canvas(document.body, {
+        x: window.scrollX,
+        y: window.scrollY,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        scale: window.devicePixelRatio || 1,
+        useCORS: true,
+        logging: false,
+        backgroundColor: null,
+      });
+    } catch (e) {
+      overlay.remove();
+      return null;
+    }
+    overlay.remove();
+
+    let dataUrl;
+    try {
+      dataUrl = canvas.toDataURL('image/png');
+      if (dataUrl.length > 4 * 1024 * 1024 * 1.37) {
+        dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      }
+      if (dataUrl.length > 4 * 1024 * 1024 * 1.37) {
+        return null;
+      }
+    } catch (e) {
+      return null;
+    }
+
+    return {
+      dataUrl,
+      bbox: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+      },
+      text: text.length > 4096 ? text.slice(0, 4096) + '…' : text,
+    };
+  }
+
+  document.addEventListener('selectionchange', () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const sel = window.getSelection();
+      if (!sel || !sel.toString().trim()) return;
+      // Fingerprint by text + range count so a drag across the same word
+      // doesn't fire a dozen captures.
+      const fp =
+        sel.toString().trim().slice(0, 200) + '|' + sel.rangeCount;
+      if (fp === lastFingerprint) return;
+      lastFingerprint = fp;
+
+      const captured = await captureSelection();
+      if (!captured) return;
+
+      parent.postMessage(
+        {
+          type: 'embed:selection-screenshot',
+          screenshot: captured.dataUrl,
+          bbox: captured.bbox,
+          url: location.href,
+          title: document.title,
+          text: captured.text,
+        },
+        '*',
+      );
+    }, 300);
+  });
 })();
 `
