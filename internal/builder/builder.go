@@ -105,6 +105,12 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 		"-t", imageTag,
 		"--push",
 	}
+	if cfg.MemoryLimit != "" {
+		// Setting --memory-swap to the same value disables swap so a build that
+		// hits the cap fails fast instead of thrashing and pulling other
+		// containers down with it. Mirrors deployer.go.
+		buildArgs = append(buildArgs, "--memory", cfg.MemoryLimit, "--memory-swap", cfg.MemoryLimit)
+	}
 	var secretFiles []string
 	for id, value := range cfg.BuildSecrets {
 		if id == "" {
