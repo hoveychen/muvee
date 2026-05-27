@@ -1,0 +1,27 @@
+# Dockerfile.traefik — muvee's Traefik image with the embed-bridge local
+# plugin source baked in.
+#
+# Why this exists: the embed-bridge plugin is a yaegi-interpreted Traefik
+# *local* plugin. Traefik reads its .go source from disk at startup and never
+# hot-reloads it. Previously the source was bind-mounted from the host
+# (./traefik/plugins-local), so a `watchtower` image update of muvee-server
+# left the plugin source stale on disk AND never restarted Traefik — the
+# deployed SDK silently lagged the released code (see the v1.25.0
+# embed:selection-screenshot incident).
+#
+# Baking the source into a versioned Traefik image fixes both halves:
+#   - the source ships *with* the image, versioned alongside every release;
+#   - a new image digest makes watchtower recreate the Traefik container,
+#     which restarts Traefik and forces yaegi to re-interpret the plugin.
+#
+# Built + pushed by .github/workflows/release.yml as
+# ghcr.io/hoveychen/muvee-traefik:<tag> and :latest. Keep the base Traefik
+# version in sync with the `image:` pin that docker-compose*.yml used before
+# this image existed.
+FROM traefik:v3.6.1
+
+# Plugin source tree. Traefik resolves experimental.localPlugins.embed-bridge
+# (declared in traefik/traefik.yml) to /plugins-local/src/<moduleName>, so the
+# destination path must stay /plugins-local to match that config and the old
+# bind-mount target.
+COPY traefik/plugins-local /plugins-local
