@@ -183,7 +183,11 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   traefik:
-    image: traefik:v3.6.1
+    # muvee-traefik = traefik:v3.6.1 with the embed-bridge yaegi local-plugin
+    # source baked in (see Dockerfile.traefik). Using this image instead of a
+    # host bind-mount means a watchtower image update recreates this container
+    # and reloads the plugin — the plugin source can no longer go stale on disk.
+    image: ghcr.io/hoveychen/muvee-traefik:latest
     command:
       - "--configFile=/etc/traefik/traefik.yml"
       - "--certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}"
@@ -197,10 +201,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-      # embed-bridge local plugin: traefik loads .go sources from this tree
-      # at startup via yaegi (declared under `experimental.localPlugins` in
-      # traefik.yml). Mount read-only — the plugin self-contained.
-      - ./traefik/plugins-local:/plugins-local:ro
+      # NOTE: /plugins-local is no longer bind-mounted — the embed-bridge
+      # plugin source is baked into the muvee-traefik image at that path.
       - letsencrypt_data:/letsencrypt
       - traefik_logs:/var/log/traefik
     environment:
@@ -216,6 +218,9 @@ services:
       - "traefik.http.routers.traefik-dashboard.tls.domains[0].main=traefik.${BASE_DOMAIN}"
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.middlewares=muvee-forward-auth-admin@file"
+      # Let watchtower recreate Traefik when a new muvee-traefik:latest ships,
+      # so the embed-bridge plugin reloads on release without a manual restart.
+      - "com.centurylinklabs.watchtower.enable=true"
 
   # ── Builder agent — compiles Docker images and pushes to the registry ──────
   muvee-agent-builder:
@@ -272,10 +277,12 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  # ── Watchtower — auto-pulls new ghcr.io/hoveychen/muvee:latest and restarts ─
+  # ── Watchtower — auto-pulls new ghcr.io/hoveychen/muvee[-traefik]:latest ────
   # Only watches containers with `com.centurylinklabs.watchtower.enable=true`
-  # (the four muvee services above). Postgres, registry, and Traefik are left
-  # alone because they pin specific versions and need manual upgrade review.
+  # (the four muvee services + Traefik). Traefik now runs the muvee-traefik
+  # image, so watchtower recreating it on a new digest reloads the embed-bridge
+  # plugin. Postgres and registry are left alone — they pin specific versions
+  # and need manual upgrade review.
   # Uses the nickfedor fork because the original containrrr/watchtower image
   # has been unmaintained since 2024 and its embedded Docker client (API 1.25)
   # is rejected by modern dockerd (MinAPI 1.40+).
