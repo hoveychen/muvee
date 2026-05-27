@@ -21,20 +21,26 @@ type BuildLimiter struct {
 // NewBuildLimiter returns a limiter with the given concurrency cap. Values
 // below 1 are treated as 1 to preserve liveness.
 func NewBuildLimiter(cap int) *BuildLimiter {
-	// Stub: returns a non-blocking limiter. Replaced in P4.
-	return &BuildLimiter{}
+	if cap < 1 {
+		cap = 1
+	}
+	return &BuildLimiter{sem: make(chan struct{}, cap)}
 }
 
 // Acquire takes one slot. It blocks until a slot is free or ctx is done.
 // On ctx cancellation it returns ctx.Err() and does NOT consume a slot.
 func (l *BuildLimiter) Acquire(ctx context.Context) error {
-	// Stub: never blocks. Replaced in P4.
-	return nil
+	select {
+	case l.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Release frees the slot taken by a prior successful Acquire.
 func (l *BuildLimiter) Release() {
-	// Stub: no-op. Replaced in P4.
+	<-l.sem
 }
 
 // parseBuildMaxConcurrent reads BUILDER_MAX_CONCURRENT from the injected
@@ -46,11 +52,11 @@ func (l *BuildLimiter) Release() {
 func parseBuildMaxConcurrent(getenv func(string) string) int {
 	raw := strings.TrimSpace(getenv("BUILDER_MAX_CONCURRENT"))
 	if raw == "" {
-		return 0 // stub: should be defaultBuildMaxConcurrent
+		return defaultBuildMaxConcurrent
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		return 0 // stub: should be defaultBuildMaxConcurrent
+		return defaultBuildMaxConcurrent
 	}
 	return n
 }
