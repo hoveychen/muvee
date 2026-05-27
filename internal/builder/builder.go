@@ -31,9 +31,19 @@ type BuildConfig struct {
 	// BuildSecrets are passed to docker buildx via --secret id=<key>,src=<tempfile>.
 	// Inside Dockerfile they are available at /run/secrets/<key>.
 	BuildSecrets map[string]string
+	// MemoryLimit caps the build's RAM via buildx `--memory` / `--memory-swap`
+	// so one project's build cannot OOM the shared host. Same string format as
+	// docker (e.g. "3g", "512m"). Empty means no limit.
+	MemoryLimit string
 }
 
 func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, error) {
+	limiter := DefaultBuildLimiter()
+	if err := limiter.Acquire(ctx); err != nil {
+		return "", fmt.Errorf("acquire build slot: %w", err)
+	}
+	defer limiter.Release()
+
 	workDir, err := os.MkdirTemp("", "muvee-build-"+cfg.ProjectID+"-*")
 	if err != nil {
 		return "", fmt.Errorf("mktemp: %w", err)
@@ -100,6 +110,12 @@ func Build(ctx context.Context, cfg BuildConfig, logFn func(string)) (string, er
 		"-f", dockerfilePath,
 		"-t", imageTag,
 		"--push",
+	}
+	if cfg.MemoryLimit != "" {
+		// Setting --memory-swap to the same value disables swap so a build that
+		// hits the cap fails fast instead of thrashing and pulling other
+		// containers down with it. Mirrors deployer.go.
+		buildArgs = append(buildArgs, "--memory", cfg.MemoryLimit, "--memory-swap", cfg.MemoryLimit)
 	}
 	var secretFiles []string
 	for id, value := range cfg.BuildSecrets {

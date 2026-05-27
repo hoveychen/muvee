@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -480,5 +481,263 @@ exit 1
 		t.Errorf("build context = %q; want %q (= repo-root workDir, NOT dockerfile parent dir).\n"+
 			"-f = %q\nfull docker args: %v",
 			buildCtx, wantCtx, fPath, args)
+	}
+}
+
+// installDockerArgsShim drops a shim binary at <tempdir>/{git,docker} that:
+//   - `git clone ... <dst>`  → mkdir -p <dst>
+//   - `git -C <dir> rev-parse HEAD` → emit a fake sha
+//   - `docker ...` → dump argv (one per line) to argsFile, exit 0
+//
+// It returns the argsFile path. PATH is set so the shim wins over real git/docker.
+// Extracted so memory-limit / future buildx-argv tests can share it.
+func installDockerArgsShim(t *testing.T) (argsFile string) {
+	t.Helper()
+	stubDir := t.TempDir()
+	argsFile = filepath.Join(stubDir, "docker.args")
+
+	shim := fmt.Sprintf(`#!/bin/sh
+case "${0##*/}" in
+  git)
+    case "$1" in
+      clone)
+        last=
+        for a in "$@"; do last="$a"; done
+        mkdir -p "$last" || exit 1
+        exit 0
+        ;;
+      -C)
+        if [ "$3" = "rev-parse" ]; then
+          echo "fakecommitsha1"
+          exit 0
+        fi
+        ;;
+    esac
+    exit 1
+    ;;
+  docker)
+    : > %q
+    for a in "$@"; do printf '%%s\n' "$a" >> %q; done
+    exit 0
+    ;;
+esac
+exit 1
+`, argsFile, argsFile)
+
+	shimPath := filepath.Join(stubDir, "shim.sh")
+	if err := os.WriteFile(shimPath, []byte(shim), 0o755); err != nil {
+		t.Fatalf("write shim: %v", err)
+	}
+	for _, name := range []string{"git", "docker"} {
+		if err := os.Symlink(shimPath, filepath.Join(stubDir, name)); err != nil {
+			t.Fatalf("symlink %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", stubDir+":"+os.Getenv("PATH"))
+	return argsFile
+}
+
+// readDockerArgs returns the argv lines from the shim's dump file.
+func readDockerArgs(t *testing.T, argsFile string) []string {
+	t.Helper()
+	data, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", argsFile, err)
+	}
+	return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+}
+
+// flagValue returns the value following the first occurrence of `flag` in args,
+// or "" if the flag is absent or has no following arg.
+func flagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// TestBuild_AppendsMemoryLimit locks in that `BuildConfig.MemoryLimit` is
+// forwarded to `docker buildx build` as both `--memory <N>` and
+// `--memory-swap <N>` (matching deployer.go's pattern, which sets swap to the
+// same value to fully disable swapping under pressure). Without this the
+// builder runs unconstrained and a single build can OOM the host — which is
+// what happened on the Seoul deploy node when a new project was first
+// deployed.
+func TestBuild_AppendsMemoryLimit(t *testing.T) {
+	t.Run("limit set appends --memory and --memory-swap", func(t *testing.T) {
+		argsFile := installDockerArgsShim(t)
+
+		cfg := BuildConfig{
+			ProjectID:      "test-memlimit",
+			GitURL:         "https://example.invalid/repo.git",
+			GitBranch:      "main",
+			DockerfilePath: "Dockerfile",
+			RegistryAddr:   "registry.test.local",
+			MemoryLimit:    "3g",
+		}
+		if _, err := Build(context.Background(), cfg, func(string) {}); err != nil {
+			t.Fatalf("Build failed: %v", err)
+		}
+
+		args := readDockerArgs(t, argsFile)
+		if got := flagValue(args, "--memory"); got != "3g" {
+			t.Errorf("--memory = %q, want %q\nfull args: %v", got, "3g", args)
+		}
+		if got := flagValue(args, "--memory-swap"); got != "3g" {
+			t.Errorf("--memory-swap = %q, want %q (must equal --memory to disable swap)\nfull args: %v",
+				got, "3g", args)
+		}
+	})
+
+	t.Run("empty limit emits no memory flags", func(t *testing.T) {
+		argsFile := installDockerArgsShim(t)
+
+		cfg := BuildConfig{
+			ProjectID:      "test-memlimit-empty",
+			GitURL:         "https://example.invalid/repo.git",
+			GitBranch:      "main",
+			DockerfilePath: "Dockerfile",
+			RegistryAddr:   "registry.test.local",
+			// MemoryLimit intentionally unset.
+		}
+		if _, err := Build(context.Background(), cfg, func(string) {}); err != nil {
+			t.Fatalf("Build failed: %v", err)
+		}
+
+		args := readDockerArgs(t, argsFile)
+		if slices.Contains(args, "--memory") {
+			t.Errorf("--memory must NOT appear when MemoryLimit is empty\nfull args: %v", args)
+		}
+		if slices.Contains(args, "--memory-swap") {
+			t.Errorf("--memory-swap must NOT appear when MemoryLimit is empty\nfull args: %v", args)
+		}
+	})
+}
+
+// ── BuildLimiter ───────────────────────────────────────────────────────────────
+
+// TestBuildLimiter_AcquireBlocksUntilRelease locks in that with cap=1 the
+// second Acquire blocks until the first slot is Released. Without this guard
+// the agent loop spawns N concurrent builds with no throttle, each of which
+// can take 3 GB+ of RAM — the exact OOM mode this plan exists to fix.
+func TestBuildLimiter_AcquireBlocksUntilRelease(t *testing.T) {
+	lim := NewBuildLimiter(1)
+	ctx := context.Background()
+
+	if err := lim.Acquire(ctx); err != nil {
+		t.Fatalf("first Acquire: %v", err)
+	}
+
+	acquired := make(chan struct{})
+	go func() {
+		if err := lim.Acquire(ctx); err != nil {
+			t.Errorf("second Acquire returned error: %v", err)
+		}
+		close(acquired)
+	}()
+
+	// Second Acquire must still be waiting after a small grace period.
+	select {
+	case <-acquired:
+		t.Fatal("second Acquire returned without waiting; limiter is not blocking")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: still blocked.
+	}
+
+	// Releasing the first slot must unblock the second Acquire promptly.
+	lim.Release()
+	select {
+	case <-acquired:
+		// Good.
+	case <-time.After(time.Second):
+		t.Fatal("second Acquire still blocked 1s after Release; limiter does not unblock on Release")
+	}
+	lim.Release()
+}
+
+// TestBuildLimiter_AcquireRespectsContext checks that a cancelled context
+// fails out of a blocked Acquire instead of leaking goroutines, and that
+// nothing is consumed on failure (Release was never paired).
+func TestBuildLimiter_AcquireRespectsContext(t *testing.T) {
+	lim := NewBuildLimiter(1)
+
+	if err := lim.Acquire(context.Background()); err != nil {
+		t.Fatalf("first Acquire: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := lim.Acquire(ctx)
+	if err == nil {
+		t.Fatal("Acquire on a full limiter with deadline-exceeded ctx must return error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Acquire error = %v, want DeadlineExceeded", err)
+	}
+
+	lim.Release() // first slot
+}
+
+// ── parseBuildMemoryLimit ─────────────────────────────────────────────────────
+
+func TestParseBuildMemoryLimit(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		// Defaulting paths: unset / blank / whitespace → fallback.
+		{name: "<unset>", env: map[string]string{}, want: "3g"},
+		{name: `""`, env: map[string]string{"BUILDER_MEMORY_LIMIT": ""}, want: "3g"},
+		{name: `"  "`, env: map[string]string{"BUILDER_MEMORY_LIMIT": "  "}, want: "3g"},
+		// Explicit values pass through (with trim).
+		{name: "4g", env: map[string]string{"BUILDER_MEMORY_LIMIT": "4g"}, want: "4g"},
+		{name: `" 6g "`, env: map[string]string{"BUILDER_MEMORY_LIMIT": " 6g "}, want: "6g"},
+		{name: "512m", env: map[string]string{"BUILDER_MEMORY_LIMIT": "512m"}, want: "512m"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parseBuildMemoryLimit(envFrom(tc.env)); got != tc.want {
+				t.Errorf("BUILDER_MEMORY_LIMIT=%q: got %q, want %q",
+					tc.env["BUILDER_MEMORY_LIMIT"], got, tc.want)
+			}
+		})
+	}
+}
+
+// ── parseBuildMaxConcurrent ───────────────────────────────────────────────────
+
+func TestParseBuildMaxConcurrent(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want int
+	}{
+		// Defaulting paths — anything that isn't a clean positive integer falls
+		// back to 1 so a typo never silently uncaps parallelism.
+		{name: "<unset>", env: map[string]string{}, want: 1},
+		{name: `""`, env: map[string]string{"BUILDER_MAX_CONCURRENT": ""}, want: 1},
+		{name: `"  "`, env: map[string]string{"BUILDER_MAX_CONCURRENT": "  "}, want: 1},
+		{name: "abc", env: map[string]string{"BUILDER_MAX_CONCURRENT": "abc"}, want: 1},
+		{name: "0", env: map[string]string{"BUILDER_MAX_CONCURRENT": "0"}, want: 1},
+		{name: "-3", env: map[string]string{"BUILDER_MAX_CONCURRENT": "-3"}, want: 1},
+		// Valid positive integers — honoured as-is.
+		{name: "1", env: map[string]string{"BUILDER_MAX_CONCURRENT": "1"}, want: 1},
+		{name: "2", env: map[string]string{"BUILDER_MAX_CONCURRENT": "2"}, want: 2},
+		{name: "10", env: map[string]string{"BUILDER_MAX_CONCURRENT": "10"}, want: 10},
+		// Leading/trailing whitespace must be trimmed.
+		{name: `" 4 "`, env: map[string]string{"BUILDER_MAX_CONCURRENT": " 4 "}, want: 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parseBuildMaxConcurrent(envFrom(tc.env)); got != tc.want {
+				t.Errorf("BUILDER_MAX_CONCURRENT=%q: got %d, want %d",
+					tc.env["BUILDER_MAX_CONCURRENT"], got, tc.want)
+			}
+		})
 	}
 }
