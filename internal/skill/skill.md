@@ -1,6 +1,6 @@
 ---
 name: muveectl
-version: 10
+version: 11
 description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, restart, port-forward, curl, exec / shell / cp into containers, describe, env, events, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, restart a container without a redeploy, inspect container state (describe / env / events), debug container crashes and restarts, run commands or open a shell inside a project container, copy files in/out of a container, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, manage dataset files (ls, pull, push, rm, mkdir, mv, cp), or self-update muveectl from the configured server.
 ---
 
@@ -58,12 +58,9 @@ Config is saved at `~/.config/muveectl/config.json`. All subsequent commands use
 Profiles let you keep credentials for several Muvee servers (e.g. `dev`, `staging`, `prod`) in one config file and switch between them kubectl-style. A legacy single-credential config is auto-migrated into a `default` profile on first read.
 
 ```bash
-# Add a profile (server is required, token via login)
-muveectl profile add prod --server https://prod.example.com
-muveectl login --profile prod
-
-# Add a profile that already has a token (e.g. from teammate)
-muveectl profile add ci --server https://ci.example.com --token sk-...
+# Create a profile by logging in to its server (login both creates the
+# profile and saves the OAuth token, then makes it the active profile)
+muveectl login --server https://prod.example.com --profile prod
 
 # List profiles (active one marked with *)
 muveectl profile list

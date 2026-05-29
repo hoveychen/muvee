@@ -25,14 +25,9 @@ func init() {
 	rootCmd.AddCommand(profileCmd)
 	profileCmd.AddCommand(profileListCmd)
 	profileCmd.AddCommand(profileUseCmd)
-	profileCmd.AddCommand(profileAddCmd)
 	profileCmd.AddCommand(profileRmCmd)
 	profileCmd.AddCommand(profileCurrentCmd)
 	profileCmd.AddCommand(profileShowCmd)
-
-	profileAddCmd.Flags().String("server", "", "Server URL for the new profile (required)")
-	profileAddCmd.Flags().String("token", "", "API token for the new profile (optional — run `muveectl login --profile <name>` later if omitted)")
-	_ = profileAddCmd.MarkFlagRequired("server")
 }
 
 // sortedProfileNames returns profile names in deterministic order so list/show
@@ -113,40 +108,6 @@ var profileUseCmd = &cobra.Command{
 			return fmt.Errorf("save config: %w", err)
 		}
 		fmt.Printf("Switched to profile %q\n", name)
-		return nil
-	},
-}
-
-// ─── Add ─────────────────────────────────────────────────────────────────────
-
-var profileAddCmd = &cobra.Command{
-	Use:   "add NAME",
-	Short: "Add a new profile (use `muveectl login --profile NAME` for OAuth-based token)",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		if name == "" {
-			return fmt.Errorf("profile name cannot be empty")
-		}
-		if _, ok := cfg.Profiles[name]; ok {
-			return fmt.Errorf("profile %q already exists. Edit with `muveectl login --profile %s` or remove first", name, name)
-		}
-		server, _ := cmd.Flags().GetString("server")
-		token, _ := cmd.Flags().GetString("token")
-		if cfg.Profiles == nil {
-			cfg.Profiles = map[string]Profile{}
-		}
-		cfg.Profiles[name] = Profile{Server: strings.TrimRight(server, "/"), Token: token}
-		if cfg.CurrentProfile == "" {
-			cfg.CurrentProfile = name
-		}
-		if err := saveConfig(cfg); err != nil {
-			return fmt.Errorf("save config: %w", err)
-		}
-		fmt.Printf("Added profile %q (server=%s)\n", name, server)
-		if token == "" {
-			fmt.Printf("Tip: run `muveectl login --profile %s` to obtain a token.\n", name)
-		}
 		return nil
 	},
 }
