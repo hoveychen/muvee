@@ -38,6 +38,12 @@ type ComposeConfig struct {
 	// EnvVars are written to a project-level .env file consumed by compose,
 	// so they reach all services via standard ${VAR} interpolation.
 	EnvVars map[string]string
+	// RegistryAuths are the project owner's private-registry pull credentials.
+	// When present, the deploy writes a per-deploy temporary docker config
+	// (merged on top of the agent's own auths) and points DOCKER_CONFIG at it for
+	// the compose pull/up, so private images (e.g. ghcr.io) can be pulled without
+	// polluting the agent's global docker config or leaking across tenants.
+	RegistryAuths []RegistryAuth
 	// InlineComposeYAML, when non-empty, is written directly into the work
 	// directory as docker-compose.yml and the git clone step is skipped. Used
 	// by image-only projects whose compose file is synthesised by the
@@ -225,13 +231,27 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 		}
 	}
 
+	// Private-registry pull credentials: write a per-deploy docker config (merged
+	// over the agent's own auths) and point DOCKER_CONFIG at it for pull/up only.
+	// This keeps tenant credentials out of the agent's global docker config.
+	var composeEnv []string
+	if dockerCfgDir, cleanup, err := prepareRegistryDockerConfig(cfg.RegistryAuths); err != nil {
+		return 0, fmt.Errorf("prepare registry docker config: %w", err)
+	} else {
+		defer cleanup()
+		if dockerCfgDir != "" {
+			composeEnv = []string{"DOCKER_CONFIG=" + dockerCfgDir}
+			logFn(fmt.Sprintf("Using %d project registry credential(s) for image pull", len(cfg.RegistryAuths)))
+		}
+	}
+
 	logFn(fmt.Sprintf("Pulling compose images for project %s...", projectName))
-	if err := runCmdCompose(ctx, logFn, "docker", composeArgs("pull")...); err != nil {
+	if err := runCmdComposeEnv(ctx, logFn, composeEnv, "docker", composeArgs("pull")...); err != nil {
 		return 0, fmt.Errorf("docker compose pull: %w", err)
 	}
 
 	logFn("Starting compose project (docker compose up -d)...")
-	if err := runCmdCompose(ctx, logFn, "docker", composeArgs("up", "-d", "--remove-orphans")...); err != nil {
+	if err := runCmdComposeEnv(ctx, logFn, composeEnv, "docker", composeArgs("up", "-d", "--remove-orphans")...); err != nil {
 		return 0, fmt.Errorf("docker compose up: %w", err)
 	}
 
