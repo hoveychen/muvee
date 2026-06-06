@@ -24,9 +24,11 @@ func init() {
 
 	// secrets create flags
 	secretsCreateCmd.Flags().String("name", "", "Secret name (required)")
-	secretsCreateCmd.Flags().String("type", "", "Type: password, ssh_key, api_key, or env_var (required)")
-	secretsCreateCmd.Flags().String("value", "", "Secret value")
+	secretsCreateCmd.Flags().String("type", "", "Type: password, ssh_key, api_key, env_var, or registry (required)")
+	secretsCreateCmd.Flags().String("value", "", "Secret value (for registry: the registry password/token)")
 	secretsCreateCmd.Flags().String("value-file", "", "Read secret value from file (useful for SSH keys)")
+	secretsCreateCmd.Flags().String("registry-addr", "", "Registry host for type=registry, e.g. ghcr.io (required for registry)")
+	secretsCreateCmd.Flags().String("registry-username", "", "Registry login username for type=registry")
 	secretsCreateCmd.MarkFlagRequired("name")
 	secretsCreateCmd.MarkFlagRequired("type")
 
@@ -66,7 +68,7 @@ var secretsListCmd = &cobra.Command{
 			fmt.Println("No secrets found.")
 			return nil
 		}
-		printTable(items, []string{"id", "name", "type", "value_preview", "created_at"})
+		printTable(items, []string{"id", "name", "type", "value_preview", "registry_addr", "registry_username", "created_at"})
 		return nil
 	},
 }
@@ -84,6 +86,8 @@ var secretsCreateCmd = &cobra.Command{
 		typ, _ := cmd.Flags().GetString("type")
 		value, _ := cmd.Flags().GetString("value")
 		valueFile, _ := cmd.Flags().GetString("value-file")
+		registryAddr, _ := cmd.Flags().GetString("registry-addr")
+		registryUsername, _ := cmd.Flags().GetString("registry-username")
 
 		if valueFile != "" {
 			data, err := os.ReadFile(valueFile)
@@ -95,11 +99,20 @@ var secretsCreateCmd = &cobra.Command{
 		if value == "" {
 			return fmt.Errorf("--value or --value-file is required")
 		}
+		if typ == "registry" && registryAddr == "" {
+			return fmt.Errorf("--registry-addr is required for --type registry")
+		}
 
 		d := map[string]interface{}{
 			"name":  name,
 			"type":  typ,
 			"value": value,
+		}
+		if registryAddr != "" {
+			d["registry_addr"] = registryAddr
+		}
+		if registryUsername != "" {
+			d["registry_username"] = registryUsername
 		}
 		result, err := cl.do("POST", "/api/secrets", d)
 		if err != nil {
