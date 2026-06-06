@@ -476,6 +476,24 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 // pinned node. The first deploy picks any active deploy node and persists the
 // pin on the project; subsequent deploys must run on the same node so docker
 // named volumes survive across redeploys.
+// buildRegistryAuthsPayload converts decrypted registry credentials into the
+// JSON-friendly shape carried in a compose deploy task payload. Entries with an
+// empty registry address are dropped (they cannot produce a usable docker auth).
+func buildRegistryAuthsPayload(auths []store.RegistryAuth) []map[string]string {
+	out := make([]map[string]string, 0, len(auths))
+	for _, a := range auths {
+		if a.Addr == "" {
+			continue
+		}
+		out = append(out, map[string]string{
+			"addr":     a.Addr,
+			"username": a.Username,
+			"password": a.Password,
+		})
+	}
+	return out
+}
+
 func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store.Deployment, project *store.Project) error {
 	if project.GitSource != store.GitSourceHosted && project.GitURL == "" {
 		return fmt.Errorf("compose project has no git_url")
@@ -518,6 +536,12 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 		}
 	}
 
+	// Collect the project owner's private-registry pull credentials so the agent
+	// can pull private compose images (e.g. ghcr.io). These are tenant-level:
+	// every project the owner has gets all of their registry credentials.
+	ownerAuths, _ := s.store.GetUserRegistrySecretsDecrypted(ctx, project.OwnerID)
+	registryAuths := buildRegistryAuthsPayload(ownerAuths)
+
 	// For hosted repos, use a relative path; the agent prepends its CONTROL_PLANE_URL.
 	gitURL := project.GitURL
 	gitBranch := project.GitBranch
@@ -552,6 +576,9 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 	if gitUsername != "" && gitToken != "" {
 		payload["git_username"] = gitUsername
 		payload["git_token"] = gitToken
+	}
+	if len(registryAuths) > 0 {
+		payload["registry_auths"] = registryAuths
 	}
 
 	task := &store.Task{
