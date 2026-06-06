@@ -4559,22 +4559,26 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type safeSecret struct {
-		ID           string `json:"id"`
-		Name         string `json:"name"`
-		Type         string `json:"type"`
-		ValuePreview string `json:"value_preview"`
-		CreatedAt    string `json:"created_at"`
-		UpdatedAt    string `json:"updated_at"`
+		ID               string `json:"id"`
+		Name             string `json:"name"`
+		Type             string `json:"type"`
+		ValuePreview     string `json:"value_preview"`
+		RegistryAddr     string `json:"registry_addr"`
+		RegistryUsername string `json:"registry_username"`
+		CreatedAt        string `json:"created_at"`
+		UpdatedAt        string `json:"updated_at"`
 	}
 	out := make([]safeSecret, 0, len(secrets))
 	for _, sec := range secrets {
 		out = append(out, safeSecret{
-			ID:           sec.ID.String(),
-			Name:         sec.Name,
-			Type:         string(sec.Type),
-			ValuePreview: sec.ValuePreview,
-			CreatedAt:    sec.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:    sec.UpdatedAt.Format(time.RFC3339),
+			ID:               sec.ID.String(),
+			Name:             sec.Name,
+			Type:             string(sec.Type),
+			ValuePreview:     sec.ValuePreview,
+			RegistryAddr:     sec.RegistryAddr,
+			RegistryUsername: sec.RegistryUsername,
+			CreatedAt:        sec.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:        sec.UpdatedAt.Format(time.RFC3339),
 		})
 	}
 	jsonOK(w, out)
@@ -4583,9 +4587,11 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
 	var body struct {
-		Name  string `json:"name"`
-		Type  string `json:"type"`
-		Value string `json:"value"`
+		Name             string `json:"name"`
+		Type             string `json:"type"`
+		Value            string `json:"value"`
+		RegistryAddr     string `json:"registry_addr"`
+		RegistryUsername string `json:"registry_username"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, err, 400)
@@ -4597,20 +4603,31 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	switch store.SecretType(body.Type) {
 	case store.SecretTypePassword, store.SecretTypeSSHKey, store.SecretTypeAPIKey, store.SecretTypeEnvVar:
+	case store.SecretTypeRegistry:
+		if body.RegistryAddr == "" {
+			jsonErr(w, fmt.Errorf("registry_addr is required for type=registry"), 400)
+			return
+		}
 	default:
-		jsonErr(w, fmt.Errorf("type must be one of: password, ssh_key, api_key, env_var"), 400)
+		jsonErr(w, fmt.Errorf("type must be one of: password, ssh_key, api_key, env_var, registry"), 400)
 		return
 	}
-	sec, err := s.store.CreateSecret(r.Context(), user.ID, body.Name, store.SecretType(body.Type), body.Value)
+	// registry_addr/username are only stored for registry secrets.
+	if store.SecretType(body.Type) != store.SecretTypeRegistry {
+		body.RegistryAddr, body.RegistryUsername = "", ""
+	}
+	sec, err := s.store.CreateSecret(r.Context(), user.ID, body.Name, store.SecretType(body.Type), body.Value, body.RegistryAddr, body.RegistryUsername)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
 	jsonOK(w, map[string]string{
-		"id":            sec.ID.String(),
-		"name":          sec.Name,
-		"type":          string(sec.Type),
-		"value_preview": sec.ValuePreview,
+		"id":                sec.ID.String(),
+		"name":              sec.Name,
+		"type":              string(sec.Type),
+		"value_preview":     sec.ValuePreview,
+		"registry_addr":     sec.RegistryAddr,
+		"registry_username": sec.RegistryUsername,
 	})
 }
 

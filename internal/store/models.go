@@ -527,6 +527,11 @@ const (
 	// SecretTypeEnvVar stores a non-sensitive environment variable value.
 	// The full plaintext is stored as the value preview and shown in the UI.
 	SecretTypeEnvVar SecretType = "env_var"
+	// SecretTypeRegistry stores a private container-registry pull credential.
+	// RegistryAddr / RegistryUsername identify the registry login; the encrypted
+	// value is the password / token. Applied to every compose deploy of any
+	// project owned by the secret's owner.
+	SecretTypeRegistry SecretType = "registry"
 )
 
 type Secret struct {
@@ -537,9 +542,12 @@ type Secret struct {
 	EncryptedValue string     `db:"encrypted_value"`
 	// ValuePreview is a non-sensitive display string: masked fingerprint for api_key,
 	// full plaintext for env_var, and empty for password / ssh_key.
-	ValuePreview string    `db:"value_preview"`
-	CreatedAt    time.Time `db:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at"`
+	ValuePreview string `db:"value_preview"`
+	// RegistryAddr / RegistryUsername are set only for type=registry secrets.
+	RegistryAddr     string    `db:"registry_addr"`
+	RegistryUsername string    `db:"registry_username"`
+	CreatedAt        time.Time `db:"created_at"`
+	UpdatedAt        time.Time `db:"updated_at"`
 }
 
 type ProjectSecret struct {

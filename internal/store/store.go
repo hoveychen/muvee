@@ -2049,7 +2049,9 @@ func computeSecretPreview(secretType SecretType, plaintextValue string) string {
 	}
 }
 
-func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string, secretType SecretType, plaintextValue string) (*Secret, error) {
+// CreateSecret stores an encrypted secret for a user. registryAddr/registryUsername
+// are only meaningful for type=registry secrets and are stored as empty for others.
+func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string, secretType SecretType, plaintextValue, registryAddr, registryUsername string) (*Secret, error) {
 	if s.encryptionKey == nil {
 		return nil, fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
 	}
@@ -2058,19 +2060,21 @@ func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string,
 		return nil, fmt.Errorf("encrypt secret: %w", err)
 	}
 	sec := &Secret{
-		ID:             uuid.New(),
-		UserID:         userID,
-		Name:           name,
-		Type:           secretType,
-		EncryptedValue: encrypted,
-		ValuePreview:   computeSecretPreview(secretType, plaintextValue),
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		ID:               uuid.New(),
+		UserID:           userID,
+		Name:             name,
+		Type:             secretType,
+		EncryptedValue:   encrypted,
+		ValuePreview:     computeSecretPreview(secretType, plaintextValue),
+		RegistryAddr:     registryAddr,
+		RegistryUsername: registryUsername,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO secrets (id, user_id, name, type, encrypted_value, value_preview, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, sec.ID, sec.UserID, sec.Name, sec.Type, sec.EncryptedValue, sec.ValuePreview, sec.CreatedAt, sec.UpdatedAt)
+		INSERT INTO secrets (id, user_id, name, type, encrypted_value, value_preview, registry_addr, registry_username, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, sec.ID, sec.UserID, sec.Name, sec.Type, sec.EncryptedValue, sec.ValuePreview, sec.RegistryAddr, sec.RegistryUsername, sec.CreatedAt, sec.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -2079,7 +2083,7 @@ func (s *Store) CreateSecret(ctx context.Context, userID uuid.UUID, name string,
 
 func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Secret, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, user_id, name, type, encrypted_value, value_preview, created_at, updated_at
+		SELECT id, user_id, name, type, encrypted_value, value_preview, registry_addr, registry_username, created_at, updated_at
 		FROM secrets WHERE user_id = $1 ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
@@ -2089,7 +2093,7 @@ func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Se
 	secrets := make([]*Secret, 0)
 	for rows.Next() {
 		var sec Secret
-		if err := rows.Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.ValuePreview, &sec.CreatedAt, &sec.UpdatedAt); err != nil {
+		if err := rows.Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.ValuePreview, &sec.RegistryAddr, &sec.RegistryUsername, &sec.CreatedAt, &sec.UpdatedAt); err != nil {
 			return nil, err
 		}
 		secrets = append(secrets, &sec)
@@ -2100,13 +2104,50 @@ func (s *Store) ListSecretsForUser(ctx context.Context, userID uuid.UUID) ([]*Se
 func (s *Store) GetSecret(ctx context.Context, id, userID uuid.UUID) (*Secret, error) {
 	var sec Secret
 	err := s.db.QueryRow(ctx, `
-		SELECT id, user_id, name, type, encrypted_value, value_preview, created_at, updated_at
+		SELECT id, user_id, name, type, encrypted_value, value_preview, registry_addr, registry_username, created_at, updated_at
 		FROM secrets WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.ValuePreview, &sec.CreatedAt, &sec.UpdatedAt)
+	`, id, userID).Scan(&sec.ID, &sec.UserID, &sec.Name, &sec.Type, &sec.EncryptedValue, &sec.ValuePreview, &sec.RegistryAddr, &sec.RegistryUsername, &sec.CreatedAt, &sec.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &sec, nil
+}
+
+// RegistryAuth is a decrypted private-registry pull credential.
+type RegistryAuth struct {
+	Addr     string
+	Username string
+	Password string
+}
+
+// GetUserRegistrySecretsDecrypted returns all type=registry secrets owned by a
+// user, with the token/password decrypted. Used by the scheduler to inject a
+// project owner's registry credentials into compose deploys.
+func (s *Store) GetUserRegistrySecretsDecrypted(ctx context.Context, userID uuid.UUID) ([]RegistryAuth, error) {
+	if s.encryptionKey == nil {
+		return nil, nil
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT registry_addr, registry_username, encrypted_value
+		FROM secrets WHERE user_id = $1 AND type = $2
+	`, userID, SecretTypeRegistry)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	auths := make([]RegistryAuth, 0)
+	for rows.Next() {
+		var addr, username, encVal string
+		if err := rows.Scan(&addr, &username, &encVal); err != nil {
+			return nil, err
+		}
+		password, err := crypto.Decrypt(s.encryptionKey, encVal)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt registry secret: %w", err)
+		}
+		auths = append(auths, RegistryAuth{Addr: addr, Username: username, Password: password})
+	}
+	return auths, nil
 }
 
 func (s *Store) DeleteSecret(ctx context.Context, id, userID uuid.UUID) error {
