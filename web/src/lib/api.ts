@@ -172,7 +172,7 @@ export const api = {
 
   secrets: {
     list: () => request<import('./types').Secret[]>('/api/secrets'),
-    create: (data: { name: string; type: import('./types').SecretType; value: string }) =>
+    create: (data: { name: string; type: import('./types').SecretType; value: string; registry_addr?: string; registry_username?: string }) =>
       request<import('./types').Secret>('/api/secrets', { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: string) => request(`/api/secrets/${id}`, { method: 'DELETE' }),
   },

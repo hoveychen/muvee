@@ -538,13 +538,21 @@ muveectl secrets create --name GITHUB_TOKEN --type password --value ghp_xxxxx
 # Create an SSH key secret from a file (for private git repos)
 muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_ed25519
 
+# Create a private registry pull credential (type=registry).
+# Applies to ALL your compose projects automatically — no per-project bind needed.
+# The agent uses it to pull private compose images (e.g. ghcr.io) at deploy time.
+muveectl secrets create --name GHCR_PULL --type registry \
+  --registry-addr ghcr.io --registry-username my-gh-user --value ghp_xxxxx
+
 # Delete a secret
 muveectl secrets delete SECRET_ID
 ```
 
 ### Binding Secrets to Projects
 
-Secrets can be used in three ways:
+Most secret types must be bound to a project; `registry` secrets are the
+exception — they apply to all of your compose projects automatically. Bindable
+secrets can be used in three ways:
 - Runtime env vars (`--env-var`)
 - Git clone auth (`--use-for-git`)
 - Docker build-time secret mounts (`--use-for-build --build-secret-id`)

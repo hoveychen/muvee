@@ -287,8 +287,15 @@ func deployerProxyPassthrough() bool {
 // from the subprocess environment (or selectively re-added when
 // DEPLOYER_PROXY_PASSTHROUGH is enabled). Use runCmd for non-compose commands.
 func runCmdCompose(ctx context.Context, logFn func(string), name string, args ...string) error {
+	return runCmdComposeEnv(ctx, logFn, nil, name, args...)
+}
+
+// runCmdComposeEnv is like runCmdCompose but appends extraEnv (e.g.
+// "DOCKER_CONFIG=/tmp/...") to the compose subprocess environment. Entries in
+// extraEnv take precedence over envForCompose() values with the same key.
+func runCmdComposeEnv(ctx context.Context, logFn func(string), extraEnv []string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = envForCompose()
+	cmd.Env = append(envForCompose(), extraEnv...)
 	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
 		logFn(string(out))

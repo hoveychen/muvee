@@ -430,9 +430,36 @@ func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath, 
 		VolumeMountPath:   str(p, "volume_mount_path"),
 		VolumeNFSBasePath: volumeNFSBasePath,
 		EnvVars:           envVars,
+		RegistryAuths:     parseRegistryAuths(p),
 		FixedHostPort:     intVal(p, "fixed_host_port"),
 	}
 	return deployer.DeployCompose(ctx, cfg, logFn)
+}
+
+// parseRegistryAuths extracts the registry_auths list from a deploy task payload
+// into deployer.RegistryAuth values. The payload arrives as []interface{} of
+// map[string]interface{} after JSON decoding; entries with an empty addr are
+// skipped.
+func parseRegistryAuths(p map[string]interface{}) []deployer.RegistryAuth {
+	raw, ok := p["registry_auths"].([]interface{})
+	if !ok {
+		return nil
+	}
+	auths := make([]deployer.RegistryAuth, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		addr, _ := m["addr"].(string)
+		if addr == "" {
+			continue
+		}
+		user, _ := m["username"].(string)
+		pass, _ := m["password"].(string)
+		auths = append(auths, deployer.RegistryAuth{Addr: addr, Username: user, Password: pass})
+	}
+	return auths
 }
 
 func completeTask(ctx context.Context, baseURL, secret string, taskID uuid.UUID, status store.TaskStatus, extra map[string]interface{}) {
