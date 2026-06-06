@@ -242,7 +242,7 @@ export interface CreatedApiToken {
   expires_at?: string
 }
 
-export type SecretType = 'password' | 'ssh_key' | 'api_key' | 'env_var'
+export type SecretType = 'password' | 'ssh_key' | 'api_key' | 'env_var' | 'registry'
 
 export interface Secret {
   id: string
@@ -251,8 +251,11 @@ export interface Secret {
   // value_preview is a non-sensitive display string:
   // - api_key: masked fingerprint like "sk-1****wxyz"
   // - env_var: full plaintext value
-  // - password / ssh_key: empty string
+  // - password / ssh_key / registry: empty string
   value_preview: string
+  // registry_addr / registry_username are set only for type=registry secrets.
+  registry_addr: string
+  registry_username: string
   created_at: string
   updated_at: string
 }

@@ -7,13 +7,14 @@ import { useTranslation } from 'react-i18next'
 
 const MONO = 'var(--font-mono)'
 
-const SECRET_TYPES: SecretType[] = ['password', 'ssh_key', 'api_key', 'env_var']
+const SECRET_TYPES: SecretType[] = ['password', 'ssh_key', 'api_key', 'env_var', 'registry']
 
 function typeLabelKey(type: SecretType): string {
   switch (type) {
     case 'ssh_key': return 'secrets.sshKey'
     case 'api_key': return 'secrets.apiKey'
     case 'env_var': return 'secrets.envVar'
+    case 'registry': return 'secrets.registry'
     default: return 'secrets.password'
   }
 }
@@ -23,6 +24,7 @@ function typeBadgeClass(type: SecretType): string {
     case 'ssh_key': return 'badge-info'
     case 'api_key': return 'badge-warning'
     case 'env_var': return 'badge-success'
+    case 'registry': return 'badge-info'
     default: return 'badge-neutral'
   }
 }
@@ -32,6 +34,7 @@ function formTypeLabelKey(type: SecretType): string {
     case 'ssh_key': return 'secrets.form.sshKey'
     case 'api_key': return 'secrets.form.apiKey'
     case 'env_var': return 'secrets.form.envVar'
+    case 'registry': return 'secrets.form.registry'
     default: return 'secrets.form.passwordToken'
   }
 }
@@ -181,6 +184,22 @@ function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: 
             {secret.value_preview}
           </span>
         )}
+        {secret.type === 'registry' && secret.registry_addr && (
+          <span
+            style={{
+              fontFamily: MONO,
+              fontSize: '0.75rem',
+              color: 'var(--fg-muted)',
+              marginLeft: '1.625rem',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={`${secret.registry_username}@${secret.registry_addr}`}
+          >
+            {secret.registry_username ? `${secret.registry_username}@${secret.registry_addr}` : secret.registry_addr}
+          </span>
+        )}
       </div>
 
       <span className={`badge ${typeBadgeClass(secret.type)}`}>
@@ -209,6 +228,8 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
   const [name, setName] = useState('')
   const [type, setType] = useState<SecretType>('password')
   const [value, setValue] = useState('')
+  const [registryAddr, setRegistryAddr] = useState('')
+  const [registryUsername, setRegistryUsername] = useState('')
   const [showValue, setShowValue] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -217,10 +238,16 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || !value.trim()) { setError(t('secrets.form.validation')); return }
+    if (type === 'registry' && !registryAddr.trim()) { setError(t('secrets.form.registryAddrRequired')); return }
     setSaving(true)
     setError('')
     try {
-      const sec = await api.secrets.create({ name: name.trim(), type, value })
+      const sec = await api.secrets.create({
+        name: name.trim(),
+        type,
+        value,
+        ...(type === 'registry' ? { registry_addr: registryAddr.trim(), registry_username: registryUsername.trim() } : {}),
+      })
       onCreated(sec)
     } catch (err) {
       setError((err as Error).message)
@@ -286,7 +313,39 @@ function CreateSecretForm({ onCreated, onCancel }: { onCreated: (s: Secret) => v
               dangerouslySetInnerHTML={{ __html: t('secrets.form.envVarHint') }}
             />
           )}
+          {type === 'registry' && (
+            <p
+              style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: '0.5rem' }}
+              dangerouslySetInnerHTML={{ __html: t('secrets.form.registryHint') }}
+            />
+          )}
         </div>
+
+        {/* Registry fields */}
+        {type === 'registry' && (
+          <>
+            <div>
+              <label className="form-label">{t('secrets.form.registryAddr')}</label>
+              <input
+                className="form-input"
+                value={registryAddr}
+                onChange={e => setRegistryAddr(e.target.value)}
+                placeholder="ghcr.io"
+                style={{ fontFamily: MONO }}
+              />
+            </div>
+            <div>
+              <label className="form-label">{t('secrets.form.registryUsername')}</label>
+              <input
+                className="form-input"
+                value={registryUsername}
+                onChange={e => setRegistryUsername(e.target.value)}
+                placeholder="my-gh-user"
+                style={{ fontFamily: MONO }}
+              />
+            </div>
+          </>
+        )}
 
         {/* Value */}
         <div>
