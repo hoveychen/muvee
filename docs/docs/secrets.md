@@ -48,9 +48,29 @@ If `SECRET_ENCRYPTION_KEY` is not set, secret creation will be disabled. Back up
 | `ssh_key` | PEM-format SSH private keys for cloning private git repositories | Write-only (value never shown) |
 | `api_key` | API keys / provider tokens where a masked fingerprint helps identify which key is which | Shows first 4 + last 4 characters (e.g. `sk-1****wxyz`) |
 | `env_var` | Non-sensitive configuration (public endpoints, feature flags) that benefits from central management | Shows full plaintext in the secrets list |
+| `registry` | Pull credentials for a private container registry (e.g. `ghcr.io`) so compose projects can pull private images | Write-only (token never shown); registry address + username are shown |
 
 :::warning
 Only use `env_var` for values that are safe to view in the UI. Anything sensitive should use `password` or `api_key`.
+:::
+
+### Private registry credentials
+
+A `registry` secret holds a login for a private container registry. Unlike other
+secret types it is **not** bound per-project: every compose project you own
+automatically uses **all** of your `registry` secrets when pulling images at
+deploy time. This is how a `docker-compose` project pulls a private image such as
+`ghcr.io/your-org/your-app:latest`.
+
+The secret's **value** is the registry password / token; **registry address**
+(e.g. `ghcr.io`) and **login username** are stored alongside it. At deploy time
+the agent writes a temporary, per-deploy docker config with these credentials —
+they never land in the shared agent docker config and never leak across tenants.
+
+:::note
+Only the **compose** deploy path uses registry credentials. Single-container
+(Dockerfile/image) projects are built by Muvee and pulled from Muvee's own
+registry, which is already authenticated.
 :::
 
 ## Managing Secrets in the UI
@@ -87,6 +107,10 @@ muveectl secrets create --name GITHUB_TOKEN --type password --value ghp_xxxxx
 
 # Create an SSH key from a file
 muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_ed25519
+
+# Create a private registry pull credential (applies to all your compose projects)
+muveectl secrets create --name GHCR_PULL --type registry \
+  --registry-addr ghcr.io --registry-username my-gh-user --value ghp_xxxxx
 
 # Delete a secret
 muveectl secrets delete SECRET_ID
