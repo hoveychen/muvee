@@ -253,7 +253,7 @@ const sdkScript = `// _embed-bridge.js — bridge SDK injected by muvee traefik 
   window.addEventListener("popstate", function () { setTimeout(send, 0); });
   window.addEventListener("hashchange", function () { setTimeout(send, 0); });
 })();
-` + html2canvasBundle + sdkSelectionScripts
+` + html2canvasBundle + sdkSelectionScripts + sdkAnnotateScript
 
 // sdkSelectionScripts is the v1 + v2 selection-upstream blocks concatenated
 // onto sdkScript after html2canvasBundle. v1 sends `embed:selection` (plain
@@ -421,6 +421,156 @@ const sdkSelectionScripts = `
         '*',
       );
     }, 300);
+  });
+})();
+`
+
+// sdkAnnotateScript is the annotate-mode block, concatenated onto sdkScript
+// after the selection blocks. It is the only SDK code that listens for
+// messages FROM window.parent (embed:annotate-start / embed:annotate-stop) —
+// the shell toolbar toggle drives it. While active it highlights the element
+// under the cursor and, on click, rasterizes just that element (clipped
+// html2canvas region) and posts `embed:annotate-element` (text + screenshot +
+// bbox). The shell appends each one straight into the focused task composer —
+// no per-click confirmation, so the user can click many elements in a row.
+// See agent-workspace/docs/embed-bridge-protocol.md for the contract.
+const sdkAnnotateScript = `
+// embed:annotate-* — shell-driven element annotation. Mutually exclusive with
+// the selection blocks above in practice (the user clicks instead of
+// selecting); the shell ignores selection events while a toggle is on anyway.
+(function () {
+  var on = false;
+  var hovered = null;
+  var prevOutline = '';
+  var prevCursor = '';
+  var busy = false;
+
+  function clearHL() {
+    if (hovered) {
+      try {
+        hovered.style.outline = prevOutline;
+        hovered.style.cursor = prevCursor;
+      } catch (e) {}
+      hovered = null;
+    }
+  }
+
+  function targetOf(e) {
+    if (e.composedPath) {
+      var p = e.composedPath();
+      if (p && p.length) return p[0];
+    }
+    return e.target;
+  }
+
+  function onMove(e) {
+    if (!on) return;
+    var el = targetOf(e);
+    if (!el || el.nodeType !== 1) return;
+    if (el === document.body || el === document.documentElement) return;
+    if (el === hovered) return;
+    clearHL();
+    hovered = el;
+    try {
+      prevOutline = el.style.outline;
+      prevCursor = el.style.cursor;
+      el.style.outline = '2px solid #6366f1';
+      el.style.cursor = 'crosshair';
+    } catch (e2) {}
+  }
+
+  async function captureElement(el) {
+    if (typeof html2canvas !== 'function') return null;
+    var rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+    // Drop the hover outline so it isn't baked into the raster.
+    var savedOutline = el.style.outline;
+    try { el.style.outline = ''; } catch (e) {}
+    var canvas;
+    try {
+      canvas = await html2canvas(document.body, {
+        x: rect.left + window.scrollX,
+        y: rect.top + window.scrollY,
+        width: rect.width,
+        height: rect.height,
+        scale: window.devicePixelRatio || 1,
+        useCORS: true,
+        logging: false,
+        backgroundColor: null,
+      });
+    } catch (e) {
+      try { el.style.outline = savedOutline; } catch (e2) {}
+      return null;
+    }
+    try { el.style.outline = savedOutline; } catch (e) {}
+    var dataUrl;
+    try {
+      dataUrl = canvas.toDataURL('image/png');
+      if (dataUrl.length > 4 * 1024 * 1024 * 1.37) {
+        dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      }
+      if (dataUrl.length > 4 * 1024 * 1024 * 1.37) return null;
+    } catch (e) {
+      return null;
+    }
+    return {
+      dataUrl: dataUrl,
+      bbox: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+      },
+    };
+  }
+
+  async function onClick(e) {
+    if (!on) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (busy) return;
+    busy = true;
+    try {
+      var el = targetOf(e);
+      if (!el || el.nodeType !== 1) return;
+      var text = '';
+      try { text = (el.textContent || '').trim(); } catch (e2) {}
+      if (text.length > 4096) text = text.slice(0, 4096) + '…';
+      var shot = await captureElement(el);
+      parent.postMessage(
+        {
+          type: 'embed:annotate-element',
+          text: text,
+          url: location.href,
+          title: document.title,
+          screenshot: shot ? shot.dataUrl : '',
+          bbox: shot ? shot.bbox : { x: 0, y: 0, w: 0, h: 0 },
+        },
+        '*'
+      );
+    } finally {
+      busy = false;
+    }
+  }
+
+  function start() {
+    if (on) return;
+    on = true;
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('click', onClick, true);
+  }
+  function stop() {
+    on = false;
+    clearHL();
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('click', onClick, true);
+  }
+
+  window.addEventListener('message', function (e) {
+    if (e.source !== window.parent) return;
+    var t = e.data && e.data.type;
+    if (t === 'embed:annotate-start') start();
+    else if (t === 'embed:annotate-stop') stop();
   });
 })();
 `
