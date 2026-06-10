@@ -222,6 +222,38 @@ services:
       # so the embed-bridge plugin reloads on release without a manual restart.
       - "com.centurylinklabs.watchtower.enable=true"
 
+  # ── Traefik access-log rotation ────────────────────────────────────────────
+  # Traefik has no built-in log rotation, so its JSON access log
+  # (accessLog.filePath in traefik/traefik.yml, written with bufferingSize:0)
+  # grows unbounded and fills the disk — we hit a single 6.6G access.log in
+  # production. This purpose-built sidecar rotates /var/log/traefik/*.log: it
+  # renames the file, creates a fresh one, gzip-compresses the previous backup,
+  # then sends SIGUSR1 to the Traefik container (via the docker socket) so
+  # Traefik reopens the new file. muvee-server's traefiklog tailer follows the
+  # inode change, so ProjectTraffic analytics keep working across rotations.
+  traefik-logrotate:
+    image: vegardit/traefik-logrotate:latest
+    restart: unless-stopped
+    depends_on:
+      - traefik
+    volumes:
+      # rw on the volume so logrotate can rename/recreate access.log; rw on the
+      # docker socket so it can signal the Traefik container to reopen the log.
+      - traefik_logs:/var/log/traefik
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    environment:
+      TZ: ${TZ:-UTC}
+      LOGROTATE_LOGS: "/var/log/traefik/*.log"
+      LOGROTATE_TRIGGER_INTERVAL: daily   # rotate at least daily,
+      LOGROTATE_TRIGGER_SIZE: 1G          # or sooner if a single log reaches 1G
+      LOGROTATE_MAX_BACKUPS: 7            # keep 7 gzip-compressed backups
+      # The image locates the Traefik container to signal via its default filter
+      # `label=org.opencontainers.image.title=Traefik`, which the muvee-traefik
+      # image inherits from upstream traefik:v3.6.1 (verified to match exactly
+      # one container on the host).
+    networks:
+      - muvee-net
+
   # ── Builder agent — compiles Docker images and pushes to the registry ──────
   muvee-agent-builder:
     image: ghcr.io/hoveychen/muvee:latest
