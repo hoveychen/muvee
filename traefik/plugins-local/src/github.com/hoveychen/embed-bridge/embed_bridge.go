@@ -269,6 +269,10 @@ const sdkSelectionScripts = `
 // embed:selection — v1 text-only upstream (always-on fallback for pages
 // where html2canvas can't rasterize, e.g. tainted canvases).
 (function () {
+  // Only run when actually embedded; on direct (top-level) access there is
+  // no parent shell to receive the message, so the capture is wasted work.
+  if (window.parent === window) return;
+
   let timer = null;
   let lastText = '';
 
@@ -322,6 +326,10 @@ const sdkSelectionScripts = `
 // html2canvas is present and the canvas isn't tainted by cross-origin
 // assets; otherwise drops the event silently and lets v1 cover it.
 (function () {
+  // Only run when actually embedded; on direct (top-level) access the red
+  // capture overlay would flash on every text selection for no reason —
+  // there is no parent shell to receive the screenshot.
+  if (window.parent === window) return;
   if (typeof html2canvas !== 'function') return;
 
   let timer = null;
