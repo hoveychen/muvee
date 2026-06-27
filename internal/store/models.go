@@ -106,6 +106,11 @@ type Project struct {
 	ImageRef string `db:"image_ref"         json:"image_ref"`
 	// AutoDeployEnabled opts the project into automatic redeploy on new commits.
 	AutoDeployEnabled bool `db:"auto_deploy_enabled" json:"auto_deploy_enabled"`
+	// Paused soft-stops the project: its container(s) are `docker stop`ped
+	// (CPU/memory released, image+volumes kept) while the config, deployment
+	// row, and routing are preserved. While true, every deploy path is gated in
+	// scheduler.TriggerDeployment. Resume issues `docker start` — no rebuild.
+	Paused bool `db:"paused" json:"paused"`
 	// LastImageTag is the most recently built+pushed image tag for a
 	// ProjectTypeBuild project (e.g. "registry.local:5000/<id>:abc12345"). Set
 	// immediately after `docker buildx build --push` succeeds; consumed by

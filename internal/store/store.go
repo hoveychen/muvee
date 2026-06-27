@@ -338,12 +338,12 @@ func (s *Store) ListPlatformMemberUsers(ctx context.Context, scope string) ([]*P
 
 // projectColumns is the full SELECT list for a Project row. git_url is COALESCEd
 // so domain_only projects (which have NULL git_url) scan into an empty string.
-const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of`
+const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of, paused`
 
 // projectColumnsPrefixed is projectColumns with every column qualified by the
 // `p.` alias. Used when the query JOINs another table (e.g. users) so bare
 // column names like `id` or `name` would be ambiguous.
-const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.fixed_host_port, p.fixed_node_id, p.created_at, p.updated_at, p.enabled_providers, p.branding_site_name, p.branding_logo_url, p.branding_favicon_url, p.branding_primary_color, p.branding_sidebar_bg, p.branding_tagline, p.branding_description, p.branding_footer_text, p.branding_trust_text, p.last_image_tag, p.triggers_redeploy_of`
+const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.fixed_host_port, p.fixed_node_id, p.created_at, p.updated_at, p.enabled_providers, p.branding_site_name, p.branding_logo_url, p.branding_favicon_url, p.branding_primary_color, p.branding_sidebar_bg, p.branding_tagline, p.branding_description, p.branding_footer_text, p.branding_trust_text, p.last_image_tag, p.triggers_redeploy_of, p.paused`
 
 // ownerJoinColumns is the tail of the SELECT list for projects queried with
 // `LEFT JOIN users u ON u.id = p.owner_id`.
@@ -352,13 +352,13 @@ const ownerJoinColumns = `, COALESCE(u.name, '') AS owner_name, COALESCE(u.email
 func scanProject(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused)
 }
 
 func scanProjectWithOwner(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
 }
 
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
@@ -536,11 +536,22 @@ func (s *Store) SetProjectLastTrackedImageDigests(ctx context.Context, projectID
 	return err
 }
 
+// SetProjectPaused toggles the project's soft-pause flag. While true, every
+// deploy path is gated in scheduler.TriggerDeployment; the container(s) are
+// stopped/started out-of-band by the pause/unpause agent tasks.
+func (s *Store) SetProjectPaused(ctx context.Context, projectID uuid.UUID, paused bool) error {
+	_, err := s.db.Exec(ctx,
+		`UPDATE projects SET paused=$1, updated_at=$2 WHERE id=$3`,
+		paused, time.Now(), projectID)
+	return err
+}
+
 // ListAutoDeployProjects returns every project that has auto_deploy_enabled
 // set, optionally filtered by git_source. Pass an empty source to get both.
-// Used by the control-plane poller.
+// Used by the control-plane poller. Paused projects are excluded — a paused
+// project must not be auto-redeployed out from under the operator.
 func (s *Store) ListAutoDeployProjects(ctx context.Context, gitSource string) ([]*Project, error) {
-	query := `SELECT ` + projectColumns + ` FROM projects WHERE auto_deploy_enabled = TRUE AND project_type IN ('deployment', 'compose', 'image', 'build')`
+	query := `SELECT ` + projectColumns + ` FROM projects WHERE auto_deploy_enabled = TRUE AND paused = FALSE AND project_type IN ('deployment', 'compose', 'image', 'build')`
 	var args []interface{}
 	if gitSource != "" {
 		query += ` AND git_source = $1`
