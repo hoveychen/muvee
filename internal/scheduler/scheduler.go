@@ -214,6 +214,41 @@ func (s *Scheduler) DispatchRestart(ctx context.Context, nodeID uuid.UUID, deplo
 	return created.ID, nil
 }
 
+// DispatchPause creates a pause task on the running deployment's node. The
+// agent docker-stops every container carrying the project's domain_prefix
+// label. The deployment row keeps its status so the node stays locatable for a
+// later unpause.
+func (s *Scheduler) DispatchPause(ctx context.Context, nodeID uuid.UUID, deployment *store.Deployment, domainPrefix string) (uuid.UUID, error) {
+	task := &store.Task{
+		Type:         store.TaskTypePause,
+		NodeID:       &nodeID,
+		DeploymentID: deployment.ID,
+		Payload:      map[string]interface{}{"domain_prefix": domainPrefix},
+	}
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
+}
+
+// DispatchUnpause creates an unpause task on the paused deployment's node. The
+// agent docker-starts the project's stopped containers — no rebuild, no
+// re-pull.
+func (s *Scheduler) DispatchUnpause(ctx context.Context, nodeID uuid.UUID, deployment *store.Deployment, domainPrefix string) (uuid.UUID, error) {
+	task := &store.Task{
+		Type:         store.TaskTypeUnpause,
+		NodeID:       &nodeID,
+		DeploymentID: deployment.ID,
+		Payload:      map[string]interface{}{"domain_prefix": domainPrefix},
+	}
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
+}
+
 // DispatchEnv creates an env task on the running deployment's node. The agent
 // inspects the container and returns its environment variables.
 func (s *Scheduler) DispatchEnv(ctx context.Context, nodeID uuid.UUID, deployment *store.Deployment, domainPrefix string) (uuid.UUID, error) {
@@ -287,6 +322,11 @@ func (s *Scheduler) TriggerDeployment(ctx context.Context, projectID uuid.UUID, 
 	}
 	if project.ProjectType == store.ProjectTypeDomainOnly {
 		return nil, fmt.Errorf("domain_only projects cannot be deployed")
+	}
+	// Single gate for every deploy path (manual, auto-poll, auto-image,
+	// git-push hook): a paused project must not be redeployed until resumed.
+	if project.Paused {
+		return nil, fmt.Errorf("project %s is paused", projectID)
 	}
 	deployment, err := s.store.CreateDeployment(ctx, &store.Deployment{ProjectID: projectID})
 	if err != nil {

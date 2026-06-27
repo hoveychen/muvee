@@ -737,6 +737,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/projects/{id}/deployments", s.listDeployments)
 		r.Post("/api/projects/{id}/runtime-logs", s.requireAuthorized(s.triggerRuntimeLogs))
 		r.Post("/api/projects/{id}/restart", s.requireAuthorized(s.triggerRestart))
+		r.Post("/api/projects/{id}/pause", s.requireAuthorized(s.triggerPause))
+		r.Post("/api/projects/{id}/resume", s.requireAuthorized(s.triggerResume))
 		r.Post("/api/projects/{id}/env", s.requireAuthorized(s.triggerEnvInspect))
 		r.Post("/api/projects/{id}/describe", s.requireAuthorized(s.triggerDescribe))
 		r.Get("/api/projects/{id}/events", s.getProjectEvents)
@@ -2604,6 +2606,10 @@ func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, err, 400)
 			return
 		}
+		if strings.Contains(msg, "is paused") {
+			jsonErr(w, err, 409)
+			return
+		}
 		jsonErr(w, err, 500)
 		return
 	}
@@ -2702,6 +2708,78 @@ func (s *Server) triggerRestart(w http.ResponseWriter, r *http.Request) {
 	projectevents.Push(id, projectevents.TypeRestart, projectevents.SeverityInfo,
 		fmt.Sprintf("restart requested by %s", user.Email))
 	jsonOK(w, map[string]string{"task_id": taskID.String(), "deployment_id": deployment.ID.String()})
+}
+
+// triggerPause soft-pauses a project: it sets the paused flag first (which
+// immediately gates every deploy path in scheduler.TriggerDeployment), then
+// dispatches a pause task to docker-stop the running container(s). A project
+// with no running deployment is still marked paused — that blocks its first
+// deploy — and simply has no container to stop.
+func (s *Server) triggerPause(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+	// Set the flag before stopping so a concurrent deploy can't slip through.
+	if err := s.store.SetProjectPaused(r.Context(), id, true); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	resp := map[string]string{"status": "paused"}
+	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
+	if err == nil && running != nil {
+		deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
+		if err == nil && deployment != nil && deployment.NodeID != nil {
+			if taskID, err := s.sched.DispatchPause(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix); err == nil {
+				resp["task_id"] = taskID.String()
+				resp["deployment_id"] = deployment.ID.String()
+			}
+		}
+	}
+	projectevents.Push(id, projectevents.TypePause, projectevents.SeverityInfo,
+		fmt.Sprintf("paused by %s", user.Email))
+	jsonOK(w, resp)
+}
+
+// triggerResume lifts a project's pause: it dispatches an unpause task to
+// docker-start the stopped container(s), then clears the paused flag so deploys
+// are allowed again. The deployment row keeps its running status while paused,
+// so the pinned node is still locatable here.
+func (s *Server) triggerResume(w http.ResponseWriter, r *http.Request) {
+	id, ok := parsePathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	user := auth.UserFromCtx(r.Context())
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 403)
+		return
+	}
+	resp := map[string]string{"status": "resumed"}
+	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
+	if err == nil && running != nil {
+		deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
+		if err == nil && deployment != nil && deployment.NodeID != nil {
+			if taskID, err := s.sched.DispatchUnpause(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix); err == nil {
+				resp["task_id"] = taskID.String()
+				resp["deployment_id"] = deployment.ID.String()
+			}
+		}
+	}
+	if err := s.store.SetProjectPaused(r.Context(), id, false); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	projectevents.Push(id, projectevents.TypeResume, projectevents.SeverityInfo,
+		fmt.Sprintf("resumed by %s", user.Email))
+	jsonOK(w, resp)
 }
 
 // triggerEnvInspect dispatches an env task. Reuses the user-task pattern

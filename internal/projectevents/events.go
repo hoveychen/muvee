@@ -46,6 +46,8 @@ const (
 	TypeContainerExit   = "container.exit"
 	TypeContainerOOM    = "container.oom_killed"
 	TypeRestart         = "restart"
+	TypePause           = "pause"
+	TypeResume          = "resume"
 )
 
 type ring struct {

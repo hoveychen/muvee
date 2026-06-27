@@ -1,7 +1,7 @@
 ---
 name: muveectl
 version: 11
-description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, restart, port-forward, curl, exec / shell / cp into containers, describe, env, events, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, restart a container without a redeploy, inspect container state (describe / env / events), debug container crashes and restarts, run commands or open a shell inside a project container, copy files in/out of a container, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, manage dataset files (ls, pull, push, rm, mkdir, mv, cp), or self-update muveectl from the configured server.
+description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, restart, pause / resume, port-forward, curl, exec / shell / cp into containers, describe, env, events, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, restart a container without a redeploy, inspect container state (describe / env / events), debug container crashes and restarts, run commands or open a shell inside a project container, copy files in/out of a container, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, manage dataset files (ls, pull, push, rm, mkdir, mv, cp), or self-update muveectl from the configured server.
 ---
 
 # muveectl – Muvee CLI
@@ -356,14 +356,20 @@ muveectl projects describe PROJECT_ID
 muveectl projects describe PROJECT_ID --output json   # raw JSON for scripts
 
 # Tail platform events recorded server-side (deploy.started, deploy.completed,
-# deploy.failed, restart, container.oom_killed). In-memory ring buffer capped
-# at 200 events per project — lost on server restart.
+# deploy.failed, restart, pause, resume, container.oom_killed). In-memory ring
+# buffer capped at 200 events per project — lost on server restart.
 muveectl projects events PROJECT_ID
 muveectl projects events PROJECT_ID --follow         # poll every 3 s
+
+# Soft-pause: 'docker stop' the container(s) — CPU/memory freed, image and
+# data kept. While paused every deploy path is blocked. Resume is instant.
+muveectl projects pause PROJECT_ID
+muveectl projects resume PROJECT_ID                   # 'docker start' — no rebuild
 ```
 
 When to reach for each:
 - **`restart`** when env vars / secrets changed but the project file is unchanged, or to break a wedged process without a deploy cycle.
+- **`pause` / `resume`** to park an idle project: pause frees its CPU/memory (image and volumes are kept, config preserved) and blocks all redeploys; resume brings it back with no rebuild. Use instead of `delete` when you want the project back later. Note: paused frees compute, not disk — use `delete` if you need the image layers reclaimed.
 - **`describe`** as the first stop when "why did my container die?" — it gives you ExitCode, OOMKilled, RestartCount, and Health on one screen.
 - **`env`** to confirm an injected secret or auto-injected `MUVEE_*` env var actually reached the container.
 - **`events`** to follow what the platform itself thinks is happening — useful when you suspect the deploy lifecycle, not the app, is misbehaving.
