@@ -510,6 +510,8 @@ const (
 	TaskTypeRestart     TaskType = "restart"
 	TaskTypeEnv         TaskType = "env"
 	TaskTypeDescribe    TaskType = "describe"
+	TaskTypePause       TaskType = "pause"
+	TaskTypeUnpause     TaskType = "unpause"
 )
 
 type TaskStatus string

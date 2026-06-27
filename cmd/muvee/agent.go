@@ -303,6 +303,14 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		out, err := runDescribe(ctx, task)
 		taskErr = err
 		extra["result"] = out
+	case store.TaskTypePause:
+		out, err := runPause(ctx, task)
+		taskErr = err
+		extra["result"] = out
+	case store.TaskTypeUnpause:
+		out, err := runUnpause(ctx, task)
+		taskErr = err
+		extra["result"] = out
 	}
 
 	if taskErr != nil {
@@ -576,6 +584,90 @@ func runRestart(ctx context.Context, task *store.Task) (string, error) {
 	}
 	if body == "" {
 		body = containerName + " restarted"
+	}
+	return body, nil
+}
+
+// containerIDsByDomainPrefix returns the docker container IDs tagged with
+// `muvee.domain_prefix=<prefix>`. When includeStopped is true it passes `-a`
+// so exited containers (the paused state) are listed too. This label-based
+// lookup covers single-container and compose-managed deployments uniformly,
+// so pause/unpause need no compose file or mode hint.
+func containerIDsByDomainPrefix(ctx context.Context, domainPrefix string, includeStopped bool) ([]string, error) {
+	args := []string{"ps", "-q"}
+	if includeStopped {
+		args = []string{"ps", "-aq"}
+	}
+	args = append(args, "--filter", "label=muvee.domain_prefix="+domainPrefix)
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker ps: %w", err)
+	}
+	var ids []string
+	for _, id := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// runPause soft-stops a project: `docker stop` on every container carrying the
+// project's domain_prefix label. CPU/memory are released; the container, its
+// image, and named volumes are kept so unpause is a plain `docker start`. A
+// project with no running containers is reported as success (idempotent).
+func runPause(ctx context.Context, task *store.Task) (string, error) {
+	domainPrefix := str(task.Payload, "domain_prefix")
+	if domainPrefix == "" {
+		return "", fmt.Errorf("pause task missing domain_prefix")
+	}
+	ids, err := containerIDsByDomainPrefix(ctx, domainPrefix, false)
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "no running containers for " + domainPrefix, nil
+	}
+	out, err := exec.CommandContext(ctx, "docker", append([]string{"stop"}, ids...)...).CombinedOutput()
+	body := strings.TrimSpace(string(out))
+	if err != nil {
+		if body == "" {
+			body = err.Error()
+		}
+		return body, fmt.Errorf("docker stop %v: %w", ids, err)
+	}
+	if body == "" {
+		body = fmt.Sprintf("stopped %d container(s) for %s", len(ids), domainPrefix)
+	}
+	return body, nil
+}
+
+// runUnpause resumes a paused project: `docker start` on every container
+// carrying the project's domain_prefix label (including stopped ones). No
+// rebuild, no re-pull. A project with no containers at all is reported as
+// success so resume stays idempotent.
+func runUnpause(ctx context.Context, task *store.Task) (string, error) {
+	domainPrefix := str(task.Payload, "domain_prefix")
+	if domainPrefix == "" {
+		return "", fmt.Errorf("unpause task missing domain_prefix")
+	}
+	ids, err := containerIDsByDomainPrefix(ctx, domainPrefix, true)
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "no containers for " + domainPrefix, nil
+	}
+	out, err := exec.CommandContext(ctx, "docker", append([]string{"start"}, ids...)...).CombinedOutput()
+	body := strings.TrimSpace(string(out))
+	if err != nil {
+		if body == "" {
+			body = err.Error()
+		}
+		return body, fmt.Errorf("docker start %v: %w", ids, err)
+	}
+	if body == "" {
+		body = fmt.Sprintf("started %d container(s) for %s", len(ids), domainPrefix)
 	}
 	return body, nil
 }
