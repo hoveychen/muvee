@@ -45,6 +45,9 @@ export interface Project {
   // Auto-deploy: when true, the server triggers a fresh deployment whenever
   // the tracked branch advances (push for hosted repos, poll for external).
   auto_deploy_enabled: boolean
+  // paused: when true the project's container(s) are docker-stopped and every
+  // deploy path is gated until resumed. Config/routing are preserved.
+  paused: boolean
   // last_tracked_commit_sha is server-managed (read-only from the client).
   last_tracked_commit_sha: string
   // last_tracked_image_digests is a JSON-encoded map (image -> digest) the

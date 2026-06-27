@@ -40,6 +40,8 @@ export const api = {
     setSecrets: (id: string, data: Omit<import('./types').ProjectSecretBinding, 'secret_name' | 'secret_type'>[]) =>
       request(`/api/projects/${id}/secrets`, { method: 'PUT', body: JSON.stringify(data) }),
     deploy: (id: string) => request<import('./types').Deployment>(`/api/projects/${id}/deploy`, { method: 'POST' }),
+    pause: (id: string) => request<{ status: string; task_id?: string; deployment_id?: string }>(`/api/projects/${id}/pause`, { method: 'POST' }),
+    resume: (id: string) => request<{ status: string; task_id?: string; deployment_id?: string }>(`/api/projects/${id}/resume`, { method: 'POST' }),
     deployments: (id: string) => request<import('./types').Deployment[]>(`/api/projects/${id}/deployments`),
     metrics: (id: string, limit = 60) => request<import('./types').ContainerMetric[]>(`/api/projects/${id}/metrics?limit=${limit}`),
     traffic: (id: string, limit = 100) => request<import('./types').ProjectTraffic[]>(`/api/projects/${id}/traffic?limit=${limit}`),

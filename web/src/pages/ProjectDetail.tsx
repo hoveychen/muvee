@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette, Pause, Play } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectAlias, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
@@ -43,6 +43,7 @@ export default function ProjectDetail() {
   // Switch to traffic tab when a tunnel project loads
   const [tabInitialized, setTabInitialized] = useState(false)
   const [deploying, setDeploying] = useState(false)
+  const [pausing, setPausing] = useState(false)
   const [editForm, setEditForm] = useState<Partial<Project>>({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -80,6 +81,24 @@ export default function ProjectDetail() {
       setDeployments(ds)
     } finally {
       setDeploying(false)
+    }
+  }
+
+  const handleTogglePause = async () => {
+    if (!id || !project) return
+    setPausing(true)
+    try {
+      if (project.paused) {
+        await api.projects.resume(id)
+      } else {
+        await api.projects.pause(id)
+      }
+      const updated = await api.projects.get(id)
+      setProject(updated)
+      const ds = await api.projects.deployments(id)
+      setDeployments(ds)
+    } finally {
+      setPausing(false)
     }
   }
 
@@ -161,6 +180,16 @@ export default function ProjectDetail() {
             <h1 className="page-title" style={{ fontSize: '1.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               {project.name}
             </h1>
+            {project.paused && (
+              <span
+                className="flex items-center gap-1"
+                style={{ flexShrink: 0, fontSize: '0.6875rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--warn, #b45309)', background: 'var(--bg-hover)', border: '1px solid var(--warn, #b45309)', borderRadius: '6px', padding: '0.15rem 0.45rem' }}
+                title={t('projectDetail.pausedHint')}
+              >
+                <Pause size={11} />
+                {t('projectDetail.pausedBadge')}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
             {!isBuild && (
@@ -175,12 +204,27 @@ export default function ProjectDetail() {
               {t('projectDetail.visit')}
             </a>
             )}
+            {!isTunnel && !isBuild && (
+            <button
+              onClick={handleTogglePause}
+              disabled={pausing}
+              className="btn-secondary flex items-center gap-2"
+              style={pausing ? { cursor: 'not-allowed' } : {}}
+              title={project.paused ? t('projectDetail.resumeHint') : t('projectDetail.pauseHint')}
+            >
+              {project.paused ? <Play size={14} /> : <Pause size={14} />}
+              {pausing
+                ? t('projectDetail.pauseWorking')
+                : project.paused ? t('projectDetail.resume') : t('projectDetail.pause')}
+            </button>
+            )}
             {!isTunnel && (
             <button
               onClick={handleDeploy}
-              disabled={deploying}
-              className={deploying ? 'btn-secondary flex items-center gap-2' : 'btn-primary flex items-center gap-2'}
-              style={deploying ? { cursor: 'not-allowed' } : {}}
+              disabled={deploying || project.paused}
+              className={(deploying || project.paused) ? 'btn-secondary flex items-center gap-2' : 'btn-primary flex items-center gap-2'}
+              style={(deploying || project.paused) ? { cursor: 'not-allowed' } : {}}
+              title={project.paused ? t('projectDetail.pausedDeployBlocked') : undefined}
             >
               <Rocket size={14} />
               {deploying ? t('projectDetail.triggering') : t('projectDetail.deploy')}
