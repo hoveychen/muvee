@@ -13,10 +13,30 @@ Google / Lark（飞书）等**平台提供商**登录的用户，按 email **自
 - **接入类别：平台提供商（环境变量配置）**，与 Google / 飞书 / 企微 / 钉钉同列，
   通过 `SLACK_CLIENT_ID` 等环境变量配置，启动时加载。不接入 `/admin/settings`
   后台动态配置路径（社交提供商路径）。
-- **实现方式：完全镜像 `internal/auth/google.go`**。Slack 的 "Sign in with Slack"
+- **实现方式：以 `internal/auth/google.go` 为模板**。Slack 的 "Sign in with Slack"
   是标准 OpenID Connect，用 `go-oidc` 库发现端点并校验 `id_token`。
-- 行为与 Google 保持一致：`OrgScoped() == false`、不做 `email_verified` 门控、
-  头像取 `picture` claim（Slack 不返回时自然为空）。
+- **Workspace 白名单限定**：新增 `SLACK_TEAM_IDS`（逗号分隔的工作区 ID 白名单）。
+  - 非空：在 `slack.go` 的 `UserInfo` 中校验 id_token 的 `https://slack.com/team_id`
+    claim 是否在白名单内，不在则返回 error → 登录失败。这道闸门在 authservice
+    换 token 时执行，是硬性拦截。
+  - 空：不做工作区限制，行为与 Google 一致。
+- **`OrgScoped()` 恒为 `false`（同 Google）**。理由见下「OrgScoped 的归属」。
+  工作区限定不依赖 OrgScoped，由 team_id 校验独立保证；平台邮箱域名校验作为
+  muvee-server 侧独立叠加的准入控制照常生效（纵深防御）。
+- 不做 `email_verified` 门控（与 Google 一致）；头像取 `picture` claim
+  （Slack 不返回时自然为空）。
+
+### OrgScoped 的归属（为何恒为 false）
+
+- `NewForwardAuthProviders` 仅在 authservice（`cmd/muvee/authservice.go:70`）调用；
+  muvee-server 的 `auth.Service` **不注册**这些 forward-auth 提供商实例。
+- `checkDomain` 跑在 muvee-server 侧（`internal/auth/auth.go:288`），判断 OrgScoped
+  时通过 `isOrgScopedProvider` 查 provider map，slack 实例查不到 → 回落到静态列表
+  `{feishu,wecom,dingtalk}`（`auth.go:410`）→ 返回 false。
+- 因此 slack.go 里动态的 `OrgScoped()` 传不到 muvee-server 的域名校验决策。要让
+  「工作区可信即跳过域名校验」生效，得把 `slack` 硬加进该静态 switch，但 switch
+  无法表达「仅当 `SLACK_TEAM_IDS` 非空」——硬加会导致**无白名单时也跳过域名校验**，
+  不安全。故放弃此路，`OrgScoped()` 恒为 false，工作区限定完全交给 team_id 硬校验。
 
 ## 身份合并（核心需求）
 
@@ -58,8 +78,15 @@ Google / Lark（飞书）等**平台提供商**登录的用户，按 email **自
 | `email_verified` | 有 | 与 Google 一致，不门控 |
 | `name` | 有 | 显示名 |
 | `picture` | **无** | 解析但为空 → `avatarURL` 为空 |
+| `https://slack.com/team_id` | 有（如 `T0123ABC456`） | 工作区白名单校验 |
 
 scopes：`openid`、`email`、`profile`
+
+### Workspace 限定的事实依据
+
+- Slack 的 `team` 授权参数**只改善 UX**（让指定工作区跳过同意屏），**不是硬性拦截**。
+- 分发型（public）Slack app 下，任意工作区的任意用户都能通过 OIDC 认证成功。
+- 因此工作区限定**必须在服务端做**：校验已验签 id_token 中的 `https://slack.com/team_id`。
 
 ## 改动清单
 
@@ -71,16 +98,21 @@ scopes：`openid`、`email`、`profile`
   - 读 `SLACK_CLIENT_SECRET`。
   - `redirectURL` 为空时回落 `SLACK_REDIRECT_URL`，再回落本地默认
     `http://localhost:8080/auth/slack/callback`。
+  - 读 `SLACK_TEAM_IDS`：按逗号拆分、去空格，存入 `allowedTeams map[string]bool`
+    （空 map 表示不限制）。
   - `gooidc.NewProvider(ctx, "https://slack.com")` + `Verifier`。
   - `oauth2.Config`：scopes `{openid, email, profile}`，Endpoint 用发现结果
     （`oidcProvider.Endpoint()`）。
+- 结构体字段：`config`、`verifier`、`allowedTeams map[string]bool`。
 - 方法：
   - `Name() -> "slack"`
   - `DisplayName() -> "Slack"`
-  - `OrgScoped() -> false`
-  - `AuthCodeURL(state)`：`config.AuthCodeURL(state)`
+  - `OrgScoped() -> false`（恒为 false，理由见上）。
+  - `AuthCodeURL(state)`：`config.AuthCodeURL(state)`。
   - `UserInfo(ctx, code)`：Exchange → 取 `id_token` → `verifier.Verify` →
-    解析 claims `{email, name, picture}` → 返回 `(email, name, picture, nil)`。
+    解析 claims `{email, name, picture, team_id}`（team_id 的 json tag 为
+    `"https://slack.com/team_id"`）→ 若 `len(allowedTeams) > 0` 且 `team_id`
+    不在白名单内，返回 error（登录失败）→ 否则返回 `(email, name, picture, nil)`。
 
 ### 2. 在 `internal/auth/forwardauth.go` 注册
 
@@ -106,7 +138,10 @@ scopes：`openid`、`email`、`profile`
 
 - 单元测试参考 `internal/auth/auth_test.go` 既有风格：
   - `newSlackProvider` 在缺 `SLACK_CLIENT_ID` 时返回 `(nil, nil)`。
-  - `Name()` / `DisplayName()` / `OrgScoped()` 返回值正确。
+  - `Name()` / `DisplayName()` / `OrgScoped()`（恒 `false`）返回值正确。
+  - `SLACK_TEAM_IDS` 解析：逗号分隔、去空格、忽略空项。
+  - team_id 白名单校验逻辑（可抽成一个纯函数 `teamAllowed(allowed, teamID)`
+    便于单测，不必走完整 OIDC 交换）。
 - 合并行为由既有 `UpsertUser` 的 `ON CONFLICT (email)` 保证，已有覆盖；如缺，
   补一条「不同 provider 相同 email 落到同一 user 行」的 store 层测试。
 
@@ -115,3 +150,6 @@ scopes：`openid`、`email`、`profile`
 - 不接入社交提供商后台动态配置路径。
 - 不调用 `openid.connect.userInfo` 拉头像。
 - 不新增 `email_verified` 门控或跨邮箱的账号关联 UI。
+- authorize 不传 `team` 参数（只改善 UX、不做安全边界；真正的限定靠服务端
+  team_id 校验）。可作后续优化。
+- 工作区白名单只用环境变量，不做后台 UI 配置。
