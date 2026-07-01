@@ -41,5 +41,13 @@ func NewForwardAuthProviders(redirectBase string) (map[string]Provider, error) {
 		providers[dingtalkP.Name()] = dingtalkP
 	}
 
+	slackP, err := newSlackProvider(redirectBase + "/_oauth/slack")
+	if err != nil {
+		return nil, fmt.Errorf("slack: %w", err)
+	}
+	if slackP != nil {
+		providers[slackP.Name()] = slackP
+	}
+
 	return providers, nil
 }
