@@ -110,6 +110,14 @@ func New(st *store.Store) (*Service, error) {
 		svc.providers[dingtalkP.Name()] = dingtalkP
 	}
 
+	slackP, err := newSlackProvider("")
+	if err != nil {
+		return nil, fmt.Errorf("slack provider: %w", err)
+	}
+	if slackP != nil {
+		svc.providers[slackP.Name()] = slackP
+	}
+
 	if len(svc.providers) == 0 {
 		return nil, fmt.Errorf("no auth provider configured; set at least one of GOOGLE_CLIENT_ID, FEISHU_APP_ID, WECOM_CORP_ID, DINGTALK_CLIENT_ID")
 	}
@@ -118,8 +126,8 @@ func New(st *store.Store) (*Service, error) {
 
 // ListProviders returns the list of enabled identity providers for the frontend.
 func (s *Service) ListProviders() []ProviderInfo {
-	// Return in a stable order: google, feishu, wecom, dingtalk, others
-	order := []string{"google", "feishu", "wecom", "dingtalk"}
+	// Return in a stable order: google, feishu, wecom, dingtalk, slack, others
+	order := []string{"google", "feishu", "wecom", "dingtalk", "slack"}
 	var result []ProviderInfo
 	seen := make(map[string]bool)
 	for _, name := range order {
