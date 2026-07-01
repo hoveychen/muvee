@@ -1289,11 +1289,21 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	if originalURL == "" {
 		originalURL = "/"
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_redirect", Value: originalURL,
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
-		SameSite: http.SameSiteLaxMode, Secure: true,
-	})
+	// Only capture the post-login return URL for top-level document
+	// navigations. A browser opening a protected page also auto-fetches
+	// sub-resources (most notably /favicon.ico) — those requests are equally
+	// unauthenticated and equally hit forward-auth, so writing the cookie for
+	// them would clobber the real page's return URL with "/favicon.ico"
+	// (whichever Set-Cookie the browser applies last wins). The user then
+	// gets bounced to /favicon.ico after OAuth. Skipping the cookie write for
+	// sub-resources leaves the navigation's cookie intact.
+	if isNavigationRequest(r) {
+		http.SetCookie(w, &http.Cookie{
+			Name: "fwd_oauth_redirect", Value: originalURL,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			SameSite: http.SameSiteLaxMode, Secure: true,
+		})
+	}
 	// Keep the login page on the project subdomain so handleLoginPage's
 	// inboundHost() resolves to the project — otherwise the apex host
 	// has no project mapping and falls back to the full provider set,
@@ -1303,6 +1313,32 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 		loginBase = proto + "://" + host
 	}
 	http.Redirect(w, r, loginBase+"/_oauth/login", http.StatusFound)
+}
+
+// isNavigationRequest reports whether the forward-auth request looks like a
+// top-level document navigation (the user typing/clicking to a page) rather
+// than a sub-resource fetch the browser issued on its own (favicon, CSS, JS,
+// images, XHR). Only navigations should seed the fwd_oauth_redirect return
+// URL — see redirectToLogin for why.
+//
+// Modern browsers send Sec-Fetch-Dest on every request; "document" (and its
+// iframe sibling "frame"/"nested-document") are the navigation destinations.
+// When that header is absent (old browsers, curl, health checks) we fall back
+// to the Accept header preferring text/html, and if neither signal is present
+// we default to treating the request as a navigation so header-less clients
+// keep the pre-fix behaviour.
+func isNavigationRequest(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Dest") {
+	case "document", "frame", "nested-document":
+		return true
+	case "": // header absent — fall through to Accept-based heuristic
+	default:
+		return false
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		return strings.Contains(accept, "text/html")
+	}
+	return true
 }
 
 // projectMinimalInfo mirrors muvee-server's projectMinimalInfo response shape
