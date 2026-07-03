@@ -588,25 +588,42 @@ func runRestart(ctx context.Context, task *store.Task) (string, error) {
 	return body, nil
 }
 
-// containerIDsByDomainPrefix returns the docker container IDs tagged with
-// `muvee.domain_prefix=<prefix>`. When includeStopped is true it passes `-a`
-// so exited containers (the paused state) are listed too. This label-based
-// lookup covers single-container and compose-managed deployments uniformly,
-// so pause/unpause need no compose file or mode hint.
+// containerIDsByDomainPrefix returns the docker container IDs belonging to a
+// project, unioning three lookups so pause/unpause cover every deployment
+// shape without a compose file or mode hint:
+//
+//   - `muvee.domain_prefix=<prefix>` label: single-container deploys and the
+//     compose expose service (the only service the override YAML labels)
+//   - `com.docker.compose.project=muvee-<prefix>` label: sibling compose
+//     services (db, cache, workers) that never receive muvee labels
+//   - exact container name `muvee-<prefix>`: legacy containers deployed
+//     before the muvee labels existed
+//
+// When includeStopped is true it passes `-a` so exited containers (the paused
+// state) are listed too.
 func containerIDsByDomainPrefix(ctx context.Context, domainPrefix string, includeStopped bool) ([]string, error) {
-	args := []string{"ps", "-q"}
-	if includeStopped {
-		args = []string{"ps", "-aq"}
+	filters := []string{
+		"label=muvee.domain_prefix=" + domainPrefix,
+		"label=com.docker.compose.project=muvee-" + domainPrefix,
+		"name=^muvee-" + domainPrefix + "$",
 	}
-	args = append(args, "--filter", "label=muvee.domain_prefix="+domainPrefix)
-	out, err := exec.CommandContext(ctx, "docker", args...).Output()
-	if err != nil {
-		return nil, fmt.Errorf("docker ps: %w", err)
-	}
+	seen := map[string]bool{}
 	var ids []string
-	for _, id := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if id = strings.TrimSpace(id); id != "" {
-			ids = append(ids, id)
+	for _, filter := range filters {
+		args := []string{"ps", "-q"}
+		if includeStopped {
+			args = []string{"ps", "-aq"}
+		}
+		args = append(args, "--filter", filter)
+		out, err := exec.CommandContext(ctx, "docker", args...).Output()
+		if err != nil {
+			return nil, fmt.Errorf("docker ps: %w", err)
+		}
+		for _, id := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if id = strings.TrimSpace(id); id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
 		}
 	}
 	return ids, nil

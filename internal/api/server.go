@@ -2731,20 +2731,56 @@ func (s *Server) triggerPause(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 500)
 		return
 	}
+	// From here on the project is gated against deploys even when an error is
+	// returned below: a failed stop leaves the flag set so a retry can finish
+	// the job, rather than reporting a clean "paused" over a live container.
 	resp := map[string]string{"status": "paused"}
 	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
-	if err == nil && running != nil {
+	if err != nil {
+		jsonErr(w, fmt.Errorf("project marked paused, but its running deployment could not be looked up (container NOT stopped): %w", err), 500)
+		return
+	}
+	if running != nil {
 		deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
-		if err == nil && deployment != nil && deployment.NodeID != nil {
-			if taskID, err := s.sched.DispatchPause(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix); err == nil {
-				resp["task_id"] = taskID.String()
-				resp["deployment_id"] = deployment.ID.String()
+		if err != nil {
+			jsonErr(w, fmt.Errorf("project marked paused, but its deployment could not be loaded (container NOT stopped): %w", err), 500)
+			return
+		}
+		if deployment != nil && deployment.NodeID != nil {
+			taskID, err := s.sched.DispatchPause(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix)
+			if err != nil {
+				jsonErr(w, fmt.Errorf("project marked paused, but the stop task could not be dispatched (container NOT stopped): %w", err), 500)
+				return
+			}
+			resp["task_id"] = taskID.String()
+			resp["deployment_id"] = deployment.ID.String()
+			if warn := s.nodeOfflineWarning(r.Context(), *deployment.NodeID, "stop"); warn != "" {
+				resp["warning"] = warn
 			}
 		}
 	}
 	projectevents.Push(id, projectevents.TypePause, projectevents.SeverityInfo,
 		fmt.Sprintf("paused by %s", user.Email))
 	jsonOK(w, resp)
+}
+
+// nodeOfflineWarning returns a human-readable warning when the target node has
+// not checked in within the last two minutes (the same cutoff as the agents
+// health check). Pause/resume tasks are picked up by the agent's poll loop, so
+// on an offline node the dispatched task sits queued and the container state
+// does not actually change until the agent reconnects — worth telling the
+// caller instead of letting "paused"/"resumed" imply the docker command ran.
+func (s *Server) nodeOfflineWarning(ctx context.Context, nodeID uuid.UUID, action string) string {
+	node, err := s.store.GetNode(ctx, nodeID)
+	if err != nil || node == nil {
+		return ""
+	}
+	since := time.Since(node.LastSeenAt)
+	if since <= 2*time.Minute {
+		return ""
+	}
+	return fmt.Sprintf("node %s last seen %s ago — the %s task stays queued until its agent reconnects",
+		node.Hostname, since.Round(time.Second), action)
 }
 
 // triggerResume lifts a project's pause: it dispatches an unpause task to
@@ -2764,12 +2800,26 @@ func (s *Server) triggerResume(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := map[string]string{"status": "resumed"}
 	running, err := s.store.GetRunningDeploymentByProject(r.Context(), id)
-	if err == nil && running != nil {
+	if err != nil {
+		jsonErr(w, fmt.Errorf("running deployment could not be looked up (project stays paused, container NOT started): %w", err), 500)
+		return
+	}
+	if running != nil {
 		deployment, err := s.store.GetDeployment(r.Context(), running.DeploymentID)
-		if err == nil && deployment != nil && deployment.NodeID != nil {
-			if taskID, err := s.sched.DispatchUnpause(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix); err == nil {
-				resp["task_id"] = taskID.String()
-				resp["deployment_id"] = deployment.ID.String()
+		if err != nil {
+			jsonErr(w, fmt.Errorf("deployment could not be loaded (project stays paused, container NOT started): %w", err), 500)
+			return
+		}
+		if deployment != nil && deployment.NodeID != nil {
+			taskID, err := s.sched.DispatchUnpause(r.Context(), *deployment.NodeID, deployment, running.DomainPrefix)
+			if err != nil {
+				jsonErr(w, fmt.Errorf("start task could not be dispatched (project stays paused, container NOT started): %w", err), 500)
+				return
+			}
+			resp["task_id"] = taskID.String()
+			resp["deployment_id"] = deployment.ID.String()
+			if warn := s.nodeOfflineWarning(r.Context(), *deployment.NodeID, "start"); warn != "" {
+				resp["warning"] = warn
 			}
 		}
 	}

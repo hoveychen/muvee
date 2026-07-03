@@ -57,6 +57,11 @@ func runPauseResume(cmd *cobra.Command, ref, action string) error {
 	if err != nil {
 		return err
 	}
+	// Surface the node-offline warning before polling: the task stays queued
+	// until the agent reconnects, so the poll below is likely to time out.
+	if warn := str(resp, "warning"); warn != "" {
+		fmt.Println("warning: " + warn)
+	}
 	taskID := str(resp, "task_id")
 	if taskID == "" {
 		// No running container to act on; the paused flag was still updated.
