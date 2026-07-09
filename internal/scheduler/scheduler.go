@@ -704,6 +704,13 @@ func buildInlineComposeYAML(imageRef string, containerPort int) string {
 	sb.WriteString("  app:\n")
 	sb.WriteString(fmt.Sprintf("    image: %s\n", imageRef))
 	sb.WriteString("    restart: unless-stopped\n")
+	// Inject bound project secrets: the agent always writes them to workDir/.env
+	// (see deployer.DeployCompose) and runs compose with --project-directory workDir,
+	// so env_file: .env resolves and delivers each key as a real container env var —
+	// matching the deployment-type `docker run -e KEY=VALUE` path. Without this line
+	// the synthesized service references nothing and image projects run secret-less.
+	sb.WriteString("    env_file:\n")
+	sb.WriteString("      - .env\n")
 	_ = containerPort // ports are handled by the deployer's Traefik label injection
 	return sb.String()
 }
