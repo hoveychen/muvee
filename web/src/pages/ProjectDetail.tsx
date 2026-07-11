@@ -2121,6 +2121,9 @@ function ProjectAliasesPanel({ projectId }: { projectId: string }) {
     <div>
       <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem', lineHeight: 1.5 }}>
         Attach extra hostnames that route to this same project. Each host needs DNS pointing at this server, then a Let's Encrypt certificate is issued automatically on the first request after DNS resolves. Sign-in state is not shared between different hostnames — visitors sign in once per host.
+        {baseDomain && (
+          <> This also covers a second prefix under the platform's own domain (e.g. <code style={{ fontFamily: MONO }}>{`two.${baseDomain}`}</code>) — point it at this server the same way, as long as that prefix isn't already used by another project.</>
+        )}
       </p>
 
       <button
