@@ -1535,10 +1535,16 @@ function EnabledProvidersField({ value, onChange }: { value: string; onChange: (
 function DemoAccountsSection({ projectId }: { projectId: string }) {
   const [accounts, setAccounts] = useState<ProjectPasswordAccount[] | null>(null)
   const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // Mirror the backend's requirement: a demo account's email is mandatory and
+  // must be well-formed, because downstream services read it from the
+  // X-Forwarded-User header the forward JWT populates.
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
 
   useEffect(() => {
     api.projects.passwordAccounts(projectId).then(setAccounts).catch(() => setAccounts([]))
@@ -1561,12 +1567,22 @@ function DemoAccountsSection({ projectId }: { projectId: string }) {
   const add = () => run(async () => {
     const created = await api.projects.createPasswordAccount(projectId, {
       username: username.trim(),
+      email: email.trim(),
       password,
       display_name: displayName.trim() || undefined,
     })
     setAccounts([...accounts, created])
-    setUsername(''); setPassword(''); setDisplayName('')
+    setUsername(''); setEmail(''); setPassword(''); setDisplayName('')
   })
+
+  const editEmail = (a: ProjectPasswordAccount) => {
+    const next = window.prompt(`Email for "${a.username}" (passed to the downstream service):`, a.email)
+    if (next === null) return
+    void run(async () => {
+      const updated = await api.projects.updatePasswordAccount(projectId, a.id, { email: next.trim() })
+      setAccounts(accounts.map(x => (x.id === a.id ? updated : x)))
+    })
+  }
 
   const toggleDisabled = (a: ProjectPasswordAccount) => run(async () => {
     const updated = await api.projects.updatePasswordAccount(projectId, a.id, { disabled: !a.disabled })
@@ -1601,9 +1617,15 @@ function DemoAccountsSection({ projectId }: { projectId: string }) {
           {accounts.map(a => (
             <div key={a.id} className="flex items-center gap-3" style={{ fontSize: '0.875rem', opacity: a.disabled ? 0.5 : 1 }}>
               <span style={{ fontFamily: MONO }}>{a.username}</span>
+              {a.email
+                ? <span style={{ fontFamily: MONO, color: 'var(--fg-muted)' }}>{a.email}</span>
+                : <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>no email</span>}
               {a.display_name && <span style={{ color: 'var(--fg-muted)' }}>{a.display_name}</span>}
               {a.disabled && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>disabled</span>}
               <span className="flex-1" />
+              <button onClick={() => editEmail(a)} disabled={busy} className="btn-ghost" style={{ fontSize: '0.75rem' }}>
+                Edit email
+              </button>
               <button onClick={() => resetPassword(a)} disabled={busy} className="btn-ghost" style={{ fontSize: '0.75rem' }}>
                 Reset password
               </button>
@@ -1628,6 +1650,15 @@ function DemoAccountsSection({ projectId }: { projectId: string }) {
           autoComplete="off"
         />
         <input
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          placeholder="email (required)"
+          className="form-input"
+          style={{ fontFamily: MONO, flex: 1 }}
+          autoComplete="off"
+        />
+        <input
           type="password"
           value={password}
           onChange={e => setPassword(e.target.value)}
@@ -1646,9 +1677,9 @@ function DemoAccountsSection({ projectId }: { projectId: string }) {
         />
         <button
           onClick={add}
-          disabled={busy || !username.trim() || password.length < 8}
+          disabled={busy || !username.trim() || !emailValid || password.length < 8}
           className="btn-primary"
-          style={busy || !username.trim() || password.length < 8 ? { cursor: 'not-allowed', opacity: 0.6 } : {}}
+          style={busy || !username.trim() || !emailValid || password.length < 8 ? { cursor: 'not-allowed', opacity: 0.6 } : {}}
         >
           <Plus size={14} />
         </button>

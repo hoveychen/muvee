@@ -425,6 +425,7 @@ export interface ProjectPasswordAccount {
   id: string
   project_id: string
   username: string
+  email: string
   display_name: string
   disabled: boolean
   created_at: string

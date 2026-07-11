@@ -130,12 +130,12 @@ export const api = {
     // come into being.
     passwordAccounts: (id: string) =>
       request<import('./types').ProjectPasswordAccount[]>(`/api/projects/${id}/password-accounts`),
-    createPasswordAccount: (id: string, data: { username: string; password: string; display_name?: string }) =>
+    createPasswordAccount: (id: string, data: { username: string; email: string; password: string; display_name?: string }) =>
       request<import('./types').ProjectPasswordAccount>(`/api/projects/${id}/password-accounts`, {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    updatePasswordAccount: (id: string, accountId: string, data: { password?: string; display_name?: string; disabled?: boolean }) =>
+    updatePasswordAccount: (id: string, accountId: string, data: { email?: string; password?: string; display_name?: string; disabled?: boolean }) =>
       request<import('./types').ProjectPasswordAccount>(`/api/projects/${id}/password-accounts/${accountId}`, {
         method: 'PATCH',
         body: JSON.stringify(data),
