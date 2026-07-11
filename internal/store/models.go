@@ -39,6 +39,20 @@ type OAuthAccount struct {
 	CreatedAt      time.Time `db:"created_at"       json:"created_at"`
 }
 
+// ProjectPasswordAccount is a pre-provisioned username/password credential
+// scoped to a single project's downstream sign-in page (demo accounts).
+// Provisioned only from the project Auth tab -- no self-registration.
+// PasswordHash is a bcrypt hash and is never serialised to JSON.
+type ProjectPasswordAccount struct {
+	ID           uuid.UUID `db:"id"            json:"id"`
+	ProjectID    uuid.UUID `db:"project_id"    json:"project_id"`
+	Username     string    `db:"username"      json:"username"`
+	PasswordHash string    `db:"password_hash" json:"-"`
+	DisplayName  string    `db:"display_name"  json:"display_name"`
+	Disabled     bool      `db:"disabled"      json:"disabled"`
+	CreatedAt    time.Time `db:"created_at"    json:"created_at"`
+}
+
 // PlatformMember records a user's authorization to use the muvee admin plane
 // (the "muvee platform" itself, as distinct from any project deployed on it).
 // Subdomain auth users land in `users` for identity but not here, unless they
