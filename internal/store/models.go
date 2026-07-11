@@ -47,6 +47,7 @@ type ProjectPasswordAccount struct {
 	ID           uuid.UUID `db:"id"            json:"id"`
 	ProjectID    uuid.UUID `db:"project_id"    json:"project_id"`
 	Username     string    `db:"username"      json:"username"`
+	Email        string    `db:"email"         json:"email"`
 	PasswordHash string    `db:"password_hash" json:"-"`
 	DisplayName  string    `db:"display_name"  json:"display_name"`
 	Disabled     bool      `db:"disabled"      json:"disabled"`
