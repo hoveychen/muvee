@@ -2,9 +2,44 @@ package main
 
 import (
 	"bytes"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// TestSignForwardPasswordJWT_CarriesEmail is the regression guard for the
+// demo-account email gap: a demo login must bake the account's email into the
+// forward JWT so setUserHeaders can populate X-Forwarded-User for downstream
+// services. Before this fix the password JWT carried no email and downstream
+// got an empty identity.
+func TestSignForwardPasswordJWT_CarriesEmail(t *testing.T) {
+	prev := jwtSecret
+	jwtSecret = []byte("test-secret-for-password-jwt")
+	defer func() { jwtSecret = prev }()
+
+	signed, err := signForwardPasswordJWT("demo@example.com", "Demo User", "", "proj-123")
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	claims, err := parseForwardJWT(signed)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if claims.Email != "demo@example.com" {
+		t.Errorf("email lost through the password JWT: got %q, want %q", claims.Email, "demo@example.com")
+	}
+	if claims.Provider != "password" || claims.ProjectID != "proj-123" {
+		t.Errorf("provider/project binding changed: provider=%q project=%q", claims.Provider, claims.ProjectID)
+	}
+
+	// The claim must surface as X-Forwarded-User so the downstream app can read
+	// the identity off the forward-auth response.
+	rec := httptest.NewRecorder()
+	setUserHeaders(rec, claims)
+	if got := rec.Header().Get("X-Forwarded-User"); got != "demo@example.com" {
+		t.Errorf("X-Forwarded-User = %q, want the demo account email", got)
+	}
+}
 
 // TestLoginPageTmpl_PasswordForm verifies the username/password form renders
 // exactly when PasswordLogin is set, and that the "or" divider only appears

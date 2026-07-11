@@ -1904,22 +1904,22 @@ func (s *Store) GetProjectTraffic(ctx context.Context, projectID uuid.UUID, limi
 
 // ─── Project Password Accounts ────────────────────────────────────────────────
 
-const passwordAccountColumns = `id, project_id, username, password_hash, display_name, disabled, created_at`
+const passwordAccountColumns = `id, project_id, username, email, password_hash, display_name, disabled, created_at`
 
 func scanPasswordAccount(row pgx.Row, a *ProjectPasswordAccount) error {
-	return row.Scan(&a.ID, &a.ProjectID, &a.Username, &a.PasswordHash,
+	return row.Scan(&a.ID, &a.ProjectID, &a.Username, &a.Email, &a.PasswordHash,
 		&a.DisplayName, &a.Disabled, &a.CreatedAt)
 }
 
 // CreateProjectPasswordAccount inserts a new demo account. The caller is
 // responsible for hashing the password (bcrypt) before calling.
-func (s *Store) CreateProjectPasswordAccount(ctx context.Context, projectID uuid.UUID, username, passwordHash, displayName string) (*ProjectPasswordAccount, error) {
+func (s *Store) CreateProjectPasswordAccount(ctx context.Context, projectID uuid.UUID, username, email, passwordHash, displayName string) (*ProjectPasswordAccount, error) {
 	var a ProjectPasswordAccount
 	err := scanPasswordAccount(s.db.QueryRow(ctx, `
-		INSERT INTO project_password_accounts (id, project_id, username, password_hash, display_name, created_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())
+		INSERT INTO project_password_accounts (id, project_id, username, email, password_hash, display_name, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW())
 		RETURNING `+passwordAccountColumns,
-		uuid.New(), projectID, username, passwordHash, displayName), &a)
+		uuid.New(), projectID, username, email, passwordHash, displayName), &a)
 	if err != nil {
 		return nil, err
 	}
@@ -1978,15 +1978,16 @@ func (s *Store) GetProjectPasswordAccountByUsername(ctx context.Context, project
 // Nil pointers keep the current value. The projectID is part of the WHERE
 // clause so a caller can never mutate another project's account by id;
 // (nil, nil) is returned when the (project, id) pair does not match.
-func (s *Store) UpdateProjectPasswordAccount(ctx context.Context, projectID, id uuid.UUID, passwordHash *string, displayName *string, disabled *bool) (*ProjectPasswordAccount, error) {
+func (s *Store) UpdateProjectPasswordAccount(ctx context.Context, projectID, id uuid.UUID, email *string, passwordHash *string, displayName *string, disabled *bool) (*ProjectPasswordAccount, error) {
 	var a ProjectPasswordAccount
 	err := scanPasswordAccount(s.db.QueryRow(ctx, `
 		UPDATE project_password_accounts SET
-			password_hash = COALESCE($3, password_hash),
-			display_name  = COALESCE($4, display_name),
-			disabled      = COALESCE($5, disabled)
+			email         = COALESCE($3, email),
+			password_hash = COALESCE($4, password_hash),
+			display_name  = COALESCE($5, display_name),
+			disabled      = COALESCE($6, disabled)
 		WHERE id = $1 AND project_id = $2
-		RETURNING `+passwordAccountColumns, id, projectID, passwordHash, displayName, disabled), &a)
+		RETURNING `+passwordAccountColumns, id, projectID, email, passwordHash, displayName, disabled), &a)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
