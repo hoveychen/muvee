@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"regexp"
 	"strings"
 
@@ -56,6 +57,28 @@ func normalizeDemoUsername(username string) string {
 	return strings.ToLower(strings.TrimSpace(username))
 }
 
+func normalizeDemoEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// validateDemoEmail requires a well-formed address. A demo account's email is
+// mandatory because downstream services read it from the X-Forwarded-User
+// header the forward JWT populates -- an empty email leaves them without an
+// identity (see cmd/muvee/authservice.go). It is NOT required to be unique.
+func validateDemoEmail(email string) error {
+	if email == "" {
+		return errors.New("email is required")
+	}
+	if len(email) > 254 {
+		return errors.New("email must be at most 254 characters")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email {
+		return errors.New("email must be a valid address")
+	}
+	return nil
+}
+
 // loadProjectForOwner fetches the project and enforces the same access rule
 // as the other per-project management endpoints (aliases, invitation links):
 // system admin or project owner only. Writes the error response itself.
@@ -97,6 +120,7 @@ func (s *Server) createProjectPasswordAccount(w http.ResponseWriter, r *http.Req
 	}
 	var body struct {
 		Username    string `json:"username"`
+		Email       string `json:"email"`
 		Password    string `json:"password"`
 		DisplayName string `json:"display_name"`
 	}
@@ -109,6 +133,11 @@ func (s *Server) createProjectPasswordAccount(w http.ResponseWriter, r *http.Req
 		jsonErr(w, err, 400)
 		return
 	}
+	email := normalizeDemoEmail(body.Email)
+	if err := validateDemoEmail(email); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
 	if err := validateDemoPassword(body.Password); err != nil {
 		jsonErr(w, err, 400)
 		return
@@ -118,7 +147,7 @@ func (s *Server) createProjectPasswordAccount(w http.ResponseWriter, r *http.Req
 		jsonErr(w, err, 500)
 		return
 	}
-	account, err := s.store.CreateProjectPasswordAccount(r.Context(), proj.ID, username, string(hash), strings.TrimSpace(body.DisplayName))
+	account, err := s.store.CreateProjectPasswordAccount(r.Context(), proj.ID, username, email, string(hash), strings.TrimSpace(body.DisplayName))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -141,6 +170,7 @@ func (s *Server) updateProjectPasswordAccount(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var body struct {
+		Email       *string `json:"email"`
 		Password    *string `json:"password"`
 		DisplayName *string `json:"display_name"`
 		Disabled    *bool   `json:"disabled"`
@@ -148,6 +178,14 @@ func (s *Server) updateProjectPasswordAccount(w http.ResponseWriter, r *http.Req
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, fmt.Errorf("invalid json: %w", err), 400)
 		return
+	}
+	if body.Email != nil {
+		normalized := normalizeDemoEmail(*body.Email)
+		if err := validateDemoEmail(normalized); err != nil {
+			jsonErr(w, err, 400)
+			return
+		}
+		body.Email = &normalized
 	}
 	var passwordHash *string
 	if body.Password != nil {
@@ -167,7 +205,7 @@ func (s *Server) updateProjectPasswordAccount(w http.ResponseWriter, r *http.Req
 		trimmed := strings.TrimSpace(*body.DisplayName)
 		body.DisplayName = &trimmed
 	}
-	account, err := s.store.UpdateProjectPasswordAccount(r.Context(), proj.ID, accountID, passwordHash, body.DisplayName, body.Disabled)
+	account, err := s.store.UpdateProjectPasswordAccount(r.Context(), proj.ID, accountID, body.Email, passwordHash, body.DisplayName, body.Disabled)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -246,6 +284,7 @@ func (s *Server) handleInternalAuthPasswordLogin(w http.ResponseWriter, r *http.
 	jsonOK(w, map[string]any{
 		"user_id":    user.ID.String(),
 		"username":   account.Username,
+		"email":      account.Email,
 		"name":       name,
 		"avatar_url": "",
 	})
