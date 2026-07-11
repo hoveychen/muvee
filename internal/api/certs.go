@@ -16,7 +16,7 @@ import (
 // CertStatus is the ACME state of one expected HTTPS domain.
 type CertStatus struct {
 	Domain    string     `json:"domain"`
-	Kind      string     `json:"kind"`   // base|registry|traefik|project|tunnel
+	Kind      string     `json:"kind"`   // base|registry|traefik|project|alias|tunnel
 	Status    string     `json:"status"` // issued|pending|unknown
 	NotAfter  *time.Time `json:"not_after,omitempty"`
 	DaysLeft  *int       `json:"days_left,omitempty"`
@@ -123,12 +123,25 @@ func (s *Server) expectedDomains(ctx context.Context) []CertStatus {
 		CertStatus{Domain: "registry." + s.baseDomain, Kind: "registry"},
 		CertStatus{Domain: "traefik." + s.baseDomain, Kind: "traefik"},
 	)
+	running := map[string]bool{}
 	if deps, err := s.store.GetRunningDeployments(ctx); err == nil {
 		for _, d := range deps {
+			running[d.ProjectID.String()] = true
 			items = append(items, CertStatus{
 				Domain: d.DomainPrefix + "." + s.baseDomain,
 				Kind:   "project",
 			})
+		}
+	}
+	// Custom-domain and second-prefix aliases get a Traefik router (and thus a
+	// cert) only while their project has a running deployment (see
+	// handleTraefikConfig). List those so the admin cert panel reflects them.
+	if aliases, err := s.store.ListAllProjectAliases(ctx); err == nil {
+		for _, a := range aliases {
+			if !running[a.ProjectID.String()] {
+				continue
+			}
+			items = append(items, CertStatus{Domain: a.Host, Kind: "alias"})
 		}
 	}
 	for _, t := range s.tunnels.activeTunnels() {

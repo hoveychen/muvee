@@ -260,6 +260,15 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 			jsonErr(w, err, http.StatusInternalServerError)
 			return
 		}
+		if p == nil {
+			// Not a project's default `<prefix>.<base>` — it may still be a
+			// base-domain alias (a second prefix) attached to a project.
+			p, err = s.store.GetProjectByAliasHost(r.Context(), host)
+			if err != nil {
+				jsonErr(w, err, http.StatusInternalServerError)
+				return
+			}
+		}
 	case host == base:
 		jsonErr(w, fmt.Errorf("apex host carries no project"), http.StatusNotFound)
 		return
@@ -1967,6 +1976,18 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, fmt.Errorf("domain prefix %q is already in use by another project", p.DomainPrefix), 409)
 		return
 	}
+	// The prefix must also not be claimed as a `<prefix>.<base>` alias on another
+	// project — that would produce two Traefik routers for the same host.
+	if s.baseDomain != "" {
+		aliasHost := p.DomainPrefix + "." + strings.ToLower(s.baseDomain)
+		if owner, err := s.store.GetProjectByAliasHost(r.Context(), aliasHost); err != nil {
+			jsonErr(w, err, 500)
+			return
+		} else if owner != nil {
+			jsonErr(w, fmt.Errorf("domain prefix %q is already claimed as an alias by another project", p.DomainPrefix), 409)
+			return
+		}
+	}
 	if existing, err := s.store.GetProjectByOwnerAndName(r.Context(), user.ID, p.Name); err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -2131,6 +2152,18 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	} else if byPrefix != nil && byPrefix.ID != id {
 		jsonErr(w, fmt.Errorf("domain prefix %q is already in use by another project", p.DomainPrefix), 409)
 		return
+	}
+	// The prefix must also not be claimed as a `<prefix>.<base>` alias on another
+	// project — that would produce two Traefik routers for the same host.
+	if s.baseDomain != "" {
+		aliasHost := p.DomainPrefix + "." + strings.ToLower(s.baseDomain)
+		if owner, err := s.store.GetProjectByAliasHost(r.Context(), aliasHost); err != nil {
+			jsonErr(w, err, 500)
+			return
+		} else if owner != nil && owner.ID != id {
+			jsonErr(w, fmt.Errorf("domain prefix %q is already claimed as an alias by another project", p.DomainPrefix), 409)
+			return
+		}
 	}
 	if p.Name != existing.Name {
 		if byName, err := s.store.GetProjectByOwnerAndName(r.Context(), existing.OwnerID, p.Name); err != nil {
