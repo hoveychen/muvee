@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/auth"
 	"github.com/hoveychen/muvee/internal/store"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -175,6 +177,78 @@ func (s *Server) updateProjectPasswordAccount(w http.ResponseWriter, r *http.Req
 		return
 	}
 	jsonOK(w, account)
+}
+
+// demoDummyHash is a bcrypt hash of a random throwaway string. When the
+// username does not resolve to an account we still run one bcrypt compare
+// against it so the response time does not reveal whether the username
+// exists (username enumeration).
+var demoDummyHash = []byte("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy")
+
+// handleInternalAuthPasswordLogin verifies a (project, username, password)
+// tuple for muvee-authservice's downstream password form. On success it
+// upserts the identity through the oauth_accounts path (provider='password',
+// provider_user_id=<account id>) -- the same identity-only contract as
+// social logins: no email, no platform_members row -- and returns the
+// display fields authservice puts into the forward JWT.
+//
+// Authenticated via X-Muvee-Internal-Key. 401 both for a bad key and for bad
+// credentials (the JSON body distinguishes them); 400 for payload errors.
+func (s *Server) handleInternalAuthPasswordLogin(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		ProjectID string `json:"project_id"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, fmt.Errorf("invalid json: %w", err), http.StatusBadRequest)
+		return
+	}
+	projectID, err := uuid.Parse(body.ProjectID)
+	if err != nil {
+		jsonErr(w, fmt.Errorf("invalid project_id"), http.StatusBadRequest)
+		return
+	}
+	username := normalizeDemoUsername(body.Username)
+	if username == "" || body.Password == "" {
+		jsonErr(w, fmt.Errorf("username and password are required"), http.StatusBadRequest)
+		return
+	}
+	account, err := s.store.GetProjectPasswordAccountByUsername(r.Context(), projectID, username)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	if account == nil || account.Disabled {
+		_ = bcrypt.CompareHashAndPassword(demoDummyHash, []byte(body.Password))
+		jsonErr(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(body.Password)) != nil {
+		jsonErr(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
+		return
+	}
+	name := account.DisplayName
+	if name == "" {
+		name = account.Username
+	}
+	user, err := s.auth.EnsureIdentityFromOAuth(r.Context(), "password", account.ID.String(), name, "")
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]any{
+		"user_id":    user.ID.String(),
+		"username":   account.Username,
+		"name":       name,
+		"avatar_url": "",
+	})
 }
 
 func (s *Server) deleteProjectPasswordAccount(w http.ResponseWriter, r *http.Request) {
