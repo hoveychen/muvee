@@ -22,9 +22,12 @@ import (
 //     least two labels (a bare label like "foo" is meaningless as a domain).
 //   - host must not equal the platform's own base_domain (apex of the
 //     platform itself).
-//   - host must not end with `.<base_domain>` — that subdomain namespace is
-//     owned by the deployment / domain-only routers and would collide with
-//     `<domain_prefix>.<base_domain>` patterns.
+//   - a host under the platform base_domain (e.g. `two.<base>`) IS allowed —
+//     it is a second prefix that shares the platform's own domain. For the
+//     single-label `<prefix>.<base>` form the label must satisfy the same
+//     rules as a domain_prefix (valid RFC1123 label, not reserved). Whether
+//     that prefix collides with an existing project's domain_prefix needs a
+//     DB lookup and is enforced by createProjectAlias, not here.
 
 // hostLabel matches one RFC1123 label: 1–63 chars, alphanumeric, with optional
 // internal hyphens; cannot begin or end with a hyphen.
@@ -55,11 +58,37 @@ func validateAliasHost(host, baseDomain string) error {
 		if host == base {
 			return fmt.Errorf("host %q equals the platform base domain", host)
 		}
-		if strings.HasSuffix(host, "."+base) {
-			return fmt.Errorf("host %q is under the platform base domain — use the built-in <prefix>.%s instead", host, base)
+		// A single-label subdomain of the platform base domain (`<prefix>.<base>`)
+		// shares the namespace governed by domain_prefix, so the label must be a
+		// valid, non-reserved prefix. Multi-label hosts under the base (e.g.
+		// `a.b.<base>`) never collide with the single-label prefix namespace, so
+		// they need no extra check. Cross-project uniqueness against existing
+		// domain_prefix values requires a DB lookup — enforced in createProjectAlias.
+		if label, ok := baseSubPrefix(host, base); ok {
+			if err := validateDomainPrefix(label); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// baseSubPrefix returns the single-label prefix when host is exactly
+// `<label>.<baseDomain>` (one label directly under the platform base domain),
+// and ("", false) otherwise (host not under base, or a multi-label subdomain).
+// Both createProjectAlias and validateAliasHost use it to recognise the
+// `<prefix>.<base>` namespace that domain_prefix owns.
+func baseSubPrefix(host, baseDomain string) (string, bool) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	base := strings.ToLower(strings.TrimSpace(baseDomain))
+	if base == "" || !strings.HasSuffix(host, "."+base) {
+		return "", false
+	}
+	sub := strings.TrimSuffix(host, "."+base)
+	if sub == "" || strings.Contains(sub, ".") {
+		return "", false
+	}
+	return sub, true
 }
 
 func normalizeAliasHost(host string) string {
@@ -116,6 +145,20 @@ func (s *Server) createProjectAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := normalizeAliasHost(body.Host)
+	// For a `<prefix>.<base>` alias, the prefix label must not already be claimed
+	// by a project's domain_prefix — otherwise two Traefik routers would serve the
+	// same host (the project's default router and this alias router).
+	if label, ok := baseSubPrefix(host, s.baseDomain); ok {
+		owner, err := s.store.GetProjectByDomainPrefix(r.Context(), label)
+		if err != nil {
+			jsonErr(w, err, 500)
+			return
+		}
+		if owner != nil {
+			jsonErr(w, fmt.Errorf("host %q is already served by project %q's default domain — pick a different prefix", host, owner.DomainPrefix), 409)
+			return
+		}
+	}
 	alias, err := s.store.AddProjectAlias(r.Context(), projectID, host)
 	if err != nil {
 		var pgErr *pgconn.PgError
