@@ -1975,16 +1975,18 @@ func (s *Store) GetProjectPasswordAccountByUsername(ctx context.Context, project
 }
 
 // UpdateProjectPasswordAccount updates the mutable fields of a demo account.
-// A nil/empty passwordHash keeps the current hash.
-func (s *Store) UpdateProjectPasswordAccount(ctx context.Context, id uuid.UUID, passwordHash *string, displayName *string, disabled *bool) (*ProjectPasswordAccount, error) {
+// Nil pointers keep the current value. The projectID is part of the WHERE
+// clause so a caller can never mutate another project's account by id;
+// (nil, nil) is returned when the (project, id) pair does not match.
+func (s *Store) UpdateProjectPasswordAccount(ctx context.Context, projectID, id uuid.UUID, passwordHash *string, displayName *string, disabled *bool) (*ProjectPasswordAccount, error) {
 	var a ProjectPasswordAccount
 	err := scanPasswordAccount(s.db.QueryRow(ctx, `
 		UPDATE project_password_accounts SET
-			password_hash = COALESCE($2, password_hash),
-			display_name  = COALESCE($3, display_name),
-			disabled      = COALESCE($4, disabled)
-		WHERE id = $1
-		RETURNING `+passwordAccountColumns, id, passwordHash, displayName, disabled), &a)
+			password_hash = COALESCE($3, password_hash),
+			display_name  = COALESCE($4, display_name),
+			disabled      = COALESCE($5, disabled)
+		WHERE id = $1 AND project_id = $2
+		RETURNING `+passwordAccountColumns, id, projectID, passwordHash, displayName, disabled), &a)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
