@@ -125,6 +125,24 @@ export const api = {
     deleteAlias: (id: string, aliasId: string) =>
       request(`/api/projects/${id}/aliases/${aliasId}`, { method: 'DELETE' }),
 
+    // Per-project password ("demo") accounts for the downstream sign-in page.
+    // No self-registration exists: these endpoints are the only way accounts
+    // come into being.
+    passwordAccounts: (id: string) =>
+      request<import('./types').ProjectPasswordAccount[]>(`/api/projects/${id}/password-accounts`),
+    createPasswordAccount: (id: string, data: { username: string; password: string; display_name?: string }) =>
+      request<import('./types').ProjectPasswordAccount>(`/api/projects/${id}/password-accounts`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    updatePasswordAccount: (id: string, accountId: string, data: { password?: string; display_name?: string; disabled?: boolean }) =>
+      request<import('./types').ProjectPasswordAccount>(`/api/projects/${id}/password-accounts/${accountId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    deletePasswordAccount: (id: string, accountId: string) =>
+      request(`/api/projects/${id}/password-accounts/${accountId}`, { method: 'DELETE' }),
+
     // Per-project visit log (recent unique visitors of the downstream service).
     visits: (id: string, limit = 100) =>
       request<import('./types').ProjectVisit[]>(`/api/projects/${id}/visits?limit=${limit}`),

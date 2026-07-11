@@ -1902,6 +1902,110 @@ func (s *Store) GetProjectTraffic(ctx context.Context, projectID uuid.UUID, limi
 	return items, nil
 }
 
+// ─── Project Password Accounts ────────────────────────────────────────────────
+
+const passwordAccountColumns = `id, project_id, username, password_hash, display_name, disabled, created_at`
+
+func scanPasswordAccount(row pgx.Row, a *ProjectPasswordAccount) error {
+	return row.Scan(&a.ID, &a.ProjectID, &a.Username, &a.PasswordHash,
+		&a.DisplayName, &a.Disabled, &a.CreatedAt)
+}
+
+// CreateProjectPasswordAccount inserts a new demo account. The caller is
+// responsible for hashing the password (bcrypt) before calling.
+func (s *Store) CreateProjectPasswordAccount(ctx context.Context, projectID uuid.UUID, username, passwordHash, displayName string) (*ProjectPasswordAccount, error) {
+	var a ProjectPasswordAccount
+	err := scanPasswordAccount(s.db.QueryRow(ctx, `
+		INSERT INTO project_password_accounts (id, project_id, username, password_hash, display_name, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+		RETURNING `+passwordAccountColumns,
+		uuid.New(), projectID, username, passwordHash, displayName), &a)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// ListProjectPasswordAccounts returns all demo accounts of a project,
+// including disabled ones (the management UI shows both).
+func (s *Store) ListProjectPasswordAccounts(ctx context.Context, projectID uuid.UUID) ([]*ProjectPasswordAccount, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT `+passwordAccountColumns+` FROM project_password_accounts
+		WHERE project_id = $1 ORDER BY created_at ASC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*ProjectPasswordAccount, 0)
+	for rows.Next() {
+		var a ProjectPasswordAccount
+		if err := scanPasswordAccount(rows, &a); err != nil {
+			return nil, err
+		}
+		items = append(items, &a)
+	}
+	return items, nil
+}
+
+// CountEnabledProjectPasswordAccounts reports how many non-disabled demo
+// accounts a project has. The downstream login page shows the password form
+// only when this is > 0.
+func (s *Store) CountEnabledProjectPasswordAccounts(ctx context.Context, projectID uuid.UUID) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM project_password_accounts
+		WHERE project_id = $1 AND NOT disabled`, projectID).Scan(&n)
+	return n, err
+}
+
+// GetProjectPasswordAccountByUsername resolves a (project, username) pair for
+// login verification. Returns (nil, nil) when no such account exists.
+func (s *Store) GetProjectPasswordAccountByUsername(ctx context.Context, projectID uuid.UUID, username string) (*ProjectPasswordAccount, error) {
+	var a ProjectPasswordAccount
+	err := scanPasswordAccount(s.db.QueryRow(ctx, `
+		SELECT `+passwordAccountColumns+` FROM project_password_accounts
+		WHERE project_id = $1 AND username = $2`, projectID, username), &a)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// UpdateProjectPasswordAccount updates the mutable fields of a demo account.
+// Nil pointers keep the current value. The projectID is part of the WHERE
+// clause so a caller can never mutate another project's account by id;
+// (nil, nil) is returned when the (project, id) pair does not match.
+func (s *Store) UpdateProjectPasswordAccount(ctx context.Context, projectID, id uuid.UUID, passwordHash *string, displayName *string, disabled *bool) (*ProjectPasswordAccount, error) {
+	var a ProjectPasswordAccount
+	err := scanPasswordAccount(s.db.QueryRow(ctx, `
+		UPDATE project_password_accounts SET
+			password_hash = COALESCE($3, password_hash),
+			display_name  = COALESCE($4, display_name),
+			disabled      = COALESCE($5, disabled)
+		WHERE id = $1 AND project_id = $2
+		RETURNING `+passwordAccountColumns, id, projectID, passwordHash, displayName, disabled), &a)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// DeleteProjectPasswordAccount removes a demo account. The oauth_accounts
+// binding (provider='password') and its users row are left in place so any
+// sessions/audit trails keep resolving; the account simply can no longer
+// sign in.
+func (s *Store) DeleteProjectPasswordAccount(ctx context.Context, projectID, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `
+		DELETE FROM project_password_accounts WHERE id = $1 AND project_id = $2`, id, projectID)
+	return err
+}
+
 // ─── System Settings ──────────────────────────────────────────────────────────
 
 // GetSetting retrieves a single system setting by key.

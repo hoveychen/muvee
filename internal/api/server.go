@@ -294,6 +294,16 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 	platformSiteName, _ := s.store.GetSetting(r.Context(), "site_name")
 	platformLogoURL, _ := s.store.GetSetting(r.Context(), "logo_url")
 	platformFaviconURL, _ := s.store.GetSetting(r.Context(), "favicon_url")
+	// password_login toggles the username/password form on the downstream
+	// login page. It is intentionally orthogonal to enabled_providers (that
+	// whitelist governs OAuth providers; empty there means "inherit all",
+	// which must not accidentally enable password entry): the form appears
+	// exactly when the project has at least one enabled demo account.
+	passwordAccounts, err := s.store.CountEnabledProjectPasswordAccounts(r.Context(), p.ID)
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
 	jsonOK(w, map[string]any{
 		"project_id":        p.ID.String(),
 		"project_name":      p.Name,
@@ -301,6 +311,7 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		"enabled_providers": p.EnabledProviders,
 		"auth_required":     p.AuthRequired,
 		"access_mode":       p.AccessMode,
+		"password_login":    passwordAccounts > 0,
 		"branding": map[string]any{
 			"site_name":            p.BrandingSiteName,
 			"logo_url":             p.BrandingLogoURL,
@@ -658,6 +669,10 @@ func (s *Server) Router() http.Handler {
 	// means no domain check, no invite gate, no platform_members row — those
 	// are platform-side concerns that subdomain users should not inherit.
 	r.Post("/api/internal/auth/identity-upsert", s.handleInternalAuthIdentityUpsert)
+	// Internal credential check for the downstream password ("demo account")
+	// login form rendered by muvee-authservice. Verifies the bcrypt hash and
+	// upserts the identity via oauth_accounts (provider='password').
+	r.Post("/api/internal/auth/password-login", s.handleInternalAuthPasswordLogin)
 	// Internal endpoint: returns the current social-OAuth provider configs
 	// (Discord / Apple / Facebook / Twitter) for authservice to instantiate.
 	// Body contains secrets, so X-Muvee-Internal-Key is mandatory.
@@ -733,6 +748,10 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/projects/{id}/invitation-links", s.requireAuthorized(s.createProjectInvitationLink))
 		r.Delete("/api/projects/{id}/invitation-links/{linkId}", s.requireAuthorized(s.deleteProjectInvitationLink))
 		r.Get("/api/projects/{id}/invitation-links/{linkId}/uses", s.listProjectInvitationLinkUses)
+		r.Get("/api/projects/{id}/password-accounts", s.listProjectPasswordAccounts)
+		r.Post("/api/projects/{id}/password-accounts", s.requireAuthorized(s.createProjectPasswordAccount))
+		r.Patch("/api/projects/{id}/password-accounts/{accountId}", s.requireAuthorized(s.updateProjectPasswordAccount))
+		r.Delete("/api/projects/{id}/password-accounts/{accountId}", s.requireAuthorized(s.deleteProjectPasswordAccount))
 		r.Get("/api/projects/{id}/aliases", s.listProjectAliases)
 		r.Post("/api/projects/{id}/aliases", s.requireAuthorized(s.createProjectAlias))
 		r.Delete("/api/projects/{id}/aliases/{aliasId}", s.requireAuthorized(s.deleteProjectAlias))

@@ -31,6 +31,11 @@ type authClaims struct {
 	Name      string `json:"name,omitempty"`
 	AvatarURL string `json:"avatar_url,omitempty"`
 	Provider  string `json:"provider,omitempty"`
+	// ProjectID scopes a password ("demo account") session to the single
+	// project whose account list authenticated it. Empty for OAuth sessions
+	// (those roam across subdomains and rely on per-project ACL checks
+	// instead). handleVerify enforces the binding.
+	ProjectID string `json:"project_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -235,6 +240,9 @@ func runAuthservice() {
 	r.Options("/_oauth/login-token/poll", handleOAuthOptionsPreflight)
 	r.Get("/_oauth/logout", handleFwdLogout)
 	r.Get("/_oauth/login", handleLoginPage)
+	// Username/password ("demo account") form submission from the login page.
+	// POST-only, so it never collides with the GET {provider} catch-all below.
+	r.Post("/_oauth/password", handlePasswordLogin)
 	r.Get("/_oauth/request-access", handleRequestAccessPage)
 	r.Post("/_oauth/request-access", handleRequestAccessSubmit)
 	// Internal reload endpoint (muvee-server posts here after PUT /admin/settings
@@ -294,6 +302,23 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		// otherwise lose the query string visibility to the callback handler).
 		if inviteToken != "" {
 			setInviteTokenCookie(w, inviteToken)
+		}
+		redirectToLogin(w, r)
+		return
+	}
+
+	// Password ("demo account") sessions are hard-scoped to the project that
+	// provisioned the account: the claim carries no email, so neither the
+	// domains check nor the email-keyed project ACL below can apply. Being on
+	// the project's account list IS the access grant -- but only for that one
+	// project, so a mismatching (or absent) project_id fails closed back to
+	// the login page instead of falling through to checks that would misread
+	// an empty email.
+	if claims.Provider == "password" {
+		if projectID := r.URL.Query().Get("project_id"); projectID != "" && projectID == claims.ProjectID {
+			setUserHeaders(w, claims)
+			w.WriteHeader(http.StatusOK)
+			return
 		}
 		redirectToLogin(w, r)
 		return
@@ -638,8 +663,11 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-redirect when only one provider is configured.
-	if len(allowed) == 1 {
+	// Auto-redirect when only one provider is configured -- unless the
+	// project also offers password login, in which case the selection page
+	// must render so the form stays reachable.
+	passwordLogin := cfg != nil && cfg.PasswordLogin
+	if len(allowed) == 1 && !passwordLogin {
 		for name := range allowed {
 			http.Redirect(w, r, "/_oauth/login?provider="+name, http.StatusFound)
 			return
@@ -647,8 +675,112 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := buildLoginPageData(cfg, allowed)
+	if r.URL.Query().Get("error") == "invalid_credentials" {
+		data.LoginError = "Invalid username or password."
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = loginPageTmpl.Execute(w, data)
+}
+
+// handlePasswordLogin handles the username/password form on the downstream
+// login page. Credentials are verified by muvee-server (which owns the
+// bcrypt hashes); on success the session JWT is project-scoped -- see
+// authClaims.ProjectID -- so a demo account never roams to other projects'
+// subdomains the way OAuth sessions do.
+func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
+	cfg, err := fetchProjectAuthConfigByHost(r.Context(), inboundHost(r))
+	if err != nil {
+		log.Printf("authservice: password login project-by-host: %v", err)
+		http.Error(w, "login failed", http.StatusBadGateway)
+		return
+	}
+	if cfg == nil || !cfg.PasswordLogin {
+		http.Error(w, "password login is not enabled for this site", http.StatusNotFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	username := strings.ToLower(strings.TrimSpace(r.PostFormValue("username")))
+	password := r.PostFormValue("password")
+	identity, err := verifyPasswordUpstream(r.Context(), cfg.ProjectID, username, password)
+	if err != nil {
+		log.Printf("authservice: password verify (project=%s user=%s): %v", cfg.ProjectID, username, err)
+		http.Error(w, "login failed", http.StatusBadGateway)
+		return
+	}
+	if identity == nil {
+		http.Redirect(w, r, "/_oauth/login?error=invalid_credentials", http.StatusSeeOther)
+		return
+	}
+	signed, err := signForwardPasswordJWT(identity.Name, identity.AvatarURL, cfg.ProjectID)
+	if err != nil {
+		http.Error(w, "sign error", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "muvee_fwd_session", Value: signed,
+		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
+		Domain: cookieDomain, SameSite: http.SameSiteLaxMode,
+	})
+	redirect := "/"
+	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
+		redirect = c.Value
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
+		HttpOnly: true, Path: "/", Domain: cookieDomain,
+	})
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
+}
+
+// passwordIdentity is the response of muvee-server's internal password-login
+// endpoint: the display fields to bake into the forward JWT.
+type passwordIdentity struct {
+	UserID    string `json:"user_id"`
+	Username  string `json:"username"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+// verifyPasswordUpstream checks the credentials against muvee-server.
+// Returns (nil, nil) for bad credentials so the caller can distinguish
+// "wrong password" (re-render form) from transport errors (fail closed).
+func verifyPasswordUpstream(ctx context.Context, projectID, username, password string) (*passwordIdentity, error) {
+	body, err := json.Marshal(map[string]string{
+		"project_id": projectID,
+		"username":   username,
+		"password":   password,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		muveeServerURL+"/api/internal/auth/password-login",
+		strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var identity passwordIdentity
+		if err := json.NewDecoder(resp.Body).Decode(&identity); err != nil {
+			return nil, err
+		}
+		return &identity, nil
+	case http.StatusUnauthorized:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("upstream password-login returned %d", resp.StatusCode)
+	}
 }
 
 // allowedProvidersFromConfig returns the provider map honoured by this
@@ -679,6 +811,11 @@ type loginPageData struct {
 	PrimaryColor template.CSS
 	SidebarBg    template.CSS
 	Providers    []loginProviderItem
+	// PasswordLogin renders the username/password form under the OAuth
+	// buttons; LoginError is the (already user-facing) message shown above
+	// the form after a failed attempt.
+	PasswordLogin bool
+	LoginError    string
 }
 
 type loginProviderItem struct {
@@ -756,16 +893,17 @@ func buildLoginPageData(cfg *projectAuthConfig, allowed map[string]auth.Provider
 	}
 
 	return loginPageData{
-		SiteName:     siteName,
-		LogoURL:      logoURL,    // empty = template hides the <img>
-		FaviconURL:   faviconURL, // empty = template omits the <link rel="icon">
-		Tagline:      b.Tagline,
-		Description:  b.Description,
-		FooterText:   b.FooterText, // empty = template hides the sidebar footer
-		TrustItems:   parseTrustItems(b.TrustText),
-		PrimaryColor: primary,
-		SidebarBg:    sidebar,
-		Providers:    items,
+		SiteName:      siteName,
+		LogoURL:       logoURL,    // empty = template hides the <img>
+		FaviconURL:    faviconURL, // empty = template omits the <link rel="icon">
+		Tagline:       b.Tagline,
+		Description:   b.Description,
+		FooterText:    b.FooterText, // empty = template hides the sidebar footer
+		TrustItems:    parseTrustItems(b.TrustText),
+		PrimaryColor:  primary,
+		SidebarBg:     sidebar,
+		Providers:     items,
+		PasswordLogin: cfg != nil && cfg.PasswordLogin,
 	}
 }
 
@@ -833,6 +971,14 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
   .btn:first-of-type{margin-top:0}
   .btn:hover{border-color:{{.PrimaryColor}};background:#f8fafc}
   .btn .icon{display:inline-flex;color:#475569}
+  .divider{display:flex;align-items:center;gap:.75rem;margin:1.25rem 0;color:#94a3b8;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:#e2e8f0}
+  .pw-form label{display:block;margin-bottom:.25rem;font-size:.8125rem;font-weight:500;color:#334155}
+  .pw-form input{width:100%;padding:9px 12px;margin-bottom:.75rem;border:1px solid #e2e8f0;border-radius:8px;font-size:.875rem;color:#0f172a;background:#fff}
+  .pw-form input:focus{outline:none;border-color:{{.PrimaryColor}}}
+  .pw-form button{width:100%;padding:10px 16px;border:none;border-radius:8px;background:{{.PrimaryColor}};color:#fff;font-size:.875rem;font-weight:500;cursor:pointer}
+  .pw-form button:hover{filter:brightness(1.08)}
+  .pw-error{margin:0 0 .75rem;padding:.5rem .75rem;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;color:#b91c1c;font-size:.8125rem}
   .trust{margin-top:1.25rem;display:flex;align-items:center;justify-content:center;gap:1rem;font-size:.75rem;color:#94a3b8}
   .trust span{display:inline-flex;align-items:center;gap:.35rem}
   .trust svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -858,6 +1004,15 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
         <h2>{{if .SiteName}}Sign in to {{.SiteName}}{{else}}Sign in{{end}}</h2>
         <p class="sub">Choose your sign-in method below.</p>
         {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}Continue with {{.DisplayName}}</a>{{end}}
+        {{if .PasswordLogin}}{{if .Providers}}<div class="divider">or</div>{{end}}
+        <form class="pw-form" method="post" action="/_oauth/password">
+          {{if .LoginError}}<p class="pw-error">{{.LoginError}}</p>{{end}}
+          <label for="pw-username">Username</label>
+          <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" required>
+          <label for="pw-password">Password</label>
+          <input id="pw-password" name="password" type="password" autocomplete="current-password" required>
+          <button type="submit">Sign in</button>
+        </form>{{end}}
       </div>
       {{if .TrustItems}}<div class="trust">
         {{range .TrustItems}}<span><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>{{.}}</span>{{end}}
@@ -1387,7 +1542,10 @@ type projectAuthConfig struct {
 	EnabledProviders string           `json:"enabled_providers"`
 	AuthRequired     bool             `json:"auth_required"`
 	AccessMode       string           `json:"access_mode"`
-	Branding         projectBranding `json:"branding"`
+	// PasswordLogin is true when the project has at least one enabled demo
+	// account, which makes the login page render the username/password form.
+	PasswordLogin bool            `json:"password_login"`
+	Branding      projectBranding `json:"branding"`
 }
 
 // projectBranding holds the per-project branding overrides plus the
@@ -1732,6 +1890,23 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 
 func signForwardJWT(email, name, avatarURL, provider string) (string, error) {
 	return signForwardJWTWithExpiry(email, name, avatarURL, provider, 7*24*time.Hour)
+}
+
+// signForwardPasswordJWT signs a project-scoped session for a demo account.
+// No email: demo accounts are identified by their per-project username, and
+// handleVerify admits them via the ProjectID binding instead of the
+// email-keyed ACL.
+func signForwardPasswordJWT(name, avatarURL, projectID string) (string, error) {
+	claims := authClaims{
+		Name:      name,
+		AvatarURL: avatarURL,
+		Provider:  "password",
+		ProjectID: projectID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+		},
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
 }
 
 func signForwardJWTWithExpiry(email, name, avatarURL, provider string, expiry time.Duration) (string, error) {
