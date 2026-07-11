@@ -308,12 +308,12 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Password ("demo account") sessions are hard-scoped to the project that
-	// provisioned the account: the claim carries no email, so neither the
-	// domains check nor the email-keyed project ACL below can apply. Being on
-	// the project's account list IS the access grant -- but only for that one
-	// project, so a mismatching (or absent) project_id fails closed back to
-	// the login page instead of falling through to checks that would misread
-	// an empty email.
+	// provisioned the account. The claim's email is a passthrough attribute
+	// for downstream (X-Forwarded-User), NOT an access key: being on the
+	// project's account list IS the access grant, so we skip both the domains
+	// check and the email-keyed project ACL below. That grant holds only for
+	// this one project, so a mismatching (or absent) project_id fails closed
+	// back to the login page.
 	if claims.Provider == "password" {
 		if projectID := r.URL.Query().Get("project_id"); projectID != "" && projectID == claims.ProjectID {
 			setUserHeaders(w, claims)
@@ -714,7 +714,7 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/_oauth/login?error=invalid_credentials", http.StatusSeeOther)
 		return
 	}
-	signed, err := signForwardPasswordJWT(identity.Name, identity.AvatarURL, cfg.ProjectID)
+	signed, err := signForwardPasswordJWT(identity.Email, identity.Name, identity.AvatarURL, cfg.ProjectID)
 	if err != nil {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
@@ -740,6 +740,7 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 type passwordIdentity struct {
 	UserID    string `json:"user_id"`
 	Username  string `json:"username"`
+	Email     string `json:"email"`
 	Name      string `json:"name"`
 	AvatarURL string `json:"avatar_url"`
 }
@@ -1893,11 +1894,13 @@ func signForwardJWT(email, name, avatarURL, provider string) (string, error) {
 }
 
 // signForwardPasswordJWT signs a project-scoped session for a demo account.
-// No email: demo accounts are identified by their per-project username, and
-// handleVerify admits them via the ProjectID binding instead of the
-// email-keyed ACL.
-func signForwardPasswordJWT(name, avatarURL, projectID string) (string, error) {
+// The email is a passthrough attribute: it is baked into the claim so
+// downstream services get a populated X-Forwarded-User header, but access is
+// still admitted via the ProjectID binding in handleVerify, NOT the
+// email-keyed ACL that OAuth sessions use.
+func signForwardPasswordJWT(email, name, avatarURL, projectID string) (string, error) {
 	claims := authClaims{
+		Email:     email,
 		Name:      name,
 		AvatarURL: avatarURL,
 		Provider:  "password",
