@@ -2751,7 +2751,7 @@ func (s *Store) GetProjectAlias(ctx context.Context, id uuid.UUID) (*ProjectAlia
 func (s *Store) GetProjectByAliasHost(ctx context.Context, host string) (*Project, error) {
 	var p Project
 	row := s.db.QueryRow(ctx, `
-		SELECT `+projectColumns+`
+		SELECT `+projectColumnsPrefixed+`
 		FROM projects p
 		JOIN project_aliases a ON a.project_id = p.id
 		WHERE a.host = $1
