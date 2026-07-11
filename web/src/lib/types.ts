@@ -418,6 +418,18 @@ export interface ProjectAlias {
   created_at: string
 }
 
+// Pre-provisioned username/password credential for the downstream sign-in
+// page (demo accounts). The password itself is write-only: sent on create /
+// reset, never returned by the API.
+export interface ProjectPasswordAccount {
+  id: string
+  project_id: string
+  username: string
+  display_name: string
+  disabled: boolean
+  created_at: string
+}
+
 export type HealthStatus = 'ok' | 'warning' | 'error'
 
 export interface HealthCheck {

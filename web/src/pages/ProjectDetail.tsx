@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette, Pause, Play } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectAlias, ProjectDataset, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectAlias, ProjectDataset, ProjectPasswordAccount, ProjectSecretBinding, ProjectTraffic, ProjectVisit, Secret, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
@@ -367,8 +367,9 @@ export default function ProjectDetail() {
             saveError={saveError}
           />
         )}
-        {tab === 'auth' && (
+        {tab === 'auth' && id && (
           <AuthTab
+            projectId={id}
             form={editForm}
             onChange={setEditForm}
             onSave={handleSave}
@@ -1344,7 +1345,8 @@ function OwnerCombobox({ users, currentOwnerId, currentOwnerLabel, disabled, onS
   )
 }
 
-function AuthTab({ form, onChange, onSave, saving, saveError }: {
+function AuthTab({ projectId, form, onChange, onSave, saving, saveError }: {
+  projectId: string
   form: Partial<Project>
   onChange: (f: Partial<Project>) => void
   onSave: () => void
@@ -1431,6 +1433,8 @@ function AuthTab({ form, onChange, onSave, saving, saveError }: {
         value={(form.enabled_providers ?? '') as string}
         onChange={v => onChange({ ...form, enabled_providers: v })}
       />
+
+      <DemoAccountsSection projectId={projectId} />
 
       {saveError && (
         <p style={{ fontSize: '0.875rem', color: 'var(--danger)' }}>{saveError}</p>
@@ -1520,6 +1524,136 @@ function EnabledProvidersField({ value, onChange }: { value: string; onChange: (
       <p style={{ fontSize: '0.8125rem', marginTop: '0.4rem', color: 'var(--fg-muted)' }}>
         Checked = available to the downstream sign-in flow (SDK + ForwardAuth login page). Leaving every provider checked stores the empty inherit-all sentinel.
       </p>
+    </div>
+  )
+}
+
+// DemoAccountsSection manages the project's password ("demo") accounts.
+// Accounts save immediately through their own endpoints (unlike the fields
+// above, which go through the shared form Save button): the downstream login
+// page shows the password form as soon as one enabled account exists.
+function DemoAccountsSection({ projectId }: { projectId: string }) {
+  const [accounts, setAccounts] = useState<ProjectPasswordAccount[] | null>(null)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.projects.passwordAccounts(projectId).then(setAccounts).catch(() => setAccounts([]))
+  }, [projectId])
+
+  if (accounts === null) return null
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const add = () => run(async () => {
+    const created = await api.projects.createPasswordAccount(projectId, {
+      username: username.trim(),
+      password,
+      display_name: displayName.trim() || undefined,
+    })
+    setAccounts([...accounts, created])
+    setUsername(''); setPassword(''); setDisplayName('')
+  })
+
+  const toggleDisabled = (a: ProjectPasswordAccount) => run(async () => {
+    const updated = await api.projects.updatePasswordAccount(projectId, a.id, { disabled: !a.disabled })
+    setAccounts(accounts.map(x => (x.id === a.id ? updated : x)))
+  })
+
+  const resetPassword = (a: ProjectPasswordAccount) => {
+    const pw = window.prompt(`New password for "${a.username}" (min 8 chars):`)
+    if (!pw) return
+    void run(async () => {
+      await api.projects.updatePasswordAccount(projectId, a.id, { password: pw })
+    })
+  }
+
+  const remove = (a: ProjectPasswordAccount) => {
+    if (!window.confirm(`Delete demo account "${a.username}"? Existing sessions expire on their own; the account can no longer sign in.`)) return
+    void run(async () => {
+      await api.projects.deletePasswordAccount(projectId, a.id)
+      setAccounts(accounts.filter(x => x.id !== a.id))
+    })
+  }
+
+  return (
+    <div>
+      <label className="form-label">DEMO ACCOUNTS (PASSWORD LOGIN)</label>
+      <p style={{ fontSize: '0.8125rem', margin: '0.35rem 0 0.6rem', color: 'var(--fg-muted)' }}>
+        Pre-provisioned username/password sign-in for this project only — no self-registration.
+        The downstream login page shows the password form while at least one enabled account exists.
+      </p>
+      {accounts.length > 0 && (
+        <div className="flex flex-col gap-2" style={{ marginBottom: '0.75rem' }}>
+          {accounts.map(a => (
+            <div key={a.id} className="flex items-center gap-3" style={{ fontSize: '0.875rem', opacity: a.disabled ? 0.5 : 1 }}>
+              <span style={{ fontFamily: MONO }}>{a.username}</span>
+              {a.display_name && <span style={{ color: 'var(--fg-muted)' }}>{a.display_name}</span>}
+              {a.disabled && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>disabled</span>}
+              <span className="flex-1" />
+              <button onClick={() => resetPassword(a)} disabled={busy} className="btn-ghost" style={{ fontSize: '0.75rem' }}>
+                Reset password
+              </button>
+              <button onClick={() => toggleDisabled(a)} disabled={busy} className="btn-ghost" style={{ fontSize: '0.75rem' }}>
+                {a.disabled ? 'Enable' : 'Disable'}
+              </button>
+              <button onClick={() => remove(a)} disabled={busy} className="btn-ghost" title="Delete" style={{ color: 'var(--danger)' }}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={username}
+          onChange={e => setUsername(e.target.value)}
+          placeholder="username"
+          className="form-input"
+          style={{ fontFamily: MONO, flex: 1 }}
+          autoComplete="off"
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          placeholder="password (min 8)"
+          className="form-input"
+          style={{ flex: 1 }}
+          autoComplete="new-password"
+        />
+        <input
+          type="text"
+          value={displayName}
+          onChange={e => setDisplayName(e.target.value)}
+          placeholder="display name (optional)"
+          className="form-input"
+          style={{ flex: 1 }}
+        />
+        <button
+          onClick={add}
+          disabled={busy || !username.trim() || password.length < 8}
+          className="btn-primary"
+          style={busy || !username.trim() || password.length < 8 ? { cursor: 'not-allowed', opacity: 0.6 } : {}}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      {error && <p style={{ fontSize: '0.8125rem', marginTop: '0.4rem', color: 'var(--danger)' }}>{error}</p>}
     </div>
   )
 }
