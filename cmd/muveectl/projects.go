@@ -997,22 +997,9 @@ Examples:
 		}
 
 		targetURL := cl.server + "/api/projects/" + projectID + "/proxy" + path
-		req, err := http.NewRequest(strings.ToUpper(method), targetURL, body)
+		resp, err := cl.sendProxyRequest(strings.ToUpper(method), targetURL, headers, body)
 		if err != nil {
-			return fmt.Errorf("build request: %w", err)
-		}
-		for _, h := range headers {
-			parts := strings.SplitN(h, ":", 2)
-			if len(parts) != 2 {
-				return fmt.Errorf("bad header %q (expected 'Name: Value')", h)
-			}
-			req.Header.Add(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
-		}
-		req.Header.Set("Authorization", "Bearer "+cl.token)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("request: %w", err)
+			return err
 		}
 		defer resp.Body.Close()
 
@@ -1029,5 +1016,38 @@ Examples:
 		}
 		return nil
 	},
+}
+
+// sendProxyRequest builds and sends a request to the project proxy endpoint.
+// It must NOT follow redirects: the proxy surfaces the container's 3xx verbatim,
+// and a redirect Location is relative to the container — following it here would
+// resolve the Location against the muvee API host (…/api/projects/<id>/proxy/…)
+// and silently hit the muvee server itself instead of the container.
+func (c *client) sendProxyRequest(method, targetURL string, headers []string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, targetURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	for _, h := range headers {
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("bad header %q (expected 'Name: Value')", h)
+		}
+		req.Header.Add(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	httpClient := &http.Client{
+		// Surface the container's 3xx verbatim instead of following it (curl's
+		// default; use the app's own redirect target manually if needed).
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request: %w", err)
+	}
+	return resp, nil
 }
 

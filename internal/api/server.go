@@ -4472,6 +4472,20 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 // ─── Project Proxy ───────────────────────────────────────────────────────────
 
+// applyForwardedUserHeaders overwrites the full X-Forwarded-User-* header set
+// with the authenticated user's identity, mirroring the AuthResponseHeaders that
+// Traefik ForwardAuth injects. It must Set/Del every header in the set (not just
+// X-Forwarded-User) so a caller cannot smuggle a spoofed name/avatar/provider
+// through `projects curl -H`.
+func applyForwardedUserHeaders(h http.Header, user *store.User) {
+	h.Set("X-Forwarded-User", user.Email)
+	h.Set("X-Forwarded-User-Name", user.Name)
+	h.Set("X-Forwarded-User-Avatar", user.AvatarURL)
+	// The CLI proxy authenticates by API token, not an OAuth provider, so there
+	// is no provider to forward — delete any client-supplied value.
+	h.Del("X-Forwarded-User-Provider")
+}
+
 // handleProjectProxy reverse-proxies requests to the running container of a project.
 // The authenticated user's email is injected as X-Forwarded-User so the container
 // sees the same identity as it would through Traefik ForwardAuth.
@@ -4512,8 +4526,9 @@ func (s *Server) handleProjectProxy(w http.ResponseWriter, r *http.Request) {
 			}
 			req.URL.RawQuery = r.URL.RawQuery
 			req.Host = backendURL.Host
-			// Inject authenticated user identity.
-			req.Header.Set("X-Forwarded-User", user.Email)
+			// Inject authenticated user identity (overwrites any client-supplied
+			// X-Forwarded-User-* headers so they cannot be spoofed via curl -H).
+			applyForwardedUserHeaders(req.Header, user)
 			// Remove Authorization header so the API token is not leaked to the container.
 			req.Header.Del("Authorization")
 		},
