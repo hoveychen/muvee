@@ -89,6 +89,16 @@ MUVEECTL_PROFILE=prod muveectl projects list
 
 Precedence for profile selection: `--profile` flag > `MUVEECTL_PROFILE` env > active profile in config. The existing `--server` / `--token` flags and `MUVEECTL_SERVER` / `MUVEECTL_TOKEN` env vars still override the per-profile credentials.
 
+**IMPORTANT — resource IDs are scoped per server/profile.** Each profile points at a distinct Muvee server; project IDs, dataset IDs, and tokens exist **only** on the server they belong to. Running a `projects` / `datasets` command under the **wrong active profile** sends the request to a different server where that ID does not exist (or is not running) — you'll see `404 no running deployment`, "project not found", or `projects curl` returning unexpected content, which looks like the command "misbehaving" when in fact you hit the wrong environment.
+
+When more than one profile exists, before acting either run `muveectl profile current` to confirm the active profile, or pass `--profile <name>` explicitly on each command:
+
+```bash
+muveectl --profile momoso projects curl <id> /api/health
+```
+
+Tip: `projects list` only lists the current profile's projects. If a project ID isn't in the `projects list` output, you're almost certainly pointed at the wrong profile — switch with `muveectl profile use <name>` (or add `--profile`) before retrying.
+
 ## Projects
 
 ```bash
@@ -434,6 +444,8 @@ Pick the form that fits the use case.
 ### `projects curl` — one-off requests
 
 Best for scripts, health checks, quick API pokes. Single request, no local listener.
+
+> **Multiple profiles?** `PROJECT_ID` is resolved against the **active profile's** server. If curl returns `404 no running deployment` or unexpected content for an ID you know is deployed, you're likely on the wrong profile — confirm with `muveectl profile current` or pass `--profile <name>` (e.g. `muveectl --profile momoso projects curl <id> /`). See "Profiles" above.
 
 ```bash
 # GET the homepage
