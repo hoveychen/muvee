@@ -1,6 +1,6 @@
 ---
 name: muveectl
-version: 11
+version: 12
 description: Operate the Muvee self-hosted PaaS via the muveectl CLI. Manages projects (create, update, deploy, delete, restart, pause / resume, port-forward, curl, exec / shell / cp into containers, describe, env, events, build/runtime logs), datasets (create, scan, delete, file ops), API tokens, and credential profiles for multi-environment switching (dev/staging/prod). Use when the user wants to interact with their Muvee server from the command line, trigger deployments, restart a container without a redeploy, inspect container state (describe / env / events), debug container crashes and restarts, run commands or open a shell inside a project container, copy files in/out of a container, hit auth-protected services from the terminal, manage infrastructure resources, switch between Muvee environments, manage dataset files (ls, pull, push, rm, mkdir, mv, cp), or self-update muveectl from the configured server.
 ---
 
