@@ -154,7 +154,7 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("triggers-redeploy-of", "", "Comma-separated downstream project IDs to auto-redeploy after a successful build push (build-only projects)")
 	cmd.Flags().Int("container-port", 0, "Container port to publish (image-only project type; default 8080)")
 	cmd.Flags().String("memory-limit", "", "Container memory limit (e.g. 4g, 512m)")
-	cmd.Flags().String("volume-mount-path", "", "Container path for the persistent named volume (compose/image projects)")
+	cmd.Flags().String("volume-mount-path", "", "Container path backed by a persistent volume; set to /workspace for deployment projects (also used by image projects). Without it, deployment /workspace is ephemeral and data is lost on redeploy.")
 	cmd.Flags().String("description", "", "Project description")
 	cmd.Flags().String("icon", "", "Project icon (inline SVG or URL)")
 	cmd.Flags().String("tags", "", "Comma-separated project tags")

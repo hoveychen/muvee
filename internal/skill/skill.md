@@ -324,7 +324,7 @@ Fields returned per sample: `collected_at`, `cpu_percent`, `mem_usage_bytes`, `m
 
 ### Workspace
 
-The workspace at `/workspace` is the **only** persistent storage attached to the running container — anything written elsewhere is lost on restart or redeploy. See "Persistence (CRITICAL)" under "Git Repository Requirements" → "Runtime" before writing application code that handles user data, uploads, databases, or any state that must survive a redeploy.
+The workspace at `/workspace` is the **only** persistent storage attached to the running container — anything written elsewhere is lost on restart or redeploy. Note that even `/workspace` only persists once the project's `volume_mount_path` is set to `/workspace`; it is **not** attached automatically. See "Persistence (CRITICAL)" under "Git Repository Requirements" → "Runtime" before writing application code that handles user data, uploads, databases, or any state that must survive a redeploy.
 
 Use these commands to inspect and transfer files without redeploying.
 
@@ -713,18 +713,27 @@ The container filesystem is **ephemeral**. Any data written outside `/workspace`
 
 **The only persistent writable path inside a Muvee container is `/workspace`.** When deploying any project that needs to keep state across runs (user uploads, generated artifacts, SQLite/DuckDB files, model checkpoints, vector indexes, cache, logs you want to keep), the destination path **must** be under `/workspace`.
 
+**But `/workspace` is NOT mounted automatically — you must enable it.** A `deployment`-type project only gets a persistent `/workspace` bind mount when its `volume_mount_path` field is set to `/workspace`. If that field is empty (the default for a freshly created project), `/workspace` is just an ordinary directory in the ephemeral container layer, and **everything written under it is lost on every restart / redeploy** — the most insidious form of this bug, because the write path looks correct (`DATA_DIR=/workspace/data` in the Dockerfile) while nothing is actually persisted. Enable it once:
+
+```bash
+muveectl projects update PROJECT_ID --volume-mount-path /workspace
+```
+
+The mount is applied at container creation, so after setting the field you must **redeploy** (`muveectl projects deploy PROJECT_ID`) — a plain `restart` reuses the existing mount-less container and won't pick it up. Then verify: `muveectl projects describe PROJECT_ID` must list a bind mount at `/workspace` under `Mounts` (and `df /workspace` inside the container must show a real device, not `overlay`). An empty `Mounts` array means the field didn't take and your data is still ephemeral.
+
 When wiring up a project — whether you're writing the app code, the Dockerfile, or a config file — actively configure persistence:
 - Point the app's data directory at a subdirectory of `/workspace` (e.g. `/workspace/data`, `/workspace/uploads`, `/workspace/db`). Use the framework's standard env var (`DATA_DIR`, `STORAGE_PATH`, `SQLITE_PATH`, etc.) or hardcode the path if no knob exists.
 - For SQLite, set the DB file to `/workspace/<name>.db`. For DuckDB / LiteFS, similarly under `/workspace/`.
 - For user uploads, write to `/workspace/uploads/` and serve from there.
 - For caches you want to survive restarts (model weights, embeddings), use `/workspace/cache/`.
 - If the framework defaults to writing under `~`, `./data`, or `/var/lib/...`, **override it** to point under `/workspace` — those defaults will silently lose data.
+- **Set `volume_mount_path=/workspace` on the project itself** (see the caveat above). Pointing `DATA_DIR` at `/workspace/data` in the Dockerfile is only half the job — without the project field, `/workspace` isn't backed by a persistent volume and the Dockerfile setting is moot.
 
 **Do not** assume "I'll just put it in `./data` and it'll be fine" — that path is inside the ephemeral container layer and disappears on the next deploy. If a user reports data loss after redeploy, the cause is almost always a write path that wasn't under `/workspace`.
 
 (Read-only dataset mounts at `/data/<dataset_name>` are separate; see "Dataset mounts" below — those are sourced from NFS and not user-writable for persistence.)
 
-**Compose and image projects use a different persistence model.** The `/workspace` rule applies to `deployment`-type projects (where Muvee builds the image and provisions the workspace mount). For:
+**Compose and image projects use a different persistence model.** The `/workspace` rule applies to `deployment`-type projects — but only once `volume_mount_path` is set to `/workspace` on the project (see the caveat above; the mount is **not** provisioned automatically). For:
 - `--compose` projects: persistence is whatever the docker-compose.yml declares — named volumes, bind mounts, etc. Compose projects are pinned to one deploy node so docker-local volumes survive redeploys.
 - `--image-ref` projects: pass `--volume-mount-path /your/path` to mount a docker named volume at that container path. The volume name is fixed (`app-data`) and survives across redeploys on the pinned deploy node. Without `--volume-mount-path`, the container has no persistent storage.
 
