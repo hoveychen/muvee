@@ -67,25 +67,36 @@ func (p *twitterProvider) deriveVerifier(state string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (p *twitterProvider) AuthCodeURL(state string) string {
+func (p *twitterProvider) cfgFor(redirectURL string) *oauth2.Config {
+	if redirectURL == "" {
+		return p.config
+	}
+	c := *p.config
+	c.RedirectURL = redirectURL
+	return &c
+}
+
+func (p *twitterProvider) CanonicalRedirectURL() string { return p.config.RedirectURL }
+
+func (p *twitterProvider) AuthCodeURL(state, redirectURL string) string {
 	verifier := p.deriveVerifier(state)
-	return p.config.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
+	return p.cfgFor(redirectURL).AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
 }
 
 // UserInfo is unsupported on the email path: Twitter never exposes email
 // via OAuth2 v2 and the PKCE flow needs state. Callers must use the
 // SubjectProvider path. We return an error here so any caller that picks
 // the wrong path fails loudly rather than silently inserting an empty user.
-func (p *twitterProvider) UserInfo(ctx context.Context, code string) (string, string, string, error) {
+func (p *twitterProvider) UserInfo(ctx context.Context, code, redirectURL string) (string, string, string, error) {
 	return "", "", "", fmt.Errorf("twitter requires the SubjectProvider path; use UserInfoWithSubject with state")
 }
 
-func (p *twitterProvider) UserInfoWithSubject(ctx context.Context, code, state string) (sub, email, name, avatarURL string, err error) {
+func (p *twitterProvider) UserInfoWithSubject(ctx context.Context, code, state, redirectURL string) (sub, email, name, avatarURL string, err error) {
 	if state == "" {
 		return "", "", "", "", fmt.Errorf("twitter PKCE requires the original state to recompute code_verifier")
 	}
 	verifier := p.deriveVerifier(state)
-	token, err := p.config.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+	token, err := p.cfgFor(redirectURL).Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("exchange code: %w", err)
 	}

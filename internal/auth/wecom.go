@@ -38,21 +38,29 @@ func newWeComProvider(redirectURL string) (*wecomProvider, error) {
 	}, nil
 }
 
-func (p *wecomProvider) Name() string        { return "wecom" }
-func (p *wecomProvider) DisplayName() string { return "企业微信" }
-func (p *wecomProvider) OrgScoped() bool     { return true }
+func (p *wecomProvider) Name() string                 { return "wecom" }
+func (p *wecomProvider) DisplayName() string          { return "企业微信" }
+func (p *wecomProvider) OrgScoped() bool              { return true }
+func (p *wecomProvider) CanonicalRedirectURL() string { return p.redirectURL }
 
-// AuthCodeURL redirects the user to the WeCom QR-code login page.
-func (p *wecomProvider) AuthCodeURL(state string) string {
+// AuthCodeURL redirects the user to the WeCom QR-code login page. redirectURL
+// overrides the baked callback when non-empty (multi-domain). WeCom binds
+// identity via the corp token + code at UserInfo, so redirect_uri only appears
+// here — the token exchange never re-sends it.
+func (p *wecomProvider) AuthCodeURL(state, redirectURL string) string {
+	rd := redirectURL
+	if rd == "" {
+		rd = p.redirectURL
+	}
 	params := url.Values{}
 	params.Set("appid", p.corpID)
 	params.Set("agentid", p.agentID)
-	params.Set("redirect_uri", p.redirectURL)
+	params.Set("redirect_uri", rd)
 	params.Set("state", state)
 	return "https://open.work.weixin.qq.com/wwopen/sso/qrConnect?" + params.Encode()
 }
 
-func (p *wecomProvider) UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error) {
+func (p *wecomProvider) UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error) {
 	accessToken, err := p.getCorpToken(ctx)
 	if err != nil {
 		return "", "", "", err

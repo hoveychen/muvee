@@ -9,9 +9,20 @@ type Provider interface {
 	// DisplayName returns a human-readable name for the provider.
 	DisplayName() string
 	// AuthCodeURL returns the authorization URL to redirect the user to.
-	AuthCodeURL(state string) string
-	// UserInfo exchanges the authorization code for the user's email, name, and avatar URL.
-	UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error)
+	// redirectURL overrides the provider's baked-in callback URL when non-empty
+	// so callers serving more than one base domain can send the user back to
+	// whichever domain they started on; "" uses the baked default. The same
+	// redirectURL MUST be passed to the matching UserInfo call — OAuth2 requires
+	// the authorize and token-exchange redirect_uri to be identical.
+	AuthCodeURL(state, redirectURL string) string
+	// UserInfo exchanges the authorization code for the user's email, name, and
+	// avatar URL. redirectURL must match the value passed to AuthCodeURL for
+	// this flow ("" uses the baked default).
+	UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error)
+	// CanonicalRedirectURL returns the provider's baked-in callback URL, from
+	// which multi-domain callers derive a per-request redirect by rebasing its
+	// host onto the base domain the request arrived on.
+	CanonicalRedirectURL() string
 	// OrgScoped returns true if the provider inherently restricts users to a specific
 	// organisation (e.g. Feishu, WeCom, DingTalk). For such providers the email domain
 	// check is skipped because membership in the org is sufficient authorisation.
@@ -37,5 +48,8 @@ type SubjectProvider interface {
 	// returned by the IdP in the callback URL. Most providers ignore it,
 	// but PKCE-based flows (Twitter/X) use it to recompute the code_verifier
 	// without persisting per-flow state on the server.
-	UserInfoWithSubject(ctx context.Context, code, state string) (sub, email, name, avatarURL string, err error)
+	//
+	// redirectURL follows the same contract as UserInfo: it must match the
+	// value passed to AuthCodeURL for this flow ("" uses the baked default).
+	UserInfoWithSubject(ctx context.Context, code, state, redirectURL string) (sub, email, name, avatarURL string, err error)
 }

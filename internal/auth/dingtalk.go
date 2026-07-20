@@ -37,22 +37,31 @@ func newDingTalkProvider(redirectURL string) (*dingtalkProvider, error) {
 	}, nil
 }
 
-func (p *dingtalkProvider) Name() string        { return "dingtalk" }
-func (p *dingtalkProvider) DisplayName() string { return "钉钉" }
-func (p *dingtalkProvider) OrgScoped() bool     { return true }
+func (p *dingtalkProvider) Name() string                 { return "dingtalk" }
+func (p *dingtalkProvider) DisplayName() string          { return "钉钉" }
+func (p *dingtalkProvider) OrgScoped() bool              { return true }
+func (p *dingtalkProvider) CanonicalRedirectURL() string { return p.redirectURL }
 
-func (p *dingtalkProvider) AuthCodeURL(state string) string {
+// AuthCodeURL redirects the user to DingTalk's consent page. redirectURL
+// overrides the baked callback when non-empty (multi-domain). DingTalk's token
+// exchange keys on code + clientId/secret only, so redirect_uri appears only
+// here.
+func (p *dingtalkProvider) AuthCodeURL(state, redirectURL string) string {
+	rd := redirectURL
+	if rd == "" {
+		rd = p.redirectURL
+	}
 	params := url.Values{}
 	params.Set("client_id", p.clientID)
 	params.Set("response_type", "code")
 	params.Set("scope", "openid")
 	params.Set("prompt", "consent")
 	params.Set("state", state)
-	params.Set("redirect_uri", p.redirectURL)
+	params.Set("redirect_uri", rd)
 	return "https://login.dingtalk.com/oauth2/auth?" + params.Encode()
 }
 
-func (p *dingtalkProvider) UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error) {
+func (p *dingtalkProvider) UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error) {
 	accessToken, err := p.exchangeToken(ctx, code)
 	if err != nil {
 		return "", "", "", err

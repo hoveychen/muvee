@@ -77,16 +77,26 @@ func newSlackProvider(redirectURL string) (*slackProvider, error) {
 	}, nil
 }
 
-func (p *slackProvider) Name() string        { return "slack" }
-func (p *slackProvider) DisplayName() string { return "Slack" }
-func (p *slackProvider) OrgScoped() bool     { return false }
+func (p *slackProvider) Name() string                 { return "slack" }
+func (p *slackProvider) DisplayName() string          { return "Slack" }
+func (p *slackProvider) OrgScoped() bool              { return false }
+func (p *slackProvider) CanonicalRedirectURL() string { return p.config.RedirectURL }
 
-func (p *slackProvider) AuthCodeURL(state string) string {
-	return p.config.AuthCodeURL(state)
+func (p *slackProvider) cfgFor(redirectURL string) *oauth2.Config {
+	if redirectURL == "" {
+		return p.config
+	}
+	c := *p.config
+	c.RedirectURL = redirectURL
+	return &c
 }
 
-func (p *slackProvider) UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error) {
-	token, err := p.config.Exchange(ctx, code)
+func (p *slackProvider) AuthCodeURL(state, redirectURL string) string {
+	return p.cfgFor(redirectURL).AuthCodeURL(state)
+}
+
+func (p *slackProvider) UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error) {
+	token, err := p.cfgFor(redirectURL).Exchange(ctx, code)
 	if err != nil {
 		return "", "", "", fmt.Errorf("exchange code: %w", err)
 	}

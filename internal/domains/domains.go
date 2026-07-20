@@ -10,7 +10,10 @@
 // domain the user is actually on.
 package domains
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
 // Parse builds the ordered, de-duplicated list of platform base domains from
 // the canonical BASE_DOMAIN and the optional comma-separated BASE_DOMAINS.
@@ -64,6 +67,43 @@ func Match(host string, bases []string) (base string, ok bool) {
 		return "", false
 	}
 	return best, true
+}
+
+// RebaseHost rewrites rawURL so its host sits under targetBase instead of
+// whatever configured base domain it currently belongs to, preserving the
+// subdomain label(s), scheme, port and path. It is how a canonical OAuth
+// redirect or forward-auth base URL (baked for one base domain) is retargeted
+// onto the base domain the user is actually on: e.g.
+//
+//	RebaseHost("https://app.muveeai.com/auth/feishu/callback",
+//	    []string{"muveeai.com", "muvee.ai"}, "muvee.ai")
+//	  → "https://app.muvee.ai/auth/feishu/callback"
+//
+// rawURL is returned unchanged when it can't be parsed, its host matches no
+// configured base, it already sits under targetBase, or targetBase is empty.
+func RebaseHost(rawURL string, bases []string, targetBase string) string {
+	targetBase = strings.ToLower(strings.TrimSpace(targetBase))
+	if targetBase == "" {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return rawURL
+	}
+	host := NormalizeHost(u.Host)
+	cur, ok := Match(host, bases)
+	if !ok || cur == targetBase {
+		return rawURL
+	}
+	// prefix keeps the subdomain label(s) plus the separating dot ("app." or
+	// "" for an apex host equal to the base).
+	prefix := strings.TrimSuffix(host, cur)
+	newHost := prefix + targetBase
+	if port := u.Port(); port != "" {
+		newHost += ":" + port
+	}
+	u.Host = newHost
+	return u.String()
 }
 
 // NormalizeHost lowercases host, trims surrounding space and a trailing dot,

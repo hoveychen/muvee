@@ -64,20 +64,29 @@ func newAppleProvider(cfg AppleConfig, redirectURL string) (*appleProvider, erro
 	}, nil
 }
 
-func (p *appleProvider) Name() string        { return "apple" }
-func (p *appleProvider) DisplayName() string { return "Apple" }
-func (p *appleProvider) OrgScoped() bool     { return false }
+func (p *appleProvider) Name() string                 { return "apple" }
+func (p *appleProvider) DisplayName() string          { return "Apple" }
+func (p *appleProvider) OrgScoped() bool              { return false }
+func (p *appleProvider) CanonicalRedirectURL() string { return p.redirectURL }
+
+// redirectFor returns redirectURL when non-empty, else the baked default.
+func (p *appleProvider) redirectFor(redirectURL string) string {
+	if redirectURL != "" {
+		return redirectURL
+	}
+	return p.redirectURL
+}
 
 // AuthCodeURL builds Apple's authorize URL with response_mode=query so the
 // callback works with the existing GET-based chi route. The trade-off is
 // that we never see the user's name -- Apple only surfaces it in the
 // form_post body on first sign-in. Users can edit their display name in
 // the muvee profile page after sign-in.
-func (p *appleProvider) AuthCodeURL(state string) string {
+func (p *appleProvider) AuthCodeURL(state, redirectURL string) string {
 	v := url.Values{
 		"response_type": {"code"},
 		"client_id":     {p.cfg.ClientID},
-		"redirect_uri":  {p.redirectURL},
+		"redirect_uri":  {p.redirectFor(redirectURL)},
 		"scope":         {"email"},
 		"state":         {state},
 		"response_mode": {"query"},
@@ -103,12 +112,12 @@ func (p *appleProvider) generateClientSecret() (string, error) {
 	return token.SignedString(p.privateKey)
 }
 
-func (p *appleProvider) UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error) {
-	_, email, name, avatarURL, err = p.UserInfoWithSubject(ctx, code, "")
+func (p *appleProvider) UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error) {
+	_, email, name, avatarURL, err = p.UserInfoWithSubject(ctx, code, "", redirectURL)
 	return
 }
 
-func (p *appleProvider) UserInfoWithSubject(ctx context.Context, code, _ string) (sub, email, name, avatarURL string, err error) {
+func (p *appleProvider) UserInfoWithSubject(ctx context.Context, code, _, redirectURL string) (sub, email, name, avatarURL string, err error) {
 	clientSecret, err := p.generateClientSecret()
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("sign client_secret: %w", err)
@@ -116,7 +125,7 @@ func (p *appleProvider) UserInfoWithSubject(ctx context.Context, code, _ string)
 	cfg := &oauth2.Config{
 		ClientID:     p.cfg.ClientID,
 		ClientSecret: clientSecret,
-		RedirectURL:  p.redirectURL,
+		RedirectURL:  p.redirectFor(redirectURL),
 		Endpoint: oauth2.Endpoint{
 			AuthURL:   "https://appleid.apple.com/auth/authorize",
 			TokenURL:  "https://appleid.apple.com/auth/token",

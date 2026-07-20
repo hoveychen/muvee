@@ -157,12 +157,27 @@ func (s *Service) DefaultProvider() string {
 	return ""
 }
 
-func (s *Service) AuthCodeURL(providerName, state string) (string, error) {
+// AuthCodeURL builds the provider's authorize URL. redirectURL overrides the
+// provider's baked callback when non-empty so a multi-domain caller can point
+// the flow back at whichever base domain the request arrived on; "" keeps the
+// baked default. The SAME redirectURL must be handed to HandleCallback.
+func (s *Service) AuthCodeURL(providerName, state, redirectURL string) (string, error) {
 	p, ok := s.providers[providerName]
 	if !ok {
 		return "", fmt.Errorf("unknown provider %q", providerName)
 	}
-	return p.AuthCodeURL(state), nil
+	return p.AuthCodeURL(state, redirectURL), nil
+}
+
+// CanonicalRedirectURL returns the baked callback URL of a registered
+// provider, from which a multi-domain caller derives the per-request redirect
+// by rebasing its host. Returns an error for an unknown provider.
+func (s *Service) CanonicalRedirectURL(providerName string) (string, error) {
+	p, ok := s.providers[providerName]
+	if !ok {
+		return "", fmt.Errorf("unknown provider %q", providerName)
+	}
+	return p.CanonicalRedirectURL(), nil
 }
 
 // ErrNotInvited is returned by HandleCallback when access_mode is "invite" and
@@ -171,13 +186,17 @@ func (s *Service) AuthCodeURL(providerName, state string) (string, error) {
 // "contact your administrator" hint instead of a generic 401.
 var ErrNotInvited = fmt.Errorf("not invited; please contact your administrator")
 
-func (s *Service) HandleCallback(ctx context.Context, providerName, code, inviteToken string) (*store.User, string, error) {
+// HandleCallback exchanges the OAuth code for a user identity. redirectURL
+// must match the value passed to AuthCodeURL for this flow (OAuth2 requires
+// the authorize and token-exchange redirect_uri to be identical); "" uses the
+// provider's baked default.
+func (s *Service) HandleCallback(ctx context.Context, providerName, code, inviteToken, redirectURL string) (*store.User, string, error) {
 	p, ok := s.providers[providerName]
 	if !ok {
 		return nil, "", fmt.Errorf("unknown provider %q", providerName)
 	}
 
-	email, name, avatarURL, err := p.UserInfo(ctx, code)
+	email, name, avatarURL, err := p.UserInfo(ctx, code, redirectURL)
 	if err != nil {
 		return nil, "", fmt.Errorf("user info: %w", err)
 	}

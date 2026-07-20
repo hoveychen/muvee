@@ -13,10 +13,11 @@ type fakeProvider struct {
 	orgScoped bool
 }
 
-func (p fakeProvider) Name() string              { return p.name }
-func (p fakeProvider) DisplayName() string       { return p.name }
-func (p fakeProvider) AuthCodeURL(string) string { return "" }
-func (p fakeProvider) UserInfo(context.Context, string) (string, string, string, error) {
+func (p fakeProvider) Name() string                      { return p.name }
+func (p fakeProvider) DisplayName() string               { return p.name }
+func (p fakeProvider) AuthCodeURL(_, _ string) string    { return "" }
+func (p fakeProvider) CanonicalRedirectURL() string      { return "" }
+func (p fakeProvider) UserInfo(context.Context, string, string) (string, string, string, error) {
 	return "", "", "", nil
 }
 func (p fakeProvider) OrgScoped() bool { return p.orgScoped }
@@ -30,7 +31,7 @@ type fakeSubjectProvider struct {
 	avatarURL string
 }
 
-func (p fakeSubjectProvider) UserInfoWithSubject(context.Context, string, string) (string, string, string, string, error) {
+func (p fakeSubjectProvider) UserInfoWithSubject(context.Context, string, string, string) (string, string, string, string, error) {
 	return p.sub, p.email, p.name, p.avatarURL, nil
 }
 
@@ -87,7 +88,7 @@ func TestSubjectProviderOptional(t *testing.T) {
 	if !ok {
 		t.Fatalf("fakeSubjectProvider must satisfy SubjectProvider")
 	}
-	gotSub, gotEmail, gotName, gotAvatar, err := sp.UserInfoWithSubject(context.Background(), "code", "state")
+	gotSub, gotEmail, gotName, gotAvatar, err := sp.UserInfoWithSubject(context.Background(), "code", "state", "")
 	if err != nil {
 		t.Fatalf("UserInfoWithSubject error: %v", err)
 	}

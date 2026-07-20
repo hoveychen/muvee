@@ -177,6 +177,30 @@ func (s *Server) baseDomainForHost(host string) string {
 	return s.baseDomain
 }
 
+// requestHost returns the user-visible host for this request. Behind Traefik
+// the original Host arrives in X-Forwarded-Host; bare requests fall back to
+// r.Host.
+func requestHost(r *http.Request) string {
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		return strings.ToLower(strings.TrimSpace(h))
+	}
+	return strings.ToLower(strings.TrimSpace(r.Host))
+}
+
+// oauthRedirectFor returns the per-request OAuth callback URL for a provider:
+// the provider's canonical baked redirect with its host rebased onto the base
+// domain the request arrived on, so a panel login started on app.muvee.ai
+// comes back to app.muvee.ai (and drops its session cookie there) instead of
+// the canonical muveeai.com. Returns "" when the provider is unknown or has no
+// baked redirect, in which case callers fall back to the provider default.
+func (s *Server) oauthRedirectFor(providerName string, r *http.Request) string {
+	canonical, err := s.auth.CanonicalRedirectURL(providerName)
+	if err != nil || canonical == "" {
+		return ""
+	}
+	return domains.RebaseHost(canonical, s.baseDomains, s.baseDomainForHost(requestHost(r)))
+}
+
 // internalAPIKey returns the deterministic shared key used by muvee-authservice
 // to call this server's /api/internal/* endpoints. Both processes derive it
 // from JWT_SECRET so no extra env var is required.
@@ -1000,7 +1024,7 @@ func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 	providerName := chi.URLParam(r, "provider")
 	state := uuid.New().String()
-	authURL, err := s.auth.AuthCodeURL(providerName, state)
+	authURL, err := s.auth.AuthCodeURL(providerName, state, s.oauthRedirectFor(providerName, r))
 	if err != nil {
 		http.Error(w, "unknown provider", http.StatusNotFound)
 		return
@@ -1068,7 +1092,7 @@ func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 		providerName = s.auth.DefaultProvider()
 	}
 	state := uuid.New().String()
-	authURL, err := s.auth.AuthCodeURL(providerName, state)
+	authURL, err := s.auth.AuthCodeURL(providerName, state, s.oauthRedirectFor(providerName, r))
 	if err != nil {
 		http.Error(w, "unknown provider", http.StatusNotFound)
 		return
@@ -1127,7 +1151,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 		Name: "muvee_invite_token", Value: "", MaxAge: -1, Path: "/",
 	})
 
-	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, code, inviteToken)
+	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, code, inviteToken, s.oauthRedirectFor(providerName, r))
 	if err != nil {
 		// Surface the not-invited case as a 403 with a known error code so the
 		// frontend can render a friendly hint instead of a generic 401.

@@ -623,6 +623,26 @@ func cookieDomainForRequest(r *http.Request) string {
 	return cookieDomainForHost(inboundHost(r))
 }
 
+// forwardAuthBaseForHost rebases the canonical forwardAuthBase onto the base
+// domain the request host belongs to, so the OAuth flow (and the session
+// cookie it drops) stays on the domain the user is actually on. A host that
+// matches no configured base falls back to the canonical forwardAuthBase.
+func forwardAuthBaseForHost(host string) string {
+	return domains.RebaseHost(forwardAuthBase, cookieBaseDomains, cookieDomainForHost(host))
+}
+
+// oauthRedirectForHost returns the per-request OAuth callback URL for a
+// provider: the canonical `{forwardAuthBase}/_oauth/{provider}` rebased onto
+// the request host's base domain. The redirect_uri stays canonical to a single
+// host per base domain (the forwardAuthBase host), never the raw request host,
+// so a project subdomain like my-project.muvee.ai still bounces through
+// app.muvee.ai and the provider dashboard only needs one callback per domain
+// whitelisted. Passed to both AuthCodeURL and UserInfo so the two redirect_uri
+// values match.
+func oauthRedirectForHost(host, providerName string) string {
+	return forwardAuthBaseForHost(host) + "/_oauth/" + providerName
+}
+
 // originMatchesBaseDomain reports whether origin is https://base or
 // https://*.base (scheme is not constrained; a misconfigured plaintext
 // deployment would still be accepted, matching how cookies already flow).
@@ -681,7 +701,7 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
-		http.Redirect(w, r, p.AuthCodeURL(state), http.StatusFound)
+		http.Redirect(w, r, p.AuthCodeURL(state, oauthRedirectForHost(inboundHost(r), providerName)), http.StatusFound)
 		return
 	}
 
@@ -1093,7 +1113,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if code == "" {
 		code = r.URL.Query().Get("authCode") // DingTalk uses authCode instead of code
 	}
-	email, name, avatarURL, err := p.UserInfo(ctx, code)
+	email, name, avatarURL, err := p.UserInfo(ctx, code, oauthRedirectForHost(inboundHost(r), providerName))
 	if err != nil {
 		log.Printf("authservice: UserInfo (%s): %v", providerName, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
@@ -1378,7 +1398,7 @@ func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, provider
 		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
-	http.Redirect(w, r, p.AuthCodeURL(state), http.StatusFound)
+	http.Redirect(w, r, p.AuthCodeURL(state, oauthRedirectForHost(inboundHost(r), providerName)), http.StatusFound)
 }
 
 // handleDeviceToken is polled by the CLI to check whether the user has completed

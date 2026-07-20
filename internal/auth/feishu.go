@@ -45,21 +45,30 @@ func newFeishuProvider(redirectURL string) (*feishuProvider, error) {
 	}, nil
 }
 
-func (p *feishuProvider) Name() string        { return "feishu" }
-func (p *feishuProvider) DisplayName() string { return "飞书 / Lark" }
-func (p *feishuProvider) OrgScoped() bool     { return true }
+func (p *feishuProvider) Name() string                 { return "feishu" }
+func (p *feishuProvider) DisplayName() string          { return "飞书 / Lark" }
+func (p *feishuProvider) OrgScoped() bool              { return true }
+func (p *feishuProvider) CanonicalRedirectURL() string { return p.redirectURL }
 
-func (p *feishuProvider) AuthCodeURL(state string) string {
+// redirectFor returns redirectURL when non-empty, else the baked default.
+func (p *feishuProvider) redirectFor(redirectURL string) string {
+	if redirectURL != "" {
+		return redirectURL
+	}
+	return p.redirectURL
+}
+
+func (p *feishuProvider) AuthCodeURL(state, redirectURL string) string {
 	params := url.Values{}
 	params.Set("app_id", p.appID)
-	params.Set("redirect_uri", p.redirectURL)
+	params.Set("redirect_uri", p.redirectFor(redirectURL))
 	params.Set("scope", "contact:user.email:readonly")
 	params.Set("state", state)
 	return p.baseURL + "/open-apis/authen/v1/authorize?" + params.Encode()
 }
 
-func (p *feishuProvider) UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error) {
-	accessToken, err := p.exchangeToken(ctx, code)
+func (p *feishuProvider) UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error) {
+	accessToken, err := p.exchangeToken(ctx, code, redirectURL)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -105,13 +114,13 @@ func (p *feishuProvider) UserInfo(ctx context.Context, code string) (email, name
 	return email, result.Data.Name, result.Data.AvatarURL, nil
 }
 
-func (p *feishuProvider) exchangeToken(ctx context.Context, code string) (string, error) {
+func (p *feishuProvider) exchangeToken(ctx context.Context, code, redirectURL string) (string, error) {
 	payload := map[string]string{
 		"grant_type":    "authorization_code",
 		"client_id":     p.appID,
 		"client_secret": p.appSecret,
 		"code":          code,
-		"redirect_uri":  p.redirectURL,
+		"redirect_uri":  p.redirectFor(redirectURL),
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/open-apis/authen/v2/oauth/token", bytes.NewReader(body))
