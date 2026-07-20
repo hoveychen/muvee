@@ -453,10 +453,10 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 		httpsRouter.Middlewares = []string{mwName}
 
 		if dep.AuthBypassPaths != "" {
-			addBypassRouters(&cfg, name, host, httpsRouter.TLS, dep.AuthBypassPaths)
+			addBypassRouters(&cfg, name, []string{host}, httpsRouter.TLS, dep.AuthBypassPaths)
 		}
 
-		addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
+		addDeviceFlowRouter(&cfg, name, []string{host}, httpsRouter.TLS)
 	}
 
 	cfg.HTTP.Routers[name] = httpsRouter
@@ -575,7 +575,7 @@ func TestTraefikConfig_DeviceFlowRouter_PublicProject(t *testing.T) {
 	if needsForwardAuth {
 		t.Fatalf("test setup error: needsForwardAuth should be false for a public + auth_required=false deployment")
 	}
-	addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
+	addDeviceFlowRouter(&cfg, name, []string{host}, httpsRouter.TLS)
 
 	cfg.HTTP.Routers[name] = httpsRouter
 
