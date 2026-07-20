@@ -106,6 +106,7 @@ cp .env.zh.example .env
 # 编辑 .env，填写 BASE_DOMAIN、至少一个 Provider 的配置、JWT_SECRET、ACME_EMAIL
 #             ADMIN_EMAILS（管理员邮箱）、REGISTRY_USER、REGISTRY_PASSWORD
 #             AGENT_SECRET（agent 认证共享密钥，所有 agent 节点需相同）
+#   若要让同一实例在多个 apex 域名下服务，另设 BASE_DOMAINS —— 见 docs/configuration.md 的「多域名」章节。
 ```
 
 **第 3 步 — 生成 Registry 凭证**

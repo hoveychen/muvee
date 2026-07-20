@@ -105,6 +105,8 @@ cp .env.example .env
 #             JWT_SECRET, ACME_EMAIL, ADMIN_EMAILS,
 #             REGISTRY_USER, REGISTRY_PASSWORD,
 #             AGENT_SECRET (shared secret for agent authentication)
+#   To serve the same instance under several apex domains, also set
+#   BASE_DOMAINS — see docs/configuration.md#multi-domain.
 ```
 
 **3 — Generate registry credentials**

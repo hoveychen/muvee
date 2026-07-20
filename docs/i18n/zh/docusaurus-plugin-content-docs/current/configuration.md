@@ -16,6 +16,7 @@ sidebar_position: 3
 | `MIGRATIONS_DIR` | `./db/migrations` | SQL 迁移文件路径 |
 | `PORT` | `8080` | HTTP 监听端口 |
 | `BASE_DOMAIN` | `localhost` | 根域名；项目以 `{prefix}.BASE_DOMAIN` 的形式对外提供服务。同时通过 `/api/agent/config` 下发给 Agent。 |
+| `BASE_DOMAINS` | — | 可选，逗号分隔的**额外**根域名列表，让同一实例在多个 apex 域名下服务（多域名）。`BASE_DOMAIN` 仍为 canonical 默认值。详见下方 [多域名](#多域名)。 |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth2 客户端 ID。设置后启用 Google 登录。详见 [Google OAuth2](./auth/auth-google)。 |
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth2 客户端密钥 |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Google OAuth2 回调地址 |
@@ -67,6 +68,28 @@ sidebar_position: 3
 :::info 镜像仓库凭据和 BASE_DOMAIN 自动下发
 Agent 在启动时通过 `GET /api/agent/config` 从控制平面获取 `REGISTRY_ADDR`、`REGISTRY_USER`、`REGISTRY_PASSWORD` 和 `BASE_DOMAIN`。这些配置只需在控制平面上设置一次——无需在各个 Agent 节点上单独配置。
 :::
+
+## 多域名
+
+默认情况下 muvee 只在单个 `BASE_DOMAIN` 下服务。要让**同一实例**在多个 apex 域名下服务——例如一个海外域名和一个国内/ICP 域名——把 `BASE_DOMAINS` 设为逗号分隔的额外根域名列表：
+
+```bash
+BASE_DOMAIN=muveeai.com          # canonical 默认值
+BASE_DOMAINS=muveeai.com,muvee.ai
+```
+
+`BASE_DOMAIN` 仍是 canonical 回退值（当请求 host 不匹配任何已配置域名时使用）。每个请求 muvee 会解析出 host 所属的根域名，因此以下都跟随用户实际所在的域名：
+
+- **认证 cookie** 按匹配到的根域名设置 Domain（在 `muvee.ai` 登录得到 `.muvee.ai` cookie，在其子域名间共享）。
+- **OAuth redirect_uri** rebase 到匹配的根域名，并保持每个域名单一 canonical host（如 `https://app.muvee.ai/_oauth/google`），使项目子域名仍经面板/authservice host 中转。
+- **Traefik 路由**用单条 OR 的 `Host()` 规则匹配每个项目/隧道前缀在各根域名下的 host，每个 host 各签一张证书。
+- **CORS / 来源**校验接受每个已配置根域名的 canonical 来源及其任一子域名。
+
+### 每个额外根域名的前提
+
+- **DNS**：与 canonical 域名一样，把 `<base>`（A 记录）和 `*.<base>`（通配 A 记录）指向本服务器 IP。
+- **TLS**：额外根域名**没有通配证书**——每个项目子域名各自通过 Let's Encrypt HTTP-01 申请证书，因此该域名必须在 80 端口公网可达以完成 ACME 挑战。
+- **OAuth Provider 后台**：把每个域名的回调 URL 注册到你使用的每个 provider，如 `https://app.<base>/auth/google/callback`（控制面板登录）和 `https://app.<base>/_oauth/google`（per-project ForwardAuth）。
 
 ## 运行时设置（管理员后台）
 
