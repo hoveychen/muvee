@@ -112,6 +112,11 @@ services:
       DATASET_NFS_BASE_PATH: ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}
       # Git repository base path: self-hosted bare repos for projects.
       GIT_REPO_BASE_PATH: ${GIT_REPO_BASE_PATH:-/opt/muvee/git-repos}
+      # Branding assets (uploaded logo/favicon). Kept under the persistent
+      # workspace volume so they survive container recreation (e.g. Watchtower
+      # image auto-updates). Without this it defaults to the ephemeral
+      # /data/branding inside the container and uploaded logos vanish on redeploy.
+      BRANDING_DIR: ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}/branding
       # Tunnel backend URL: how Traefik reaches this server for adhoc tunnel traffic.
       TUNNEL_BACKEND_URL: ${TUNNEL_BACKEND_URL:-http://muvee-server:8080}
       # Path (inside the container) of the Traefik JSON access log tailed for per-project traffic metrics.

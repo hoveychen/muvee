@@ -113,6 +113,11 @@ services:
       # Read-only view of Traefik's ACME store so the admin "Certificates"
       # panel can report per-domain issuance state.
       - letsencrypt_data:/letsencrypt:ro
+      # Uploaded branding assets (logo/favicon). Persisted so they survive
+      # container recreation (e.g. Watchtower image auto-updates); without this
+      # they land in the container's ephemeral layer at the default
+      # BRANDING_DIR=/data/branding and vanish on every redeploy.
+      - branding_data:/data/branding
       # Uncomment the line below (and set VOLUME_NFS_BASE_PATH in .env) to enable workspace file management.
       # The NFS share must already be mounted on this host at that path.
       # - ${VOLUME_NFS_BASE_PATH}:${VOLUME_NFS_BASE_PATH}:rw
@@ -277,6 +282,7 @@ volumes:
   registry_data:
   letsencrypt_data:
   traefik_logs:
+  branding_data:
 
 networks:
   # explicit `name` prevents Docker Compose from prepending the project prefix (muvee_muvee-net),
