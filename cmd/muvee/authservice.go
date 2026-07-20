@@ -304,7 +304,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		// completes (the post-OAuth redirect back to the original URL would
 		// otherwise lose the query string visibility to the callback handler).
 		if inviteToken != "" {
-			setInviteTokenCookie(w, inviteToken)
+			setInviteTokenCookie(w, r, inviteToken)
 		}
 		redirectToLogin(w, r)
 		return
@@ -336,7 +336,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		if err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
 			log.Printf("authservice: consume invite (authed, email=%s): %v", claims.Email, err)
 		}
-		clearInviteTokenCookie(w)
+		clearInviteTokenCookie(w, r)
 	}
 
 	if allowedDomains := r.URL.Query().Get("domains"); allowedDomains != "" {
@@ -436,18 +436,18 @@ func extractInviteTokenFromForwardedURI(r *http.Request) string {
 	return strings.TrimSpace(vals.Get("invite_token"))
 }
 
-func setInviteTokenCookie(w http.ResponseWriter, token string) {
+func setInviteTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: inviteTokenCookieName, Value: token,
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
 }
 
-func clearInviteTokenCookie(w http.ResponseWriter) {
+func clearInviteTokenCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: inviteTokenCookieName, Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 }
 
@@ -616,6 +616,13 @@ func cookieDomainForHost(host string) string {
 	return cookieDomain
 }
 
+// cookieDomainForRequest resolves the cookie Domain for the inbound request,
+// keyed on the host it arrived on. Every auth SetCookie goes through this so
+// sessions land on the base domain the user is actually on under multi-domain.
+func cookieDomainForRequest(r *http.Request) string {
+	return cookieDomainForHost(inboundHost(r))
+}
+
 // originMatchesBaseDomain reports whether origin is https://base or
 // https://*.base (scheme is not constrained; a misconfigured plaintext
 // deployment would still be accepted, matching how cookies already flow).
@@ -639,7 +646,7 @@ func originMatchesBaseDomain(origin, base string) bool {
 func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: "", MaxAge: -1,
-		Path: "/", Domain: cookieDomain, HttpOnly: true,
+		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
 	})
 	redirect := r.URL.Query().Get("redirect")
 	if redirect == "" {
@@ -671,7 +678,7 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		state := fmt.Sprintf("%d", time.Now().UnixNano())
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_state", Value: state,
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 		http.Redirect(w, r, p.AuthCodeURL(state), http.StatusFound)
@@ -737,7 +744,7 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: signed,
 		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomain, SameSite: http.SameSiteLaxMode,
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
 	})
 	redirect := "/"
 	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
@@ -745,7 +752,7 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
@@ -1079,7 +1086,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_state", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 
 	code := r.URL.Query().Get("code")
@@ -1110,7 +1117,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		inviteToken = c.Value
 	}
 	if inviteToken != "" {
-		clearInviteTokenCookie(w)
+		clearInviteTokenCookie(w, r)
 		if err := consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
 			// Token may be expired / exhausted / revoked. Fall back to
 			// identity-upsert so the user still completes login; the access
@@ -1160,7 +1167,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: signed,
 		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomain, SameSite: http.SameSiteLaxMode,
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
 	})
 
 	redirectCookie, err := r.Cookie("fwd_oauth_redirect")
@@ -1170,7 +1177,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 	http.Redirect(w, r, redirect, http.StatusFound)
 }
@@ -1368,7 +1375,7 @@ func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, provider
 
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_state", Value: state,
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
 	http.Redirect(w, r, p.AuthCodeURL(state), http.StatusFound)
@@ -1471,7 +1478,7 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	if isNavigationRequest(r) {
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_redirect", Value: originalURL,
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 	}
@@ -1824,7 +1831,7 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_redirect",
 			Value: proto + "://" + host + "/_oauth/request-access?project=" + url.QueryEscape(projectID),
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 		http.Redirect(w, r, "/_oauth/login", http.StatusFound)
