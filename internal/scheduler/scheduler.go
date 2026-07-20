@@ -284,11 +284,15 @@ func (s *Scheduler) DispatchDescribe(ctx context.Context, nodeID uuid.UUID, depl
 
 // DispatchComposeCleanup tears down a compose project on its pinned node,
 // including its docker named volumes. Used when a compose project is deleted.
-// deploymentID is optional — if zero, the cleanup is not tied to a specific
-// deployment row.
-func (s *Scheduler) DispatchComposeCleanup(ctx context.Context, project *store.Project, deploymentID uuid.UUID) error {
+// deploymentID ties the task to a deployment row for FK purposes; the caller is
+// responsible for keeping that deployment alive until the task reaches a
+// terminal state (see deleteProject, which waits synchronously before deleting
+// the project — otherwise the ON DELETE CASCADE would drop this task before the
+// agent ever claims it). Returns the created task's ID so the caller can poll
+// for completion; returns uuid.Nil when the project was never deployed.
+func (s *Scheduler) DispatchComposeCleanup(ctx context.Context, project *store.Project, deploymentID uuid.UUID) (uuid.UUID, error) {
 	if project.PinnedNodeID == nil {
-		return nil // never deployed; nothing to clean up
+		return uuid.Nil, nil // never deployed; nothing to clean up
 	}
 	task := &store.Task{
 		Type:         store.TaskTypeCleanup,
@@ -301,8 +305,11 @@ func (s *Scheduler) DispatchComposeCleanup(ctx context.Context, project *store.P
 			"compose_file_path": project.ComposeFilePath,
 		},
 	}
-	_, err := s.store.CreateTask(ctx, task)
-	return err
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
 }
 
 // TriggerDeployment is the canonical entry point for "create a Deployment row

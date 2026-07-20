@@ -2558,6 +2558,40 @@ func (s *Server) decideAccessRequest(w http.ResponseWriter, r *http.Request, dec
 	jsonOK(w, updated)
 }
 
+const (
+	// How long deleteProject waits for the compose-cleanup task to finish
+	// tearing down the old stack before it gives up and deletes the project row
+	// anyway. Sized well above the agent's ~5s poll interval plus a `docker
+	// compose down`.
+	projectDeleteCleanupTimeout = 30 * time.Second
+	// How often deleteProject polls the cleanup task's status while waiting.
+	projectDeleteCleanupPoll = 1 * time.Second
+)
+
+// waitForTaskTerminal polls fetch for taskID until it reaches a terminal state
+// (completed or failed), the timeout elapses, or ctx is cancelled. It returns
+// true only if it actually observed a terminal state. fetch is injected (rather
+// than calling s.store.GetTask directly) so the poll/timeout logic is
+// unit-testable without a database.
+func waitForTaskTerminal(ctx context.Context, taskID uuid.UUID, timeout, interval time.Duration, fetch func(context.Context, uuid.UUID) (*store.Task, error)) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if t, err := fetch(ctx, taskID); err == nil && t != nil {
+			if t.Status == store.TaskStatusCompleted || t.Status == store.TaskStatusFailed {
+				return true
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(interval):
+		}
+	}
+}
+
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
@@ -2570,24 +2604,39 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proj, _ := s.store.GetProject(r.Context(), id)
-	// Best-effort: tear down the compose stack on its pinned node before
-	// deleting the project. Tied to the latest deployment so the task survives
-	// the cascade, since tasks.deployment_id is ON DELETE CASCADE; if no
-	// deployment ever ran we skip the dispatch and leave the stack untouched.
+	// Tear down the compose stack on its pinned node BEFORE deleting the project
+	// row, and wait for the teardown to finish. This ordering is load-bearing:
+	//   1. tasks.deployment_id is ON DELETE CASCADE onto deployments, which are
+	//      ON DELETE CASCADE onto projects. Deleting the project first would
+	//      cascade-delete the cleanup task we just dispatched before the agent
+	//      (which polls every ~5s) ever claims it, orphaning the old container.
+	//      It keeps binding its host port, so a project later recreated with the
+	//      same domain_prefix can never route to its new container.
+	//   2. Cleanup runs `docker compose -p muvee-<domain_prefix> down`, whose
+	//      project name collides with any same-prefix stack deployed afterwards.
+	//      Running it late/async could tear down that *new* stack; finishing it
+	//      before we return closes the collision window.
+	// Best-effort: if the node is offline we time out and delete anyway.
 	if proj != nil && (proj.ProjectType == store.ProjectTypeCompose || proj.ProjectType == store.ProjectTypeImage) && proj.PinnedNodeID != nil {
 		if deployments, err := s.store.ListDeployments(r.Context(), proj.ID); err == nil && len(deployments) > 0 {
-			_ = s.sched.DispatchComposeCleanup(r.Context(), proj, deployments[0].ID)
+			// Detach from the request context so a client-side timeout can't
+			// abort the teardown midway and re-orphan the container.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), projectDeleteCleanupTimeout)
+			if taskID, derr := s.sched.DispatchComposeCleanup(cleanupCtx, proj, deployments[0].ID); derr == nil && taskID != uuid.Nil {
+				waitForTaskTerminal(cleanupCtx, taskID, projectDeleteCleanupTimeout, projectDeleteCleanupPoll, s.store.GetTask)
+			}
+			cancel()
 		}
 	}
 	// Clean up hosted git repo if applicable.
 	if proj != nil && s.gitRepoBasePath != "" && proj.GitSource == store.GitSourceHosted {
 		_ = gitrepo.DeleteRepo(gitrepo.RepoPath(s.gitRepoBasePath, id))
 	}
-	jsonOK(w, map[string]string{"status": "ok"})
 	_ = s.store.DeleteProject(r.Context(), id)
 	if proj != nil && proj.ProjectType == store.ProjectTypeDomainOnly {
 		s.refreshDomainOnlyCache(r.Context())
 	}
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) getProjectDatasets(w http.ResponseWriter, r *http.Request) {
