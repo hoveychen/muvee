@@ -70,16 +70,29 @@ func newGoogleProviderFromConfig(cfg GoogleConfig, redirectURL string) (*googleP
 	}, nil
 }
 
-func (p *googleProvider) Name() string        { return "google" }
-func (p *googleProvider) DisplayName() string { return "Google" }
-func (p *googleProvider) OrgScoped() bool     { return false }
+func (p *googleProvider) Name() string                 { return "google" }
+func (p *googleProvider) DisplayName() string          { return "Google" }
+func (p *googleProvider) OrgScoped() bool              { return false }
+func (p *googleProvider) CanonicalRedirectURL() string { return p.config.RedirectURL }
 
-func (p *googleProvider) AuthCodeURL(state string) string {
-	return p.config.AuthCodeURL(state, oauth2.AccessTypeOnline)
+// cfgFor returns p.config, or a shallow copy with RedirectURL overridden when
+// redirectURL is non-empty, so multi-domain callers can retarget the callback
+// per request without mutating the shared config.
+func (p *googleProvider) cfgFor(redirectURL string) *oauth2.Config {
+	if redirectURL == "" {
+		return p.config
+	}
+	c := *p.config
+	c.RedirectURL = redirectURL
+	return &c
 }
 
-func (p *googleProvider) UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error) {
-	token, err := p.config.Exchange(ctx, code)
+func (p *googleProvider) AuthCodeURL(state, redirectURL string) string {
+	return p.cfgFor(redirectURL).AuthCodeURL(state, oauth2.AccessTypeOnline)
+}
+
+func (p *googleProvider) UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error) {
+	token, err := p.cfgFor(redirectURL).Exchange(ctx, code)
 	if err != nil {
 		return "", "", "", fmt.Errorf("exchange code: %w", err)
 	}

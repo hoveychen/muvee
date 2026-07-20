@@ -8,11 +8,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/api"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/domains"
 	"github.com/hoveychen/muvee/internal/monitor"
 	"github.com/hoveychen/muvee/internal/scheduler"
 	"github.com/hoveychen/muvee/internal/store"
@@ -76,6 +78,12 @@ func runServer() {
 	if baseDomain == "" {
 		baseDomain = "localhost"
 	}
+	// BASE_DOMAINS (comma-separated) lets the same instance be served under more
+	// than one apex. baseDomain stays the canonical default (first entry).
+	baseDomains := domains.Parse(baseDomain, os.Getenv("BASE_DOMAINS"))
+	if len(baseDomains) > 1 {
+		log.Printf("Serving multiple base domains: %s", strings.Join(baseDomains, ", "))
+	}
 	authServiceURL := os.Getenv("AUTH_SERVICE_URL")
 	registryAddr := os.Getenv("REGISTRY_ADDR")
 	if registryAddr == "" {
@@ -113,6 +121,7 @@ func runServer() {
 
 	srv := api.NewServer(st, authSvc, sched, mon, api.ServerConfig{
 		BaseDomain:         baseDomain,
+		BaseDomains:        baseDomains,
 		AuthServiceURL:     authServiceURL,
 		AgentSecret:        agentSecret,
 		RegistryAddr:       registryAddr,

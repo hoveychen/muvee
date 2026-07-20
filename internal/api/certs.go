@@ -118,24 +118,37 @@ func (s *Server) expectedDomains(ctx context.Context) []CertStatus {
 	if s.baseDomain == "" {
 		return items
 	}
-	items = append(items,
-		CertStatus{Domain: s.baseDomain, Kind: "base"},
-		CertStatus{Domain: "registry." + s.baseDomain, Kind: "registry"},
-		CertStatus{Domain: "traefik." + s.baseDomain, Kind: "traefik"},
-	)
+	// Under multi-domain every project/tunnel prefix and the fixed
+	// registry/traefik subdomains are served (and thus need a cert) under each
+	// configured base domain — one HTTP-01 cert per host, no wildcard. Falls
+	// back to the canonical baseDomain when no BASE_DOMAINS list is set.
+	bases := s.baseDomains
+	if len(bases) == 0 {
+		bases = []string{s.baseDomain}
+	}
+	for _, b := range bases {
+		items = append(items,
+			CertStatus{Domain: b, Kind: "base"},
+			CertStatus{Domain: "registry." + b, Kind: "registry"},
+			CertStatus{Domain: "traefik." + b, Kind: "traefik"},
+		)
+	}
 	running := map[string]bool{}
 	if deps, err := s.store.GetRunningDeployments(ctx); err == nil {
 		for _, d := range deps {
 			running[d.ProjectID.String()] = true
-			items = append(items, CertStatus{
-				Domain: d.DomainPrefix + "." + s.baseDomain,
-				Kind:   "project",
-			})
+			for _, b := range bases {
+				items = append(items, CertStatus{
+					Domain: d.DomainPrefix + "." + b,
+					Kind:   "project",
+				})
+			}
 		}
 	}
 	// Custom-domain and second-prefix aliases get a Traefik router (and thus a
 	// cert) only while their project has a running deployment (see
-	// handleTraefikConfig). List those so the admin cert panel reflects them.
+	// handleTraefikConfig). Aliases are stored as explicit absolute hosts, so
+	// unlike prefixes they are not multiplied across base domains.
 	if aliases, err := s.store.ListAllProjectAliases(ctx); err == nil {
 		for _, a := range aliases {
 			if !running[a.ProjectID.String()] {
@@ -145,10 +158,12 @@ func (s *Server) expectedDomains(ctx context.Context) []CertStatus {
 		}
 	}
 	for _, t := range s.tunnels.activeTunnels() {
-		items = append(items, CertStatus{
-			Domain: t.Domain + "." + s.baseDomain,
-			Kind:   "tunnel",
-		})
+		for _, b := range bases {
+			items = append(items, CertStatus{
+				Domain: t.Domain + "." + b,
+				Kind:   "tunnel",
+			})
+		}
 	}
 	return items
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/skill"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/domains"
 	"github.com/hoveychen/muvee/internal/gitrepo"
 	"github.com/hoveychen/muvee/internal/monitor"
 	"github.com/hoveychen/muvee/internal/muveectlbin"
@@ -43,6 +44,7 @@ type Server struct {
 	sched              *scheduler.Scheduler
 	monitor            *monitor.Monitor
 	baseDomain         string
+	baseDomains        []string // all configured platform base domains (canonical first); see internal/domains
 	authServiceURL     string   // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
 	agentSecret        string   // shared secret for agent ↔ server authentication
 	registryAddr       string   // address of the Docker registry distributed to agents
@@ -82,6 +84,7 @@ type Server struct {
 
 type ServerConfig struct {
 	BaseDomain         string
+	BaseDomains        []string // full set of platform base domains, canonical first (see internal/domains.Parse)
 	AuthServiceURL     string
 	AgentSecret        string
 	RegistryAddr       string
@@ -100,12 +103,19 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 	if cfg.AuthServiceURL == "" {
 		cfg.AuthServiceURL = "http://muvee-authservice:4181"
 	}
+	// Backward compat / tests: a Server constructed with only BaseDomain still
+	// gets a one-element base-domain set so host resolution has something to
+	// match against.
+	if len(cfg.BaseDomains) == 0 && cfg.BaseDomain != "" {
+		cfg.BaseDomains = []string{strings.ToLower(cfg.BaseDomain)}
+	}
 	return &Server{
 		store:              st,
 		auth:               authSvc,
 		sched:              sched,
 		monitor:            mon,
 		baseDomain:         cfg.BaseDomain,
+		baseDomains:        cfg.BaseDomains,
 		authServiceURL:     cfg.AuthServiceURL,
 		agentSecret:        cfg.AgentSecret,
 		registryAddr:       cfg.RegistryAddr,
@@ -153,6 +163,42 @@ func (s *Server) isDomainOnlyPrefix(prefix string) bool {
 	s.domainOnlyMu.RLock()
 	defer s.domainOnlyMu.RUnlock()
 	return s.domainOnlyPrefixes[prefix]
+}
+
+// baseDomainForHost returns the configured platform base domain that the
+// request host belongs to, falling back to the canonical baseDomain when the
+// host matches none (direct-IP access, an unknown Host header, etc.). This is
+// the multi-domain hook: cookies, OAuth callbacks and CORS all resolve the
+// base domain per request so they land on whatever domain the user is on.
+func (s *Server) baseDomainForHost(host string) string {
+	if b, ok := domains.Match(host, s.baseDomains); ok {
+		return b
+	}
+	return s.baseDomain
+}
+
+// requestHost returns the user-visible host for this request. Behind Traefik
+// the original Host arrives in X-Forwarded-Host; bare requests fall back to
+// r.Host.
+func requestHost(r *http.Request) string {
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		return strings.ToLower(strings.TrimSpace(h))
+	}
+	return strings.ToLower(strings.TrimSpace(r.Host))
+}
+
+// oauthRedirectFor returns the per-request OAuth callback URL for a provider:
+// the provider's canonical baked redirect with its host rebased onto the base
+// domain the request arrived on, so a panel login started on app.muvee.ai
+// comes back to app.muvee.ai (and drops its session cookie there) instead of
+// the canonical muveeai.com. Returns "" when the provider is unknown or has no
+// baked redirect, in which case callers fall back to the provider default.
+func (s *Server) oauthRedirectFor(providerName string, r *http.Request) string {
+	canonical, err := s.auth.CanonicalRedirectURL(providerName)
+	if err != nil || canonical == "" {
+		return ""
+	}
+	return domains.RebaseHost(canonical, s.baseDomains, s.baseDomainForHost(requestHost(r)))
 }
 
 // internalAPIKey returns the deterministic shared key used by muvee-authservice
@@ -608,8 +654,19 @@ func (s *Server) allowedOrigin(origin string) bool {
 			return true
 		}
 	}
-	// Strict: only the canonical https://${baseDomain} origin is allowed.
-	return strings.EqualFold(origin, "https://"+base)
+	// Strict: only the https://${base} origin of a configured base domain is
+	// allowed. Under multi-domain the panel is served under each apex, so each
+	// canonical base-domain origin must pass CORS.
+	bases := s.baseDomains
+	if len(bases) == 0 {
+		bases = []string{s.baseDomain}
+	}
+	for _, b := range bases {
+		if strings.EqualFold(origin, "https://"+strings.ToLower(strings.TrimSpace(b))) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) Router() http.Handler {
@@ -978,7 +1035,7 @@ func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 	providerName := chi.URLParam(r, "provider")
 	state := uuid.New().String()
-	authURL, err := s.auth.AuthCodeURL(providerName, state)
+	authURL, err := s.auth.AuthCodeURL(providerName, state, s.oauthRedirectFor(providerName, r))
 	if err != nil {
 		http.Error(w, "unknown provider", http.StatusNotFound)
 		return
@@ -1046,7 +1103,7 @@ func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 		providerName = s.auth.DefaultProvider()
 	}
 	state := uuid.New().String()
-	authURL, err := s.auth.AuthCodeURL(providerName, state)
+	authURL, err := s.auth.AuthCodeURL(providerName, state, s.oauthRedirectFor(providerName, r))
 	if err != nil {
 		http.Error(w, "unknown provider", http.StatusNotFound)
 		return
@@ -1105,7 +1162,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 		Name: "muvee_invite_token", Value: "", MaxAge: -1, Path: "/",
 	})
 
-	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, code, inviteToken)
+	user, jwtToken, err := s.auth.HandleCallback(r.Context(), providerName, code, inviteToken, s.oauthRedirectFor(providerName, r))
 	if err != nil {
 		// Surface the not-invited case as a 403 with a known error code so the
 		// frontend can render a friendly hint instead of a generic 401.
@@ -4191,9 +4248,9 @@ const deviceFlowServiceName = "muvee-authservice-device"
 // the client-facing /_oauth/logout and /_oauth/userinfo endpoints documented
 // in service-auth-integration.md, so downstream frontends can call them with
 // a relative path (same-origin, no CORS) or a full {BASE_DOMAIN} URL.
-func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName, host string, tls *traefikTLS) {
+func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName string, hosts []string, tls *traefikTLS) {
 	cfg.HTTP.Routers[routerName+"-device-flow"] = traefikRouter{
-		Rule:        fmt.Sprintf("Host(`%s`) && PathPrefix(`/_oauth`)", host),
+		Rule:        hostMatchRule(hosts) + " && PathPrefix(`/_oauth`)",
 		EntryPoints: []string{"websecure"},
 		Service:     deviceFlowServiceName,
 		TLS:         tls,
@@ -4224,7 +4281,8 @@ func attachEmbedBridge(router *traefikRouter) {
 
 // addBypassRouters creates higher-priority Traefik routers that skip ForwardAuth
 // for the given newline-separated bypass paths.
-func addBypassRouters(cfg *traefikDynamicConfig, routerName, host string, tls *traefikTLS, bypassPaths string) {
+func addBypassRouters(cfg *traefikDynamicConfig, routerName string, hosts []string, tls *traefikTLS, bypassPaths string) {
+	hostRule := hostMatchRule(hosts)
 	for i, raw := range strings.Split(bypassPaths, "\n") {
 		p := strings.TrimSpace(raw)
 		if p == "" {
@@ -4238,13 +4296,54 @@ func addBypassRouters(cfg *traefikDynamicConfig, routerName, host string, tls *t
 		}
 		bypassName := fmt.Sprintf("%s-bypass-%d", routerName, i)
 		cfg.HTTP.Routers[bypassName] = traefikRouter{
-			Rule:        fmt.Sprintf("Host(`%s`) && %s", host, pathRule),
+			Rule:        hostRule + " && " + pathRule,
 			EntryPoints: []string{"websecure"},
 			Service:     routerName,
 			TLS:         tls,
 			Priority:    100,
 		}
 	}
+}
+
+// hostsForPrefix returns prefix.<base> for every configured platform base
+// domain (canonical first), so a project/tunnel prefix is served under each
+// apex muvee runs on. Falls back to the canonical baseDomain when no
+// BASE_DOMAINS list is configured, keeping single-domain deployments identical.
+func (s *Server) hostsForPrefix(prefix string) []string {
+	bases := s.baseDomains
+	if len(bases) == 0 {
+		bases = []string{s.baseDomain}
+	}
+	out := make([]string, 0, len(bases))
+	for _, b := range bases {
+		out = append(out, prefix+"."+b)
+	}
+	return out
+}
+
+// hostMatchRule builds a Traefik host-match expression covering every host.
+// One host renders as a bare Host(`a`) (unchanged from the single-domain era);
+// several render as a parenthesised OR so the expression still composes with a
+// trailing `&& PathPrefix(...)` clause.
+func hostMatchRule(hosts []string) string {
+	parts := make([]string, len(hosts))
+	for i, h := range hosts {
+		parts[i] = fmt.Sprintf("Host(`%s`)", h)
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, " || ") + ")"
+}
+
+// tlsDomainsFor lists one cert entry per host. There is no wildcard for the
+// extra base domains, so every project subdomain gets its own HTTP-01 cert.
+func tlsDomainsFor(hosts []string) []traefikTLSDomain {
+	out := make([]traefikTLSDomain, len(hosts))
+	for i, h := range hosts {
+		out[i] = traefikTLSDomain{Main: h}
+	}
+	return out
 }
 
 func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
@@ -4287,7 +4386,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 	for _, dep := range deployments {
 		name := dep.DomainPrefix
-		host := fmt.Sprintf("%s.%s", dep.DomainPrefix, s.baseDomain)
+		hosts := s.hostsForPrefix(dep.DomainPrefix)
 		backendURL := fmt.Sprintf("http://%s:%d", dep.HostIP, dep.HostPort)
 
 		// HTTPS router. The web (port 80) entrypoint in traefik.yml already has a
@@ -4295,13 +4394,15 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		// Generating a separate HTTP router that references redirect-to-https@file
 		// (a cross-provider middleware) can cause Traefik to reject the entire HTTP
 		// provider config when the cross-provider reference can't be resolved.
+		// Under multi-domain the single router matches the prefix under every
+		// configured base domain and requests one HTTP-01 cert per host.
 		httpsRouter := traefikRouter{
-			Rule:        fmt.Sprintf("Host(`%s`)", host),
+			Rule:        hostMatchRule(hosts),
 			EntryPoints: []string{"websecure"},
 			Service:     name,
 			TLS: &traefikTLS{
 				CertResolver: "letsencrypt",
-				Domains:      []traefikTLSDomain{{Main: host}},
+				Domains:      tlsDomainsFor(hosts),
 			},
 		}
 
@@ -4330,7 +4431,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 			// Auth bypass paths: create higher-priority routers that skip ForwardAuth.
 			if dep.AuthBypassPaths != "" {
-				addBypassRouters(&cfg, name, host, httpsRouter.TLS, dep.AuthBypassPaths)
+				addBypassRouters(&cfg, name, hosts, httpsRouter.TLS, dep.AuthBypassPaths)
 			}
 		}
 
@@ -4340,7 +4441,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		// without ForwardAuth need this just as much — without it Traefik
 		// falls through to the project's own backend (e.g. an nginx SPA), the
 		// SDK sees HTML instead of JSON, and sign-in is broken.
-		addDeviceFlowRouter(&cfg, name, host, httpsRouter.TLS)
+		addDeviceFlowRouter(&cfg, name, hosts, httpsRouter.TLS)
 
 		attachEmbedBridge(&httpsRouter)
 		cfg.HTTP.Routers[name] = httpsRouter
@@ -4369,9 +4470,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				Middlewares: append([]string(nil), httpsRouter.Middlewares...),
 			}
 			if needsForwardAuth && dep.AuthBypassPaths != "" {
-				addBypassRouters(&cfg, aliasName, a.Host, aliasTLS, dep.AuthBypassPaths)
+				addBypassRouters(&cfg, aliasName, []string{a.Host}, aliasTLS, dep.AuthBypassPaths)
 			}
-			addDeviceFlowRouter(&cfg, aliasName, a.Host, aliasTLS)
+			addDeviceFlowRouter(&cfg, aliasName, []string{a.Host}, aliasTLS)
 			// httpsRouter already had embed-bridge attached above; aliasRouter
 			// inherited it via the Middlewares copy, so no need to attach again.
 			cfg.HTTP.Routers[aliasName] = aliasRouter
@@ -4391,15 +4492,15 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 		for _, t := range s.tunnels.activeTunnels() {
 			name := "tunnel-" + t.Domain
-			host := fmt.Sprintf("%s.%s", t.Domain, s.baseDomain)
+			hosts := s.hostsForPrefix(t.Domain)
 
 			router := traefikRouter{
-				Rule:        fmt.Sprintf("Host(`%s`)", host),
+				Rule:        hostMatchRule(hosts),
 				EntryPoints: []string{"websecure"},
 				Service:     name,
 				TLS: &traefikTLS{
 					CertResolver: "letsencrypt",
-					Domains:      []traefikTLSDomain{{Main: host}},
+					Domains:      tlsDomainsFor(hosts),
 				},
 			}
 
@@ -4431,14 +4532,14 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 				// Auth bypass paths from the bound domain_only project.
 				if hasProj && proj.AuthBypassPaths != "" {
-					addBypassRouters(&cfg, name, host, router.TLS, proj.AuthBypassPaths)
+					addBypassRouters(&cfg, name, hosts, router.TLS, proj.AuthBypassPaths)
 				}
 			}
 
 			// /_oauth/* always routes to authservice — applies even to
 			// public, no-auth tunnels so the SDK can call /_oauth/providers
 			// etc. from a project's frontend.
-			addDeviceFlowRouter(&cfg, name, host, router.TLS)
+			addDeviceFlowRouter(&cfg, name, hosts, router.TLS)
 
 			attachEmbedBridge(&router)
 			cfg.HTTP.Routers[name] = router
@@ -4465,15 +4566,15 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			if _, exists := cfg.HTTP.Routers["tunnel-"+p.DomainPrefix]; exists {
 				continue
 			}
-			host := fmt.Sprintf("%s.%s", p.DomainPrefix, s.baseDomain)
+			hosts := s.hostsForPrefix(p.DomainPrefix)
 
 			domainRouter := traefikRouter{
-				Rule:        fmt.Sprintf("Host(`%s`)", host),
+				Rule:        hostMatchRule(hosts),
 				EntryPoints: []string{"websecure"},
 				Service:     name,
 				TLS: &traefikTLS{
 					CertResolver: "letsencrypt",
-					Domains:      []traefikTLSDomain{{Main: host}},
+					Domains:      tlsDomainsFor(hosts),
 				},
 			}
 
@@ -4497,13 +4598,13 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				domainRouter.Middlewares = []string{mwName}
 
 				if p.AuthBypassPaths != "" {
-					addBypassRouters(&cfg, name, host, domainRouter.TLS, p.AuthBypassPaths)
+					addBypassRouters(&cfg, name, hosts, domainRouter.TLS, p.AuthBypassPaths)
 				}
 			}
 
 			// /_oauth/* always routes to authservice — public domain-only
 			// projects with a connected tunnel still need it for SDK calls.
-			addDeviceFlowRouter(&cfg, name, host, domainRouter.TLS)
+			addDeviceFlowRouter(&cfg, name, hosts, domainRouter.TLS)
 
 			attachEmbedBridge(&domainRouter)
 			cfg.HTTP.Routers[name] = domainRouter

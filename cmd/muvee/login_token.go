@@ -142,7 +142,7 @@ func handleLoginTokenCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"login_token":   token,
-		"oauth_url":     p.AuthCodeURL(state),
+		"oauth_url":     p.AuthCodeURL(state, oauthRedirectForHost(host, providerName)),
 		"expires_in":    int(loginTokenExpiry.Seconds()),
 		"poll_interval": loginTokenPollSec,
 	})
@@ -272,7 +272,7 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 	}
 
 	ctx := r.Context()
-	email, name, avatarURL, err := p.UserInfo(ctx, code)
+	email, name, avatarURL, err := p.UserInfo(ctx, code, oauthRedirectForHost(inboundHost(r), providerName))
 	if err != nil {
 		log.Printf("authservice: UserInfo (login-token, %s): %v", providerName, err)
 		markLoginTokenError(loginToken, "authentication failed")
@@ -304,7 +304,7 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 			MaxAge:   7 * 24 * 3600,
 			HttpOnly: true,
 			Path:     "/",
-			Domain:   cookieDomain,
+			Domain:   cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode,
 		})
 	}

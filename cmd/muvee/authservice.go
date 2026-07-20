@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/domains"
 )
 
 type authClaims struct {
@@ -48,8 +49,9 @@ var (
 	fwdProvidersAtomic atomic.Pointer[map[string]auth.Provider]
 	jwtSecret          []byte
 	adminEmails        map[string]struct{}
-	cookieDomain       string
-	forwardAuthBase    string // e.g. "https://example.com"
+	cookieDomain       string   // canonical BASE_DOMAIN — default when the request host matches no configured base
+	cookieBaseDomains  []string // all configured platform base domains (canonical first); see internal/domains
+	forwardAuthBase    string   // e.g. "https://example.com" — canonical FORWARD_AUTH_BASE_URL default
 	muveeServerURL     string // internal URL for /api/internal/access/check
 	internalKey        string // sha256(JWT_SECRET) — shared with muvee-server
 	internalClient     = &http.Client{Timeout: 5 * time.Second}
@@ -198,6 +200,7 @@ func runAuthservice() {
 	forwardAuthBase = baseURL
 
 	cookieDomain = os.Getenv("BASE_DOMAIN")
+	cookieBaseDomains = domains.Parse(cookieDomain, os.Getenv("BASE_DOMAINS"))
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		log.Fatal("JWT_SECRET environment variable is required (was empty)")
@@ -301,7 +304,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		// completes (the post-OAuth redirect back to the original URL would
 		// otherwise lose the query string visibility to the callback handler).
 		if inviteToken != "" {
-			setInviteTokenCookie(w, inviteToken)
+			setInviteTokenCookie(w, r, inviteToken)
 		}
 		redirectToLogin(w, r)
 		return
@@ -333,7 +336,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		if err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
 			log.Printf("authservice: consume invite (authed, email=%s): %v", claims.Email, err)
 		}
-		clearInviteTokenCookie(w)
+		clearInviteTokenCookie(w, r)
 	}
 
 	if allowedDomains := r.URL.Query().Get("domains"); allowedDomains != "" {
@@ -433,18 +436,18 @@ func extractInviteTokenFromForwardedURI(r *http.Request) string {
 	return strings.TrimSpace(vals.Get("invite_token"))
 }
 
-func setInviteTokenCookie(w http.ResponseWriter, token string) {
+func setInviteTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: inviteTokenCookieName, Value: token,
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
 }
 
-func clearInviteTokenCookie(w http.ResponseWriter) {
+func clearInviteTokenCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: inviteTokenCookieName, Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 }
 
@@ -590,15 +593,75 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 // tree are rejected by simply not echoing the Origin header back.
 func applyUserInfoCORS(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
-	if origin == "" || cookieDomain == "" {
+	if origin == "" {
 		return
 	}
-	if !originMatchesBaseDomain(origin, cookieDomain) {
+	if !originMatchesAnyBaseDomain(origin) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Vary", "Origin")
+}
+
+// originMatchesAnyBaseDomain reports whether origin is https://B or https://*.B
+// for any configured platform base domain B, falling back to the canonical
+// cookieDomain when no BASE_DOMAINS list is set. This is the multi-domain
+// widening of the CORS gate: a project SPA on a subdomain of any served apex
+// can call /_oauth/* cross-origin with credentials.
+func originMatchesAnyBaseDomain(origin string) bool {
+	bases := cookieBaseDomains
+	if len(bases) == 0 {
+		bases = []string{cookieDomain}
+	}
+	for _, b := range bases {
+		if b == "" {
+			continue
+		}
+		if originMatchesBaseDomain(origin, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// cookieDomainForHost returns the base domain an auth cookie should be scoped
+// to for a request arriving on host. Under multi-domain the cookie must be set
+// on the base domain the user is actually on (so a login on muvee.ai yields a
+// `.muvee.ai` cookie, shared across its subdomains), falling back to the
+// canonical cookieDomain when the host matches no configured base domain.
+func cookieDomainForHost(host string) string {
+	if b, ok := domains.Match(host, cookieBaseDomains); ok {
+		return b
+	}
+	return cookieDomain
+}
+
+// cookieDomainForRequest resolves the cookie Domain for the inbound request,
+// keyed on the host it arrived on. Every auth SetCookie goes through this so
+// sessions land on the base domain the user is actually on under multi-domain.
+func cookieDomainForRequest(r *http.Request) string {
+	return cookieDomainForHost(inboundHost(r))
+}
+
+// forwardAuthBaseForHost rebases the canonical forwardAuthBase onto the base
+// domain the request host belongs to, so the OAuth flow (and the session
+// cookie it drops) stays on the domain the user is actually on. A host that
+// matches no configured base falls back to the canonical forwardAuthBase.
+func forwardAuthBaseForHost(host string) string {
+	return domains.RebaseHost(forwardAuthBase, cookieBaseDomains, cookieDomainForHost(host))
+}
+
+// oauthRedirectForHost returns the per-request OAuth callback URL for a
+// provider: the canonical `{forwardAuthBase}/_oauth/{provider}` rebased onto
+// the request host's base domain. The redirect_uri stays canonical to a single
+// host per base domain (the forwardAuthBase host), never the raw request host,
+// so a project subdomain like my-project.muvee.ai still bounces through
+// app.muvee.ai and the provider dashboard only needs one callback per domain
+// whitelisted. Passed to both AuthCodeURL and UserInfo so the two redirect_uri
+// values match.
+func oauthRedirectForHost(host, providerName string) string {
+	return forwardAuthBaseForHost(host) + "/_oauth/" + providerName
 }
 
 // originMatchesBaseDomain reports whether origin is https://base or
@@ -624,7 +687,7 @@ func originMatchesBaseDomain(origin, base string) bool {
 func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: "", MaxAge: -1,
-		Path: "/", Domain: cookieDomain, HttpOnly: true,
+		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
 	})
 	redirect := r.URL.Query().Get("redirect")
 	if redirect == "" {
@@ -656,10 +719,10 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		state := fmt.Sprintf("%d", time.Now().UnixNano())
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_state", Value: state,
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
-		http.Redirect(w, r, p.AuthCodeURL(state), http.StatusFound)
+		http.Redirect(w, r, p.AuthCodeURL(state, oauthRedirectForHost(inboundHost(r), providerName)), http.StatusFound)
 		return
 	}
 
@@ -722,7 +785,7 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: signed,
 		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomain, SameSite: http.SameSiteLaxMode,
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
 	})
 	redirect := "/"
 	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
@@ -730,7 +793,7 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
@@ -1064,14 +1127,14 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_state", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		code = r.URL.Query().Get("authCode") // DingTalk uses authCode instead of code
 	}
-	email, name, avatarURL, err := p.UserInfo(ctx, code)
+	email, name, avatarURL, err := p.UserInfo(ctx, code, oauthRedirectForHost(inboundHost(r), providerName))
 	if err != nil {
 		log.Printf("authservice: UserInfo (%s): %v", providerName, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
@@ -1095,7 +1158,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		inviteToken = c.Value
 	}
 	if inviteToken != "" {
-		clearInviteTokenCookie(w)
+		clearInviteTokenCookie(w, r)
 		if err := consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
 			// Token may be expired / exhausted / revoked. Fall back to
 			// identity-upsert so the user still completes login; the access
@@ -1145,7 +1208,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: signed,
 		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomain, SameSite: http.SameSiteLaxMode,
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
 	})
 
 	redirectCookie, err := r.Cookie("fwd_oauth_redirect")
@@ -1155,7 +1218,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomain,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
 	http.Redirect(w, r, redirect, http.StatusFound)
 }
@@ -1353,10 +1416,10 @@ func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, provider
 
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_state", Value: state,
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
-	http.Redirect(w, r, p.AuthCodeURL(state), http.StatusFound)
+	http.Redirect(w, r, p.AuthCodeURL(state, oauthRedirectForHost(inboundHost(r), providerName)), http.StatusFound)
 }
 
 // handleDeviceToken is polled by the CLI to check whether the user has completed
@@ -1456,7 +1519,7 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	if isNavigationRequest(r) {
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_redirect", Value: originalURL,
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 	}
@@ -1809,7 +1872,7 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_redirect",
 			Value: proto + "://" + host + "/_oauth/request-access?project=" + url.QueryEscape(projectID),
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomain,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 		http.Redirect(w, r, "/_oauth/login", http.StatusFound)

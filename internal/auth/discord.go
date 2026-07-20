@@ -43,12 +43,22 @@ func newDiscordProvider(cfg DiscordConfig, redirectURL string) (*discordProvider
 	}, nil
 }
 
-func (p *discordProvider) Name() string        { return "discord" }
-func (p *discordProvider) DisplayName() string { return "Discord" }
-func (p *discordProvider) OrgScoped() bool     { return false }
+func (p *discordProvider) Name() string                 { return "discord" }
+func (p *discordProvider) DisplayName() string          { return "Discord" }
+func (p *discordProvider) OrgScoped() bool              { return false }
+func (p *discordProvider) CanonicalRedirectURL() string { return p.config.RedirectURL }
 
-func (p *discordProvider) AuthCodeURL(state string) string {
-	return p.config.AuthCodeURL(state)
+func (p *discordProvider) cfgFor(redirectURL string) *oauth2.Config {
+	if redirectURL == "" {
+		return p.config
+	}
+	c := *p.config
+	c.RedirectURL = redirectURL
+	return &c
+}
+
+func (p *discordProvider) AuthCodeURL(state, redirectURL string) string {
+	return p.cfgFor(redirectURL).AuthCodeURL(state)
 }
 
 // UserInfo satisfies the Provider interface for callers that have not yet
@@ -56,13 +66,13 @@ func (p *discordProvider) AuthCodeURL(state string) string {
 // this code path; identity will bind on email instead, which means a
 // Discord user without a verified email will fail to upsert. Prefer
 // UserInfoWithSubject for new code.
-func (p *discordProvider) UserInfo(ctx context.Context, code string) (email, name, avatarURL string, err error) {
-	_, email, name, avatarURL, err = p.UserInfoWithSubject(ctx, code, "")
+func (p *discordProvider) UserInfo(ctx context.Context, code, redirectURL string) (email, name, avatarURL string, err error) {
+	_, email, name, avatarURL, err = p.UserInfoWithSubject(ctx, code, "", redirectURL)
 	return
 }
 
-func (p *discordProvider) UserInfoWithSubject(ctx context.Context, code, _ string) (sub, email, name, avatarURL string, err error) {
-	token, err := p.config.Exchange(ctx, code)
+func (p *discordProvider) UserInfoWithSubject(ctx context.Context, code, _, redirectURL string) (sub, email, name, avatarURL string, err error) {
+	token, err := p.cfgFor(redirectURL).Exchange(ctx, code)
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("exchange code: %w", err)
 	}
