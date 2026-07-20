@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/skill"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/domains"
 	"github.com/hoveychen/muvee/internal/gitrepo"
 	"github.com/hoveychen/muvee/internal/monitor"
 	"github.com/hoveychen/muvee/internal/muveectlbin"
@@ -43,6 +44,7 @@ type Server struct {
 	sched              *scheduler.Scheduler
 	monitor            *monitor.Monitor
 	baseDomain         string
+	baseDomains        []string // all configured platform base domains (canonical first); see internal/domains
 	authServiceURL     string   // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
 	agentSecret        string   // shared secret for agent ↔ server authentication
 	registryAddr       string   // address of the Docker registry distributed to agents
@@ -82,6 +84,7 @@ type Server struct {
 
 type ServerConfig struct {
 	BaseDomain         string
+	BaseDomains        []string // full set of platform base domains, canonical first (see internal/domains.Parse)
 	AuthServiceURL     string
 	AgentSecret        string
 	RegistryAddr       string
@@ -100,12 +103,19 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 	if cfg.AuthServiceURL == "" {
 		cfg.AuthServiceURL = "http://muvee-authservice:4181"
 	}
+	// Backward compat / tests: a Server constructed with only BaseDomain still
+	// gets a one-element base-domain set so host resolution has something to
+	// match against.
+	if len(cfg.BaseDomains) == 0 && cfg.BaseDomain != "" {
+		cfg.BaseDomains = []string{strings.ToLower(cfg.BaseDomain)}
+	}
 	return &Server{
 		store:              st,
 		auth:               authSvc,
 		sched:              sched,
 		monitor:            mon,
 		baseDomain:         cfg.BaseDomain,
+		baseDomains:        cfg.BaseDomains,
 		authServiceURL:     cfg.AuthServiceURL,
 		agentSecret:        cfg.AgentSecret,
 		registryAddr:       cfg.RegistryAddr,
@@ -153,6 +163,18 @@ func (s *Server) isDomainOnlyPrefix(prefix string) bool {
 	s.domainOnlyMu.RLock()
 	defer s.domainOnlyMu.RUnlock()
 	return s.domainOnlyPrefixes[prefix]
+}
+
+// baseDomainForHost returns the configured platform base domain that the
+// request host belongs to, falling back to the canonical baseDomain when the
+// host matches none (direct-IP access, an unknown Host header, etc.). This is
+// the multi-domain hook: cookies, OAuth callbacks and CORS all resolve the
+// base domain per request so they land on whatever domain the user is on.
+func (s *Server) baseDomainForHost(host string) string {
+	if b, ok := domains.Match(host, s.baseDomains); ok {
+		return b
+	}
+	return s.baseDomain
 }
 
 // internalAPIKey returns the deterministic shared key used by muvee-authservice

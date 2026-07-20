@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/domains"
 )
 
 type authClaims struct {
@@ -48,8 +49,9 @@ var (
 	fwdProvidersAtomic atomic.Pointer[map[string]auth.Provider]
 	jwtSecret          []byte
 	adminEmails        map[string]struct{}
-	cookieDomain       string
-	forwardAuthBase    string // e.g. "https://example.com"
+	cookieDomain       string   // canonical BASE_DOMAIN — default when the request host matches no configured base
+	cookieBaseDomains  []string // all configured platform base domains (canonical first); see internal/domains
+	forwardAuthBase    string   // e.g. "https://example.com" — canonical FORWARD_AUTH_BASE_URL default
 	muveeServerURL     string // internal URL for /api/internal/access/check
 	internalKey        string // sha256(JWT_SECRET) — shared with muvee-server
 	internalClient     = &http.Client{Timeout: 5 * time.Second}
@@ -198,6 +200,7 @@ func runAuthservice() {
 	forwardAuthBase = baseURL
 
 	cookieDomain = os.Getenv("BASE_DOMAIN")
+	cookieBaseDomains = domains.Parse(cookieDomain, os.Getenv("BASE_DOMAINS"))
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		log.Fatal("JWT_SECRET environment variable is required (was empty)")
@@ -599,6 +602,18 @@ func applyUserInfoCORS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Vary", "Origin")
+}
+
+// cookieDomainForHost returns the base domain an auth cookie should be scoped
+// to for a request arriving on host. Under multi-domain the cookie must be set
+// on the base domain the user is actually on (so a login on muvee.ai yields a
+// `.muvee.ai` cookie, shared across its subdomains), falling back to the
+// canonical cookieDomain when the host matches no configured base domain.
+func cookieDomainForHost(host string) string {
+	if b, ok := domains.Match(host, cookieBaseDomains); ok {
+		return b
+	}
+	return cookieDomain
 }
 
 // originMatchesBaseDomain reports whether origin is https://base or
