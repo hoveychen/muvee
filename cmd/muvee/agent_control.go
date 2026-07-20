@@ -165,7 +165,7 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 			// Synchronous start so a.set(...) lands before the main loop
 			// reads the next frame — otherwise fast follow-up stdio frames
 			// can find no session and get dropped.
-			startDockerExecSession(ctx, a, f.Container, f.Cmd, f.Session, cols, rows)
+			startDockerExecSession(ctx, a, containerForFrame(ctx, f), f.Cmd, f.Session, cols, rows)
 		case agentcontrol.TypeOpenCp:
 			if f.Session == "" || f.Container == "" || f.Path == "" {
 				_ = a.write(agentcontrol.Frame{
@@ -174,7 +174,7 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 				})
 				continue
 			}
-			startDockerCpSession(ctx, a, f.Container, f.Path, f.Direction, f.Session)
+			startDockerCpSession(ctx, a, containerForFrame(ctx, f), f.Path, f.Direction, f.Session)
 		case agentcontrol.TypeStdio:
 			s := a.get(f.Session)
 			if s == nil || s.ptmx == nil {
@@ -218,6 +218,22 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 			// ignore
 		}
 	}
+}
+
+// resolveExecContainer is a package var so tests can stub docker resolution.
+var resolveExecContainer = resolveContainerName
+
+// containerForFrame picks the container name to target for an exec/cp session.
+// It prefers resolving the real container from the domain prefix — compose
+// projects are named "<project>-<service>-N" (e.g. "muvee-pixel-app-1"), not
+// "muvee-<prefix>" — falling back to the literal Container the control plane
+// sent for backward compatibility with control planes that don't send
+// domain_prefix.
+func containerForFrame(ctx context.Context, f agentcontrol.Frame) string {
+	if f.DomainPrefix != "" {
+		return resolveExecContainer(ctx, f.DomainPrefix)
+	}
+	return f.Container
 }
 
 // startDockerExecSession spawns `docker exec -ti` with a host PTY, registers

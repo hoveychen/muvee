@@ -238,6 +238,11 @@ func (s *Server) proxyAgentSession(w http.ResponseWriter, r *http.Request, valid
 	// Forward the open frame to the agent with container name + session id
 	// filled in. We trust the CLI's other fields (Cmd/Path/Direction/Cols/...).
 	open.Session = session
+	// Send the domain prefix so the agent can resolve the real container name
+	// (compose projects are named "<project>-<service>-N", not
+	// "muvee-<prefix>"). Container is kept as a legacy fallback for agents that
+	// predate the domain_prefix field.
+	open.DomainPrefix = dep.DomainPrefix
 	open.Container = "muvee-" + dep.DomainPrefix
 	if err := agent.writeFrame(open); err != nil {
 		_ = agentcontrol.WriteFrame(ws, agentcontrol.Frame{Type: agentcontrol.TypeError, Msg: err.Error()})

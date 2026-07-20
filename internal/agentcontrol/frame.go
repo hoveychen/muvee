@@ -34,6 +34,12 @@ type Frame struct {
 	Type      string   `json:"type"`
 	Session   string   `json:"session,omitempty"`
 	Container string   `json:"container,omitempty"`
+	// DomainPrefix carries the deployment's domain prefix on open_exec/open_cp
+	// so the agent can resolve the *real* container name (compose projects are
+	// named "<project>-<service>-N", not "muvee-<prefix>") via the
+	// muvee.domain_prefix label. Container is kept as a legacy fallback for
+	// control planes that predate this field.
+	DomainPrefix string `json:"domain_prefix,omitempty"`
 	Cmd       []string `json:"cmd,omitempty"`
 	Stream    string   `json:"stream,omitempty"`
 	Data      []byte   `json:"data,omitempty"`
