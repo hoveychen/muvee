@@ -593,15 +593,36 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 // tree are rejected by simply not echoing the Origin header back.
 func applyUserInfoCORS(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
-	if origin == "" || cookieDomain == "" {
+	if origin == "" {
 		return
 	}
-	if !originMatchesBaseDomain(origin, cookieDomain) {
+	if !originMatchesAnyBaseDomain(origin) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Vary", "Origin")
+}
+
+// originMatchesAnyBaseDomain reports whether origin is https://B or https://*.B
+// for any configured platform base domain B, falling back to the canonical
+// cookieDomain when no BASE_DOMAINS list is set. This is the multi-domain
+// widening of the CORS gate: a project SPA on a subdomain of any served apex
+// can call /_oauth/* cross-origin with credentials.
+func originMatchesAnyBaseDomain(origin string) bool {
+	bases := cookieBaseDomains
+	if len(bases) == 0 {
+		bases = []string{cookieDomain}
+	}
+	for _, b := range bases {
+		if b == "" {
+			continue
+		}
+		if originMatchesBaseDomain(origin, b) {
+			return true
+		}
+	}
+	return false
 }
 
 // cookieDomainForHost returns the base domain an auth cookie should be scoped

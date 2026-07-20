@@ -654,8 +654,19 @@ func (s *Server) allowedOrigin(origin string) bool {
 			return true
 		}
 	}
-	// Strict: only the canonical https://${baseDomain} origin is allowed.
-	return strings.EqualFold(origin, "https://"+base)
+	// Strict: only the https://${base} origin of a configured base domain is
+	// allowed. Under multi-domain the panel is served under each apex, so each
+	// canonical base-domain origin must pass CORS.
+	bases := s.baseDomains
+	if len(bases) == 0 {
+		bases = []string{s.baseDomain}
+	}
+	for _, b := range bases {
+		if strings.EqualFold(origin, "https://"+strings.ToLower(strings.TrimSpace(b))) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) Router() http.Handler {

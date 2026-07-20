@@ -304,7 +304,7 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 			MaxAge:   7 * 24 * 3600,
 			HttpOnly: true,
 			Path:     "/",
-			Domain:   cookieDomain,
+			Domain:   cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode,
 		})
 	}
