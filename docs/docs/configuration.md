@@ -16,6 +16,7 @@ All configuration is via environment variables.
 | `MIGRATIONS_DIR` | `./db/migrations` | Path to SQL migration files |
 | `PORT` | `8080` | HTTP listen port |
 | `BASE_DOMAIN` | `localhost` | Root domain; projects are served at `{prefix}.BASE_DOMAIN`. Also distributed to agents via `/api/agent/config`. |
+| `BASE_DOMAINS` | — | Optional comma-separated list of **additional** base domains to serve the same instance under (multi-domain). `BASE_DOMAIN` stays the canonical default. See [Multi-domain](#multi-domain) below. |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth2 client ID. If set, enables Google login. See [Google OAuth2](./auth/auth-google). |
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth2 client secret |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Google OAuth2 callback URL |
@@ -69,6 +70,44 @@ All configuration is via environment variables.
 :::info Registry credentials and BASE_DOMAIN are distributed automatically
 Agents fetch `REGISTRY_ADDR`, `REGISTRY_USER`, `REGISTRY_PASSWORD`, and `BASE_DOMAIN` from the control plane via `GET /api/agent/config` on startup. You only need to set these on the control plane — there is no need to configure them on individual agent nodes.
 :::
+
+## Multi-domain
+
+By default muvee serves everything under a single `BASE_DOMAIN`. To host the
+**same instance** under more than one apex — for example an overseas domain and
+a mainland/ICP domain — set `BASE_DOMAINS` to a comma-separated list of the
+additional base domains:
+
+```bash
+BASE_DOMAIN=muveeai.com          # canonical default
+BASE_DOMAINS=muveeai.com,muvee.ai
+```
+
+`BASE_DOMAIN` remains the canonical fallback (used when a request host matches
+none of the configured domains). Per request muvee resolves which base domain
+the host belongs to, so all of the following follow the domain the user is
+actually on:
+
+- **Auth cookies** are scoped to the matching base domain (a login on
+  `muvee.ai` yields a `.muvee.ai` cookie, shared across its subdomains).
+- **OAuth redirect_uri** is rebased onto the matching base domain, kept
+  canonical to a single host per domain (e.g. `https://app.muvee.ai/_oauth/google`)
+  so project subdomains still bounce through the panel/authservice host.
+- **Traefik routers** match every project/tunnel prefix under each base domain
+  via a single OR'd `Host()` rule, each with its own TLS cert entry.
+- **CORS / origin** checks accept the canonical origin of every configured base
+  domain and any of their subdomains.
+
+### Requirements per extra base domain
+
+- **DNS:** point `<base>` (A record) and `*.<base>` (wildcard A record) at this
+  server's IP, same as the canonical domain.
+- **TLS:** there is **no wildcard cert** for the extra base domains — every
+  project subdomain obtains its own Let's Encrypt HTTP-01 certificate, so the
+  domain must be publicly reachable on port 80 for the ACME challenge.
+- **OAuth provider dashboards:** register each domain's callback URLs with every
+  provider you use, e.g. `https://app.<base>/auth/google/callback` (control-panel
+  login) and `https://app.<base>/_oauth/google` (per-project ForwardAuth).
 
 ## Runtime settings (admin UI)
 
