@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -27,8 +28,16 @@ var projectsCpCmd = &cobra.Command{
 	Long: `Copies in either direction. Exactly one of SRC or DST must reference
 a project container as PROJECT:PATH; the other is a local path.
 
+Upload destination semantics (like kubectl/scp):
+  - proj:/app/config.json  → the last path component is the target filename;
+                             the file is written there (renaming as needed).
+  - proj:/app/             → a trailing slash marks a directory; the source
+                             keeps its own name (→ /app/<basename>). The target
+                             directory must already exist.
+
 Examples:
-  muveectl projects cp ./config.json my-project:/app/config.json
+  muveectl projects cp ./config.json my-project:/app/config.json  # writes /app/config.json
+  muveectl projects cp ./config.json my-project:/app/             # writes /app/config.json
   muveectl projects cp my-project:/app/logs ./logs-dump`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -94,11 +103,37 @@ func openCpWebSocket(projectRef string) (*websocket.Conn, error) {
 	return ws, nil
 }
 
+// cpUploadTarget computes the tar entry name and the container extraction
+// directory for an upload, mirroring kubectl/scp semantics: a single regular
+// file whose destination is not directory-suffixed ("/" or "/.") is treated as
+// a file destination — the tar entry is renamed to the destination's last
+// component and extracted into its parent directory. Otherwise the destination
+// is a directory: the source keeps its own name (entryName == "") and is
+// extracted into remotePath. This is what lets `cp a.txt proj:/dir/b.txt`
+// rename on upload, matching the download side and docker/kubectl cp.
+func cpUploadTarget(srcIsRegularFile bool, remotePath string) (entryName, extractDir string) {
+	if srcIsRegularFile && remotePath != "" &&
+		!strings.HasSuffix(remotePath, "/") && !strings.HasSuffix(remotePath, "/.") {
+		return path.Base(remotePath), path.Dir(remotePath)
+	}
+	return "", remotePath
+}
+
 // runProjectCpUpload tars localPath and streams it to the container at remotePath.
 func runProjectCpUpload(projectRef, remotePath, localPath string) error {
-	if _, err := os.Stat(localPath); err != nil {
+	fi, err := os.Stat(localPath)
+	if err != nil {
 		return fmt.Errorf("source: %w", err)
 	}
+
+	// Decide how the destination is interpreted. For a single regular file with
+	// a file-style destination, rename the tar entry to the destination's last
+	// component and extract into its parent dir (kubectl/scp semantics); the
+	// agent runs `docker cp - <container>:<extractDir>`, which requires an
+	// existing directory. Directory-suffixed or directory sources extract into
+	// remotePath keeping their own name.
+	entryName, extractDir := cpUploadTarget(fi.Mode().IsRegular(), remotePath)
+
 	ws, err := openCpWebSocket(projectRef)
 	if err != nil {
 		return err
@@ -107,7 +142,7 @@ func runProjectCpUpload(projectRef, remotePath, localPath string) error {
 
 	if err := agentcontrol.WriteFrame(ws, agentcontrol.Frame{
 		Type:      agentcontrol.TypeOpenCp,
-		Path:      remotePath,
+		Path:      extractDir,
 		Direction: agentcontrol.CpDirectionUp,
 	}); err != nil {
 		return fmt.Errorf("send open_cp: %w", err)
@@ -117,7 +152,7 @@ func runProjectCpUpload(projectRef, remotePath, localPath string) error {
 	pr, pw := io.Pipe()
 	go func() {
 		tw := tar.NewWriter(pw)
-		err := tarFromDisk(tw, localPath)
+		err := tarFromDisk(tw, localPath, entryName)
 		if cerr := tw.Close(); err == nil {
 			err = cerr
 		}
@@ -241,13 +276,15 @@ func drainCpResult(ws *websocket.Conn) error {
 // tarFromDisk tars the file or directory rooted at localPath. Entry names are
 // relative to filepath.Base(localPath) so that `tar -x` (which is what
 // docker-cp does on the container side) recreates the same basename inside
-// the destination directory.
-func tarFromDisk(tw *tar.Writer, localPath string) error {
+// the destination directory. If entryNameOverride is non-empty, localPath must
+// be a single regular file whose tar entry is named entryNameOverride instead
+// of its own basename — this is how a file upload renames to a file-style
+// destination (e.g. `cp a.txt proj:/dir/b.txt`).
+func tarFromDisk(tw *tar.Writer, localPath, entryNameOverride string) error {
 	abs, err := filepath.Abs(localPath)
 	if err != nil {
 		return err
 	}
-	base := filepath.Base(abs)
 	parent := filepath.Dir(abs)
 	return filepath.Walk(abs, func(p string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -261,11 +298,15 @@ func tarFromDisk(tw *tar.Writer, localPath string) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(parent, p)
-		if err != nil {
-			return err
+		if entryNameOverride != "" && info.Mode().IsRegular() {
+			hdr.Name = entryNameOverride
+		} else {
+			rel, err := filepath.Rel(parent, p)
+			if err != nil {
+				return err
+			}
+			hdr.Name = filepath.ToSlash(rel)
 		}
-		hdr.Name = filepath.ToSlash(rel)
 		if info.IsDir() && !strings.HasSuffix(hdr.Name, "/") {
 			hdr.Name += "/"
 		}
@@ -283,7 +324,6 @@ func tarFromDisk(tw *tar.Writer, localPath string) error {
 				return copyErr
 			}
 		}
-		_ = base
 		return nil
 	})
 }
