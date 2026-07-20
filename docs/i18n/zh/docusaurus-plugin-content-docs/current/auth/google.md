@@ -26,6 +26,10 @@ muvee 支持通过 **OpenID Connect (OIDC)** 接入 Google 登录。对于已使
    https://example.com/_oauth
    ```
    第一个 URI 用于控制台登录；第二个用于 `muvee-authservice` 的 **ForwardAuth** 认证。
+
+   :::note 多域名
+   若在多个根域名下服务（`BASE_DOMAINS`），需为**每个**域名都添加上述两个 URI（如再加 `https://app.muvee.ai/auth/google/callback` 和 `https://app.muvee.ai/_oauth`）。见 [配置 → 多域名](../configuration#多域名)。
+   :::
 5. 点击 **创建**，并复制 **Client ID** 和 **Client Secret**
 
 ### 2. 配置环境变量

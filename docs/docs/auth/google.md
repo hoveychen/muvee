@@ -26,6 +26,10 @@ muvee supports Google sign-in via **OpenID Connect (OIDC)**. This is the simples
    https://example.com/_oauth
    ```
    The first URI is for the control-panel login. The second is for the per-project **ForwardAuth** sidecar (`muvee-authservice`).
+
+   :::note Multi-domain
+   If you serve muvee under multiple base domains (`BASE_DOMAINS`), add both URIs for **each** domain (e.g. also `https://app.muvee.ai/auth/google/callback` and `https://app.muvee.ai/_oauth`). See [Configuration → Multi-domain](../configuration#multi-domain).
+   :::
 5. Click **Create** and copy the **Client ID** and **Client Secret**
 
 ### 2. Configure environment variables

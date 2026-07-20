@@ -40,6 +40,10 @@ https://example.com/auth/feishu/callback
 ```
 将 `example.com` 替换为你的 `BASE_DOMAIN`。
 
+:::note 多域名
+若在多个根域名下服务（`BASE_DOMAINS`），需为**每个**域名都注册此回调（如再加 `https://app.muvee.ai/auth/feishu/callback`）。见 [配置 → 多域名](../configuration#多域名)。
+:::
+
 ### 4. 配置环境变量
 
 ```env

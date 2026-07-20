@@ -40,6 +40,10 @@ https://example.com/auth/wecom/callback
 ```
 Replace `example.com` with your `BASE_DOMAIN`.
 
+:::note Multi-domain
+If you serve muvee under multiple base domains (`BASE_DOMAINS`), register this callback for **each** domain (e.g. also `https://app.muvee.ai/auth/wecom/callback`). See [Configuration → Multi-domain](../configuration#multi-domain).
+:::
+
 ### 4. Configure environment variables
 
 ```env
