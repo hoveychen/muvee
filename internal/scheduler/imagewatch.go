@@ -37,25 +37,26 @@ const (
 // projects are handled the same way as external ones — the only difference is
 // where the docker-compose.yml is sourced from.
 //
-// The watcher is gated by SetImageWatchConfig — if the registry address is
-// empty (e.g. registry not configured) it returns immediately. It also
-// performs a one-shot connectivity probe against the registry; on failure
-// the goroutine logs a warning and exits, so the rest of the server keeps
-// running normally.
+// The one-shot connectivity probe against the private registry is advisory
+// only: a failed probe (or an empty REGISTRY_ADDR) must NOT disable the whole
+// watcher, because image projects that pull from an EXTERNAL registry (e.g.
+// ghcr.io) don't depend on muvee's private registry at all and must still be
+// watched. On probe failure we log a warning and keep ticking; private-
+// registry image fetches then just error per tick until it recovers (those
+// per-image errors are already tolerated — logged and skipped — downstream).
 func (s *Scheduler) StartImageWatcher(ctx context.Context) {
-	if s.registryAddr == "" {
-		log.Println("image watcher disabled: REGISTRY_ADDR not configured")
-		return
-	}
 	go s.runImageWatcher(ctx)
 }
 
 func (s *Scheduler) runImageWatcher(ctx context.Context) {
-	if !s.probeRegistryReachable(ctx) {
-		log.Printf("image watcher disabled: registry %q not reachable from control plane (this is fine if you keep the registry on a private network — the watcher will retry on next server restart)", s.registryAddr)
-		return
+	// Probe muvee's OWN private registry (REGISTRY_ADDR, default localhost:5000).
+	// A failure here couples nothing: keep the watcher running so external-
+	// registry (ghcr.io etc.) image projects still get their digests polled.
+	if s.registryAddr != "" && !s.probeRegistryReachable(ctx) {
+		log.Printf("image watcher: private registry %q not reachable from control plane; watching external-registry images only and retrying the private one each tick", s.registryAddr)
+	} else {
+		log.Println("image watcher started")
 	}
-	log.Println("image watcher started")
 	for {
 		interval := s.currentImageWatchInterval(ctx)
 		select {
