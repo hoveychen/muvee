@@ -213,6 +213,35 @@ func (s *Service) HandleCallback(ctx context.Context, providerName, code, invite
 	return user, jwtToken, nil
 }
 
+// SyntheticPhoneEmail derives the stable pseudo-email used to route a phone
+// login through the existing email-keyed platform machinery (UpsertUser,
+// EnsurePlatformMember, ADMIN_EMAILS, invite whitelist). The .invalid TLD is
+// reserved (RFC 2606) and never routable, so it can never collide with a real
+// address; the E.164 digits make it unique per phone number.
+func SyntheticPhoneEmail(e164 string) string {
+	return strings.TrimPrefix(e164, "+") + "@phone.invalid"
+}
+
+// HandlePhoneLogin completes a platform (admin-plane) phone login after the
+// verification code has been checked by the caller. It mirrors HandleCallback:
+// it synthesises the pseudo-email, runs the same EnsurePlatformMember policy
+// (provider "phone" is org-scoped so the domain check is skipped), and signs a
+// muvee_session JWT. ErrNotInvited propagates unchanged so the caller can
+// surface the invite-mode gate. To make a phone number an admin, add its
+// synthetic email (see SyntheticPhoneEmail) to ADMIN_EMAILS.
+func (s *Service) HandlePhoneLogin(ctx context.Context, e164 string) (*store.User, string, error) {
+	email := SyntheticPhoneEmail(e164)
+	user, _, err := s.EnsurePlatformMember(ctx, "phone", email, e164, "", "")
+	if err != nil {
+		return nil, "", err
+	}
+	jwtToken, err := s.signJWT(user)
+	if err != nil {
+		return nil, "", err
+	}
+	return user, jwtToken, nil
+}
+
 // EnsureIdentity upserts the user row for an already-verified
 // (email, name, avatarURL) triple. It does NOT enforce platform-side policy:
 // no domain check, no invite gate, no admin promotion, no platform_members
@@ -435,6 +464,12 @@ func isOrgScopedProvider(providers map[string]Provider, name string) bool {
 	}
 	switch name {
 	case "feishu", "wecom", "dingtalk":
+		return true
+	case "phone":
+		// A verified phone number is a self-contained identity with no email
+		// domain; the domain whitelist has nothing to match against, so phone
+		// login skips checkDomain and is governed by access_mode / invite /
+		// ADMIN_EMAILS (keyed on the synthetic phone email) instead.
 		return true
 	}
 	return false
