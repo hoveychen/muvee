@@ -1719,14 +1719,23 @@ func (s *Server) knownProviderIDs(ctx context.Context) map[string]bool {
 	return out
 }
 
+// EnabledProvidersNone is the sentinel value for enabled_providers meaning
+// "no OAuth providers for this project" — distinct from "" (inherit all). Used
+// to make a project password/SMS-only. Honoured by projectEnabledFwdProviders.
+const EnabledProvidersNone = "none"
+
 // normaliseEnabledProviders validates and canonicalises a comma-separated
 // provider whitelist. Empty input is allowed and returns "" — that means
 // "inherit the globally-configured set" (the SDK / login pages fall back to
-// every registered provider). Non-empty input is split, trimmed, lower-cased,
-// deduplicated, and sorted; every token must be a key in knownIDs.
+// every registered provider). The special value "none" disables all OAuth for
+// the project. Non-empty input is split, trimmed, lower-cased, deduplicated,
+// and sorted; every token must be a key in knownIDs.
 func normaliseEnabledProviders(raw string, knownIDs map[string]bool) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
+	}
+	if strings.EqualFold(strings.TrimSpace(raw), EnabledProvidersNone) {
+		return EnabledProvidersNone, nil
 	}
 	seen := make(map[string]bool)
 	var names []string

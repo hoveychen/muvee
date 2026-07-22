@@ -1876,8 +1876,12 @@ func inboundHost(r *http.Request) string {
 // projectEnabledFwdProviders intersects a project's enabled_providers whitelist
 // with the providers actually loaded by this authservice process. Empty
 // enabled_providers means "inherit the full fwdProviders set" so existing
-// projects keep working with no backfill.
+// projects keep working with no backfill. The sentinel "none" means the
+// project shows NO OAuth providers (password/SMS-only sign-in).
 func projectEnabledFwdProviders(enabledProviders string) []auth.Provider {
+	if strings.EqualFold(strings.TrimSpace(enabledProviders), "none") {
+		return nil
+	}
 	allow := func(string) bool { return true }
 	if strings.TrimSpace(enabledProviders) != "" {
 		set := make(map[string]bool)
