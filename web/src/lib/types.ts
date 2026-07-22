@@ -353,6 +353,15 @@ export interface SystemSettings {
   apple_team_id?: string
   apple_key_id?: string
   apple_private_key_p8?: string
+  // ─── Phone / SMS login (Aliyun PNVS 号码认证服务) ─────────────────────
+  // Configured via /admin/settings, read settings-first with ALIYUN_SMS_*
+  // env fallback by the server. platform_phone_login_enabled is 'true'|'false'.
+  sms_access_key_id?: string
+  sms_access_key_secret?: string
+  sms_sign_name?: string
+  sms_template_code?: string
+  sms_template_param?: string
+  platform_phone_login_enabled?: string
   // Read-only: computed by muvee-server from muvee-authservice's
   // FORWARD_AUTH_BASE_URL. The OAuth callback for each provider is
   // `${forward_auth_base_url}/_oauth/<provider>` — admins copy this into
