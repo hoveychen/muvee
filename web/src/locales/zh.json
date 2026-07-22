@@ -65,7 +65,18 @@
     "errorNotInvited": "你的账号不在邀请列表中，请联系管理员。",
     "errorDomainNotAllowed": "你的邮箱域名未被该平台许可。",
     "errorOAuthFailed": "登录失败，请重试。",
-    "errorGeneric": "登录未能完成。"
+    "errorGeneric": "登录未能完成。",
+    "or": "或",
+    "phonePlaceholder": "手机号",
+    "codePlaceholder": "验证码",
+    "sendCode": "发送验证码",
+    "resendIn": "{{s}} 秒后重发",
+    "sending": "发送中…",
+    "codeSent": "验证码已发送，请查收短信。",
+    "sendFailed": "验证码发送失败。",
+    "phoneRequired": "请先填写手机号。",
+    "networkError": "网络错误，请重试。",
+    "errorInvalidCode": "验证码错误或已过期。"
   },
   "projects": {
     "sectionLabel": "项目",

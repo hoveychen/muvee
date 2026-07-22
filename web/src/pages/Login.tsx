@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSettings } from '../lib/settings'
 
@@ -11,6 +11,7 @@ export default function LoginPage() {
   const { t } = useTranslation()
   const { settings } = useSettings()
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [phoneLogin, setPhoneLogin] = useState(false)
 
   const brandName = settings.site_name || 'muvee'
   const params = new URLSearchParams(window.location.search)
@@ -24,7 +25,10 @@ export default function LoginPage() {
     document.title = `${brandName} — Sign In`
     fetch('/api/auth/providers')
       .then(r => r.json())
-      .then((data: ProviderInfo[]) => setProviders(data))
+      .then((data: { providers: ProviderInfo[]; phone_login: boolean }) => {
+        setProviders(data.providers || [])
+        setPhoneLogin(!!data.phone_login)
+      })
       .catch(() => {})
   }, [brandName])
 
@@ -138,6 +142,18 @@ export default function LoginPage() {
                 <ProviderButton key={p.id} provider={p} cliPort={cliPort} cliHostname={cliHostname} inviteToken={inviteToken} redirectTo={redirectTo} />
               ))}
             </div>
+            {phoneLogin && (
+              <>
+                {providers.length > 0 && (
+                  <div className="flex items-center gap-3 my-4" style={{ color: 'var(--fg-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                    {t('login.or')}
+                    <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                  </div>
+                )}
+                <PhoneLoginForm redirectTo={redirectTo} />
+              </>
+            )}
           </div>
 
           <p
@@ -149,6 +165,86 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+// PhoneLoginForm is the self-service phone / SMS verification-code login for
+// the platform admin plane. Two steps: request a code, then submit phone+code
+// to /auth/phone/verify which signs muvee_session on success.
+function PhoneLoginForm({ redirectTo }: { redirectTo: string | null }) {
+  const { t } = useTranslation()
+  const [phone, setPhone] = useState('')
+  const [code, setCode] = useState('')
+  const [hint, setHint] = useState('')
+  const [countdown, setCountdown] = useState(0)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (countdown <= 0) return
+    const id = setTimeout(() => setCountdown(countdown - 1), 1000)
+    return () => clearTimeout(id)
+  }, [countdown])
+
+  const sendCode = async () => {
+    if (!phone) { setHint(t('login.phoneRequired')); return }
+    setHint(t('login.sending'))
+    try {
+      const res = await fetch('/auth/phone/send-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) { setHint(t('login.codeSent')); setCountdown(60) }
+      else { setHint(data.error || t('login.sendFailed')) }
+    } catch { setHint(t('login.networkError')) }
+  }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true); setHint('')
+    try {
+      const res = await fetch('/auth/phone/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, code }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.ok) {
+        const safe = redirectTo && redirectTo.startsWith('/') && !redirectTo.startsWith('//')
+          ? redirectTo : (data.redirect || '/')
+        window.location.href = safe
+        return
+      }
+      setHint(data.error === 'not_invited' ? t('login.errorNotInvited') : t('login.errorInvalidCode'))
+    } catch { setHint(t('login.networkError')) }
+    setSubmitting(false)
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-2">
+      <input
+        value={phone} onChange={e => setPhone(e.target.value)}
+        type="tel" autoComplete="tel" placeholder={t('login.phonePlaceholder')}
+        className="form-input" required
+      />
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <input
+          value={code} onChange={e => setCode(e.target.value)}
+          type="text" inputMode="numeric" autoComplete="one-time-code"
+          placeholder={t('login.codePlaceholder')}
+          className="form-input" style={{ flex: 1 }} required
+        />
+        <button
+          type="button" onClick={sendCode} disabled={countdown > 0}
+          className="btn-secondary" style={{ whiteSpace: 'nowrap', padding: '0 12px' }}
+        >
+          {countdown > 0 ? t('login.resendIn', { s: countdown }) : t('login.sendCode')}
+        </button>
+      </div>
+      <button type="submit" disabled={submitting} className="btn-primary" style={{ width: '100%', padding: '10px 16px' }}>
+        {t('login.signIn')}
+      </button>
+      {hint && <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', margin: 0 }}>{hint}</p>}
+    </form>
   )
 }
 

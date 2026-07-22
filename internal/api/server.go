@@ -689,6 +689,12 @@ func (s *Server) Router() http.Handler {
 	r.Get("/auth/{provider}/callback", s.handleProviderCallback)
 	r.Post("/auth/logout", s.handleLogout)
 
+	// Public platform (admin-plane) phone / SMS verification-code login. Gated
+	// by PLATFORM_PHONE_LOGIN (404 when off). Distinct from the internal-key
+	// downstream SMS endpoints under /api/internal/auth/sms/.
+	r.Post("/auth/phone/send-code", s.handlePlatformSMSSendCode)
+	r.Post("/auth/phone/verify", s.handlePlatformSMSVerify)
+
 	// CLI device-flow auth
 	r.Get("/auth/cli/login", s.handleCLILogin)
 
@@ -943,7 +949,10 @@ func (s *Server) Router() http.Handler {
 // ─── Auth Handlers ───────────────────────────────────────────────────────────
 
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, s.auth.ListProviders())
+	jsonOK(w, map[string]any{
+		"providers":   s.auth.ListProviders(),
+		"phone_login": platformPhoneLoginEnabled(),
+	})
 }
 
 // mergeDownstreamProviders merges env-registered providers with the social

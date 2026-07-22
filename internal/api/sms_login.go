@@ -114,7 +114,7 @@ func (s *Server) handleInternalAuthSMSSendCode(w http.ResponseWriter, r *http.Re
 		jsonErr(w, err, http.StatusInternalServerError)
 		return
 	}
-	if _, err := s.store.CreateSMSCode(r.Context(), projectID, phone, hashSMSCode(code), now.Add(smsCodeTTL)); err != nil {
+	if _, err := s.store.CreateSMSCode(r.Context(), &projectID, phone, hashSMSCode(code), now.Add(smsCodeTTL)); err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -159,7 +159,7 @@ func (s *Server) handleInternalAuthSMSVerify(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	rec, err := s.store.LatestUnconsumedSMSCode(r.Context(), projectID, phone)
+	rec, err := s.store.LatestUnconsumedSMSCode(r.Context(), &projectID, phone)
 	if err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
 		return
