@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/skill"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/sms"
 	"github.com/hoveychen/muvee/internal/domains"
 	"github.com/hoveychen/muvee/internal/gitrepo"
 	"github.com/hoveychen/muvee/internal/monitor"
@@ -41,6 +42,7 @@ import (
 type Server struct {
 	store              *store.Store
 	auth               *auth.Service
+	smsSender          sms.SMSSender // sends phone login codes; LogSender in dev, Aliyun when configured
 	sched              *scheduler.Scheduler
 	monitor            *monitor.Monitor
 	baseDomain         string
@@ -112,6 +114,7 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 	return &Server{
 		store:              st,
 		auth:               authSvc,
+		smsSender:          sms.NewSenderFromEnv(),
 		sched:              sched,
 		monitor:            mon,
 		baseDomain:         cfg.BaseDomain,
@@ -730,6 +733,8 @@ func (s *Server) Router() http.Handler {
 	// login form rendered by muvee-authservice. Verifies the bcrypt hash and
 	// upserts the identity via oauth_accounts (provider='password').
 	r.Post("/api/internal/auth/password-login", s.handleInternalAuthPasswordLogin)
+	r.Post("/api/internal/auth/sms/send-code", s.handleInternalAuthSMSSendCode)
+	r.Post("/api/internal/auth/sms/verify", s.handleInternalAuthSMSVerify)
 	// Internal endpoint: returns the current social-OAuth provider configs
 	// (Discord / Apple / Facebook / Twitter) for authservice to instantiate.
 	// Body contains secrets, so X-Muvee-Internal-Key is mandatory.
