@@ -745,11 +745,12 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := buildLoginPageData(cfg, allowed)
+	data.M = loginMessages(acceptLang(r))
 	switch r.URL.Query().Get("error") {
 	case "invalid_credentials":
-		data.LoginError = "Invalid username or password."
+		data.LoginError = data.M.BadCredentials
 	case "invalid_code":
-		data.SMSError = "Invalid or expired verification code."
+		data.SMSError = data.M.BadCode
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = loginPageTmpl.Execute(w, data)
@@ -1050,6 +1051,53 @@ type loginPageData struct {
 	// the template shows a "choose a method" sub-heading (and the "or" dividers
 	// are meaningful). Single-method pages skip that copy.
 	MultipleMethods bool
+	// M holds the localized UI strings (zh/en), chosen per-request from the
+	// Accept-Language header. See loginMessages.
+	M loginMsg
+}
+
+// loginMsg is the localized string set for the login page. EN toggles
+// word-order-sensitive phrasing (e.g. the OAuth button) in the template.
+type loginMsg struct {
+	EN                                                      bool
+	WelcomeBack, ChooseMethod, SignInTo, YourAccount        string
+	Or, Username, UsernamePH, Password, PasswordPH, Login   string
+	Phone, PhonePH, Code, CodePH, GetCode, Resend           string
+	Sending, CodeSent, SendFailed, NetworkErr, PhoneRequired string
+	BadCredentials, BadCode                                 string
+}
+
+// acceptLang picks "en" or "zh" from the request's Accept-Language header,
+// defaulting to zh (this is a China-first deployment). Only the highest-q tag
+// is considered.
+func acceptLang(r *http.Request) string {
+	al := strings.ToLower(r.Header.Get("Accept-Language"))
+	if i := strings.IndexAny(al, ",;"); i >= 0 {
+		al = al[:i]
+	}
+	if strings.HasPrefix(strings.TrimSpace(al), "en") {
+		return "en"
+	}
+	return "zh"
+}
+
+func loginMessages(lang string) loginMsg {
+	if lang == "en" {
+		return loginMsg{
+			EN: true, WelcomeBack: "Welcome back", ChooseMethod: "Choose how to sign in to", SignInTo: "Sign in to", YourAccount: "Sign in to your account",
+			Or: "or", Username: "Username", UsernamePH: "Enter your username", Password: "Password", PasswordPH: "Enter your password", Login: "Sign in",
+			Phone: "Phone number", PhonePH: "Enter your phone number", Code: "Verification code", CodePH: "6-digit code", GetCode: "Get code", Resend: "Resend",
+			Sending: "Sending…", CodeSent: "Code sent. Check your phone.", SendFailed: "Failed to send code.", NetworkErr: "Network error, please retry.", PhoneRequired: "Enter your phone number first.",
+			BadCredentials: "Invalid username or password.", BadCode: "Invalid or expired verification code.",
+		}
+	}
+	return loginMsg{
+		EN: false, WelcomeBack: "欢迎回来", ChooseMethod: "选择一种方式登录", SignInTo: "登录", YourAccount: "登录你的账户",
+		Or: "或", Username: "用户名", UsernamePH: "请输入用户名", Password: "密码", PasswordPH: "请输入密码", Login: "登录",
+		Phone: "手机号", PhonePH: "请输入手机号", Code: "验证码", CodePH: "6 位验证码", GetCode: "获取验证码", Resend: "重新获取",
+		Sending: "发送中…", CodeSent: "验证码已发送，请查收短信", SendFailed: "发送失败，请重试", NetworkErr: "网络错误，请重试", PhoneRequired: "请先输入手机号",
+		BadCredentials: "用户名或密码错误", BadCode: "验证码错误或已过期",
+	}
 }
 
 type loginProviderItem struct {
@@ -1191,11 +1239,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
-<html lang="en">
+<html lang="{{if .M.EN}}en{{else}}zh{{end}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .SiteName}}{{.SiteName}} · 登录{{else}}登录{{end}}</title>
+<title>{{if .SiteName}}{{.SiteName}} · {{end}}{{.M.WelcomeBack}}</title>
 {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}">{{end}}
 <style>
   *{box-sizing:border-box}
@@ -1253,7 +1301,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
     <div>{{if .Tagline}}<div class="tagline">{{.Tagline}}</div>{{end}}</div>
     <div>
       {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('sb-brand');if(f)f.style.display='block'">{{end}}
-      <div class="brand-txt" id="sb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}登录{{end}}</div>
+      <div class="brand-txt" id="sb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}{{.M.Login}}{{end}}</div>
       {{if .Description}}<p class="desc">{{.Description}}</p>{{end}}
     </div>
     {{if .FooterText}}<div class="footer">{{.FooterText}}</div>{{end}}
@@ -1262,49 +1310,50 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
     <div class="form-col">
       <div class="mobile-brand">
         {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('mb-brand');if(f)f.style.display='block'">{{end}}
-        <div class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}登录{{end}}</div>
+        <div class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}{{.M.Login}}{{end}}</div>
       </div>
-      <h1 class="head">欢迎回来</h1>
-      {{if .MultipleMethods}}<p class="sub">选择一种方式登录{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}登录 {{.SiteName}}{{else}}登录你的账户{{end}}</p>{{end}}
-      {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}使用 {{.DisplayName}} 登录</a>{{end}}
-      {{if .PasswordLogin}}{{if .Providers}}<div class="divider">或</div>{{end}}
+      <h1 class="head">{{.M.WelcomeBack}}</h1>
+      {{if .MultipleMethods}}<p class="sub">{{.M.ChooseMethod}}{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}{{.M.SignInTo}} {{.SiteName}}{{else}}{{.M.YourAccount}}{{end}}</p>{{end}}
+      {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{if $.M.EN}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</a>{{end}}
+      {{if .PasswordLogin}}{{if .Providers}}<div class="divider">{{.M.Or}}</div>{{end}}
       <form class="pw-form" method="post" action="/_oauth/password">
         {{if .LoginError}}<p class="pw-error">{{.LoginError}}</p>{{end}}
-        <label for="pw-username">用户名</label>
-        <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" placeholder="请输入用户名" required>
-        <label for="pw-password">密码</label>
-        <input id="pw-password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
-        <button type="submit">登录</button>
+        <label for="pw-username">{{.M.Username}}</label>
+        <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" placeholder="{{.M.UsernamePH}}" required>
+        <label for="pw-password">{{.M.Password}}</label>
+        <input id="pw-password" name="password" type="password" autocomplete="current-password" placeholder="{{.M.PasswordPH}}" required>
+        <button type="submit">{{.M.Login}}</button>
       </form>{{end}}
-      {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">或</div>{{end}}
+      {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">{{.M.Or}}</div>{{end}}
       <form class="pw-form sms-form" method="post" action="/_oauth/sms/verify">
         {{if .SMSError}}<p class="pw-error">{{.SMSError}}</p>{{end}}
-        <label for="sms-phone">手机号</label>
-        <input id="sms-phone" name="phone" type="tel" autocomplete="tel" inputmode="numeric" placeholder="请输入手机号" required>
-        <label for="sms-code">验证码</label>
+        <label for="sms-phone">{{.M.Phone}}</label>
+        <input id="sms-phone" name="phone" type="tel" autocomplete="tel" inputmode="numeric" placeholder="{{.M.PhonePH}}" required>
+        <label for="sms-code">{{.M.Code}}</label>
         <div class="sms-code-row">
-          <input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" required>
-          <button type="button" id="sms-send" class="sms-send-btn">获取验证码</button>
+          <input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="{{.M.CodePH}}" required>
+          <button type="button" id="sms-send" class="sms-send-btn">{{.M.GetCode}}</button>
         </div>
-        <button type="submit">登录</button>
+        <button type="submit">{{.M.Login}}</button>
         <p class="sms-hint" id="sms-hint"></p>
       </form>
       <script>
       (function(){
+        var MSG={get:'{{.M.GetCode}}',resend:'{{.M.Resend}}',phoneRequired:'{{.M.PhoneRequired}}',sending:'{{.M.Sending}}',sent:'{{.M.CodeSent}}',failed:'{{.M.SendFailed}}',neterr:'{{.M.NetworkErr}}'};
         var btn=document.getElementById('sms-send'),phone=document.getElementById('sms-phone'),hint=document.getElementById('sms-hint');
         if(!btn){return;}
         var left=0;
-        function tick(){if(left<=0){btn.disabled=false;btn.textContent='获取验证码';return;}btn.textContent='重新获取('+left+'s)';left--;setTimeout(tick,1000);}
+        function tick(){if(left<=0){btn.disabled=false;btn.textContent=MSG.get;return;}btn.textContent=MSG.resend+'('+left+'s)';left--;setTimeout(tick,1000);}
         btn.addEventListener('click',function(){
-          if(!phone.value){hint.textContent='请先输入手机号';return;}
-          btn.disabled=true;hint.textContent='发送中…';
+          if(!phone.value){hint.textContent=MSG.phoneRequired;return;}
+          btn.disabled=true;hint.textContent=MSG.sending;
           fetch('/_oauth/sms/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'phone='+encodeURIComponent(phone.value)})
             .then(function(res){return res.json().then(function(j){return {ok:res.ok,body:j};}).catch(function(){return {ok:res.ok,body:{}};});})
             .then(function(r){
-              if(r.ok){hint.textContent='验证码已发送，请查收短信';left=60;tick();}
-              else{btn.disabled=false;hint.textContent=(r.body&&r.body.error)?r.body.error:'发送失败，请重试';}
+              if(r.ok){hint.textContent=MSG.sent;left=60;tick();}
+              else{btn.disabled=false;hint.textContent=(r.body&&r.body.error)?r.body.error:MSG.failed;}
             })
-            .catch(function(){btn.disabled=false;hint.textContent='网络错误，请重试';});
+            .catch(function(){btn.disabled=false;hint.textContent=MSG.neterr;});
         });
       })();
       </script>{{end}}
