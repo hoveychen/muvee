@@ -2068,6 +2068,16 @@ func (s *Store) ConsumeSMSCode(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+// RecordSMSSend appends a send-ledger row for rate limiting (one per code
+// sent). projectID is nil for platform codes, set for downstream project
+// codes. The code itself is not stored — Aliyun PNVS owns it.
+func (s *Store) RecordSMSSend(ctx context.Context, projectID *uuid.UUID, phone string) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO sms_verification_codes (id, phone, project_id, created_at)
+		VALUES ($1, $2, $3, NOW())`, uuid.New(), phone, projectID)
+	return err
+}
+
 // CountSMSCodesSince counts how many codes were issued to a phone number
 // (across all projects) since a cutoff. Used for resend throttling and the
 // daily send cap so one number cannot be used to burn SMS quota.
