@@ -1592,11 +1592,11 @@ func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const pageTmpl = `<!DOCTYPE html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>设备登录</title>
+<title>{{if eq .Lang "en"}}Device login{{else}}设备登录{{end}}</title>
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100dvh;margin:0;background:#faf9f7;color:#1a1917;padding:1.25rem;-webkit-font-smoothing:antialiased}
@@ -1613,14 +1613,14 @@ func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
 <div class="card">
-  <h1>设备登录</h1>
-  <p>请输入终端中显示的验证码</p>
+  <h1>{{if eq .Lang "en"}}Device login{{else}}设备登录{{end}}</h1>
+  <p>{{if eq .Lang "en"}}Enter the code shown in your terminal{{else}}请输入终端中显示的验证码{{end}}</p>
   <form id="form" onsubmit="return go()">
     <input type="text" id="code" maxlength="9" placeholder="XXXX-XXXX" value="{{.Code}}" autofocus autocomplete="off">
-    <div class="error" id="err">验证码无效或已过期</div>
+    <div class="error" id="err">{{if eq .Lang "en"}}Invalid or expired code{{else}}验证码无效或已过期{{end}}</div>
     <div class="providers" id="providers" style="{{if not .Code}}display:none{{end}}">
-      {{range .Providers}}<button type="submit" name="provider" value="{{.Name}}">使用 {{.DisplayName}} 登录</button>{{end}}
-      {{if eq (len .Providers) 0}}<button type="submit">继续</button>{{end}}
+      {{range .Providers}}<button type="submit" name="provider" value="{{.Name}}">{{if eq $.Lang "en"}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</button>{{end}}
+      {{if eq (len .Providers) 0}}<button type="submit">{{if eq .Lang "en"}}Continue{{else}}继续{{end}}</button>{{end}}
     </div>
   </form>
 </div>
@@ -1666,7 +1666,8 @@ function go(){
 	_ = t.Execute(w, struct {
 		Code      string
 		Providers []providerItem
-	}{Code: formatted, Providers: items})
+		Lang      string
+	}{Code: formatted, Providers: items, Lang: acceptLang(r)})
 	return
 }
 
@@ -2063,11 +2064,11 @@ func submitAccessRequestInternal(ctx context.Context, projectID, email, reason s
 // bundle) because authservice already serves /_oauth/login the same way and
 // the page has no client-side state worth pulling in React for.
 const requestAccessPageTmpl = `<!DOCTYPE html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>申请访问 · {{.ProjectName}}</title>
+<title>{{if eq .Lang "en"}}Request access{{else}}申请访问{{end}} · {{.ProjectName}}</title>
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100dvh;margin:0;background:#faf9f7;color:#1a1917;padding:1.25rem;-webkit-font-smoothing:antialiased}
@@ -2089,27 +2090,27 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
 <body>
 <div class="card">
 {{if eq .Phase "form"}}
-  <h1>申请访问</h1>
-  <p><strong>{{.ProjectName}}</strong> 是私有项目。给项目所有者留言说明你为什么需要访问，通过后即可进入。</p>
+  <h1>{{if eq .Lang "en"}}Request access{{else}}申请访问{{end}}</h1>
+  <p><strong>{{.ProjectName}}</strong> {{if eq .Lang "en"}}is private. Send the owner a note explaining why you need access — you'll be let in once approved.{{else}}是私有项目。给项目所有者留言说明你为什么需要访问，通过后即可进入。{{end}}</p>
   <form method="POST" action="/_oauth/request-access">
     <input type="hidden" name="project_id" value="{{.ProjectID}}">
-    <label for="reason">申请理由（可选）</label>
-    <textarea id="reason" name="reason" maxlength="1000" placeholder="你需要用它做什么？"></textarea>
-    <button type="submit">发送申请</button>
+    <label for="reason">{{if eq .Lang "en"}}Reason (optional){{else}}申请理由（可选）{{end}}</label>
+    <textarea id="reason" name="reason" maxlength="1000" placeholder="{{if eq .Lang "en"}}What do you need this for?{{else}}你需要用它做什么？{{end}}"></textarea>
+    <button type="submit">{{if eq .Lang "en"}}Send request{{else}}发送申请{{end}}</button>
   </form>
-  <p class="muted" style="margin-top:1.2rem">已登录为 {{.Email}}。<a href="/_oauth/logout?redirect=/">退出登录</a></p>
+  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Email}}. <a href="/_oauth/logout?redirect=/">Sign out</a>{{else}}已登录为 {{.Email}}。<a href="/_oauth/logout?redirect=/">退出登录</a>{{end}}</p>
 {{else if eq .Phase "submitted"}}
-  <h1>申请已提交</h1>
-  <div class="ok">已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。</div>
-  <p class="muted">已登录为 {{.Email}}。</p>
+  <h1>{{if eq .Lang "en"}}Request submitted{{else}}申请已提交{{end}}</h1>
+  <div class="ok">{{if eq .Lang "en"}}We've notified the owner of <strong>{{.ProjectName}}</strong>. You'll be able to reach this project once they approve.{{else}}已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。{{end}}</div>
+  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Email}}.{{else}}已登录为 {{.Email}}。{{end}}</p>
 {{else if eq .Phase "already-allowed"}}
-  <h1>你已有访问权限</h1>
-  <p>{{.ProjectName}} 已可从你的账户访问。<a href="/">再试一次打开</a> —— 若仍失败，请联系所有者核实。</p>
-  <p class="muted">已登录为 {{.Email}}。</p>
+  <h1>{{if eq .Lang "en"}}You already have access{{else}}你已有访问权限{{end}}</h1>
+  <p>{{if eq .Lang "en"}}{{.ProjectName}} is already reachable from your account. <a href="/">Try opening it again</a> — if it still fails, ask the owner to verify.{{else}}{{.ProjectName}} 已可从你的账户访问。<a href="/">再试一次打开</a> —— 若仍失败，请联系所有者核实。{{end}}</p>
+  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Email}}.{{else}}已登录为 {{.Email}}。{{end}}</p>
 {{else if eq .Phase "error"}}
-  <h1>出错了</h1>
+  <h1>{{if eq .Lang "en"}}Something went wrong{{else}}出错了{{end}}</h1>
   <div class="err">{{.Error}}</div>
-  <p class="muted">若持续出现，请直接联系项目所有者。</p>
+  <p class="muted">{{if eq .Lang "en"}}If this keeps happening, contact the project owner directly.{{else}}若持续出现，请直接联系项目所有者。{{end}}</p>
 {{end}}
 </div>
 </body>
@@ -2117,7 +2118,11 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
 
 // renderRequestAccessPage executes requestAccessPageTmpl with the given fields.
 // Kept as a single helper so the GET / POST branches can't drift on look.
-func renderRequestAccessPage(w http.ResponseWriter, status int, data map[string]string) {
+func renderRequestAccessPage(w http.ResponseWriter, r *http.Request, status int, data map[string]string) {
+	if data == nil {
+		data = map[string]string{}
+	}
+	data["Lang"] = acceptLang(r)
 	t := template.Must(template.New("request-access").Parse(requestAccessPageTmpl))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -2138,7 +2143,7 @@ func renderRequestAccessPage(w http.ResponseWriter, status int, data map[string]
 func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 	projectID := strings.TrimSpace(r.URL.Query().Get("project"))
 	if projectID == "" {
-		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
 			"Phase": "error", "Error": "Missing ?project=<id> in the URL.",
 		})
 		return
@@ -2170,18 +2175,18 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 	info, err := fetchProjectInfoInternal(r.Context(), projectID)
 	if err != nil {
 		log.Printf("authservice: fetch project info (%s): %v", projectID, err)
-		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
 		})
 		return
 	}
 	if info == nil {
-		renderRequestAccessPage(w, http.StatusNotFound, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusNotFound, map[string]string{
 			"Phase": "error", "Error": "Project not found.",
 		})
 		return
 	}
-	renderRequestAccessPage(w, http.StatusOK, map[string]string{
+	renderRequestAccessPage(w, r, http.StatusOK, map[string]string{
 		"Phase":       "form",
 		"ProjectID":   info.ID,
 		"ProjectName": info.Name,
@@ -2200,7 +2205,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
 			"Phase": "error", "Error": "Invalid form submission.",
 		})
 		return
@@ -2208,7 +2213,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	projectID := strings.TrimSpace(r.PostFormValue("project_id"))
 	reason := strings.TrimSpace(r.PostFormValue("reason"))
 	if projectID == "" {
-		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
 			"Phase": "error", "Error": "Missing project id.",
 		})
 		return
@@ -2216,7 +2221,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	info, err := fetchProjectInfoInternal(r.Context(), projectID)
 	if err != nil || info == nil {
 		log.Printf("authservice: fetch project info (%s): %v", projectID, err)
-		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
 		})
 		return
@@ -2224,7 +2229,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	res, err := submitAccessRequestInternal(r.Context(), projectID, claims.Email, reason)
 	if err != nil {
 		log.Printf("authservice: submit access request (project=%s email=%s): %v", projectID, claims.Email, err)
-		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Could not submit your request. Try again in a moment.",
 		})
 		return
@@ -2233,7 +2238,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	if res.AlreadyAllowed {
 		phase = "already-allowed"
 	}
-	renderRequestAccessPage(w, http.StatusOK, map[string]string{
+	renderRequestAccessPage(w, r, http.StatusOK, map[string]string{
 		"Phase":       phase,
 		"ProjectID":   info.ID,
 		"ProjectName": info.Name,
