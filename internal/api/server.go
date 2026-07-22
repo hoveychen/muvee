@@ -361,6 +361,7 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		"auth_required":     p.AuthRequired,
 		"access_mode":       p.AccessMode,
 		"password_login":    passwordAccounts > 0,
+		"sms_login":         p.SMSLoginEnabled,
 		"branding": map[string]any{
 			"site_name":            p.BrandingSiteName,
 			"logo_url":             p.BrandingLogoURL,
