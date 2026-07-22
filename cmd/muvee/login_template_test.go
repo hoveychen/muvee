@@ -142,8 +142,10 @@ func TestLoginPageTmpl_EscapesUserContent(t *testing.T) {
 	if strings.Contains(body, `<img src=x onerror=alert(1)>`) {
 		t.Error("img injection in Tagline leaked unescaped into output")
 	}
-	// Confirm the safe defaults are still inlined in the style block.
-	if !strings.Contains(body, "background:#4f46e5") && !strings.Contains(body, "border-color:#4f46e5") {
+	// Confirm the safe defaults are still inlined in the style block. The
+	// primary colour is now surfaced via a CSS custom property (:root{--primary})
+	// and referenced with var(--primary) throughout.
+	if !strings.Contains(body, "--primary:#4f46e5") {
 		t.Error("expected fallback primary colour #4f46e5 in inlined style")
 	}
 	if !strings.Contains(body, "background:#0f172a") {

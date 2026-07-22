@@ -1182,40 +1182,45 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}">{{end}}
 <style>
   *{box-sizing:border-box}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f8fafc;color:#0f172a;min-height:100vh}
-  .page{display:flex;min-height:100vh}
-  .sidebar{display:none;flex-direction:column;justify-content:space-between;width:50%;padding:4rem;background:{{.SidebarBg}};color:#fff;position:relative;overflow:hidden}
-  .sidebar .tagline{font-size:.8125rem;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.7)}
-  .sidebar .brand{font-size:5rem;font-weight:700;line-height:1;letter-spacing:-.02em;margin:0}
-  .sidebar .brand img{height:80px;object-fit:contain;display:block}
-  .sidebar .desc{margin-top:1.5rem;font-size:1rem;line-height:1.7;color:rgba(255,255,255,.85);max-width:24rem;white-space:pre-line}
-  .sidebar .footer{display:flex;gap:1rem;font-size:.875rem;color:rgba(255,255,255,.75)}
-  .sidebar .footer .sep{color:rgba(255,255,255,.4)}
-  .panel{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem}
-  .card{width:100%;max-width:22rem;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:2rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
-  .mobile-brand{margin-bottom:2.5rem;text-align:center}
-  .mobile-brand img{height:48px;object-fit:contain}
-  .mobile-brand h1{margin:0;font-size:2.25rem;font-weight:700;color:#0f172a}
-  .card h2{margin:0 0 .25rem;font-size:1.25rem;font-weight:600;color:#0f172a}
-  .card .sub{margin:0 0 2rem;font-size:.875rem;color:#64748b}
-  .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:10px 16px;margin-top:.75rem;border:1px solid #e2e8f0;border-radius:8px;background:#fff;color:#0f172a;font-size:.875rem;font-weight:500;text-decoration:none;transition:border-color .15s,background .15s}
+  :root{--primary:{{.PrimaryColor}};--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--field:#f1f5f9}
+  html,body{height:100%}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:var(--ink);background:#f8fafc;-webkit-font-smoothing:antialiased}
+  .page{display:flex;min-height:100dvh}
+  .sidebar{display:none;flex-direction:column;justify-content:space-between;width:46%;padding:3.5rem;background:{{.SidebarBg}};color:#fff;position:relative;overflow:hidden}
+  .sidebar::after{content:"";position:absolute;inset:auto -20% -30% auto;width:60%;height:60%;background:radial-gradient(closest-side,rgba(255,255,255,.10),transparent);pointer-events:none}
+  .sidebar .tagline{font-size:.75rem;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.65)}
+  .brand-txt{font-size:3.5rem;font-weight:800;line-height:1.05;letter-spacing:-.03em;margin:0}
+  .brand-logo{max-height:72px;max-width:100%;object-fit:contain;display:block}
+  .sidebar .desc{margin-top:1.25rem;font-size:1.0625rem;line-height:1.7;color:rgba(255,255,255,.82);max-width:26rem;white-space:pre-line}
+  .sidebar .footer{font-size:.8125rem;color:rgba(255,255,255,.6)}
+  .panel{flex:1;display:flex;align-items:center;justify-content:center;padding:clamp(1.25rem,5vw,3rem)}
+  .card{width:100%;max-width:25rem;background:#fff;border:1px solid var(--line);border-radius:18px;padding:clamp(1.5rem,5vw,2.25rem);box-shadow:0 10px 40px -12px rgba(15,23,42,.12)}
+  .mobile-brand{margin-bottom:1.75rem;text-align:center}
+  .mobile-brand .brand-logo{max-height:52px;margin:0 auto}
+  .mobile-brand .brand-txt{font-size:2rem;color:var(--ink)}
+  .card h2{margin:0 0 .35rem;font-size:1.375rem;font-weight:700;letter-spacing:-.01em}
+  .card .sub{margin:0 0 1.75rem;font-size:.9375rem;color:var(--muted)}
+  .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:12px 16px;margin-top:.6rem;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink);font-size:.9375rem;font-weight:600;text-decoration:none;transition:border-color .15s,background .15s,transform .05s}
   .btn:first-of-type{margin-top:0}
-  .btn:hover{border-color:{{.PrimaryColor}};background:#f8fafc}
+  .btn:hover{border-color:var(--primary);background:#f8fafc}
+  .btn:active{transform:translateY(1px)}
   .btn .icon{display:inline-flex;color:#475569}
-  .divider{display:flex;align-items:center;gap:.75rem;margin:1.25rem 0;color:#94a3b8;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em}
-  .divider::before,.divider::after{content:"";flex:1;height:1px;background:#e2e8f0}
-  .pw-form label{display:block;margin-bottom:.25rem;font-size:.8125rem;font-weight:500;color:#334155}
-  .pw-form input{width:100%;padding:9px 12px;margin-bottom:.75rem;border:1px solid #e2e8f0;border-radius:8px;font-size:.875rem;color:#0f172a;background:#fff}
-  .pw-form input:focus{outline:none;border-color:{{.PrimaryColor}}}
-  .pw-form button{width:100%;padding:10px 16px;border:none;border-radius:8px;background:{{.PrimaryColor}};color:#fff;font-size:.875rem;font-weight:500;cursor:pointer}
-  .pw-form button:hover{filter:brightness(1.08)}
-  .pw-error{margin:0 0 .75rem;padding:.5rem .75rem;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;color:#b91c1c;font-size:.8125rem}
-  .sms-code-row{display:flex;gap:.5rem;margin-bottom:.75rem}
-  .sms-code-row input{margin-bottom:0}
-  .sms-send-btn{flex:0 0 auto;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;color:#334155;font-size:.8125rem;font-weight:500;cursor:pointer;white-space:nowrap}
-  .sms-send-btn:disabled{opacity:.5;cursor:default}
-  .sms-hint{margin:.5rem 0 0;font-size:.75rem;color:#64748b;min-height:1em}
-  .trust{margin-top:1.25rem;display:flex;align-items:center;justify-content:center;gap:1rem;font-size:.75rem;color:#94a3b8}
+  .divider{display:flex;align-items:center;gap:.75rem;margin:1.4rem 0;color:#94a3b8;font-size:.6875rem;text-transform:uppercase;letter-spacing:.1em}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+  .pw-form label{display:block;margin-bottom:.4rem;font-size:.8125rem;font-weight:600;color:#334155}
+  .pw-form input{width:100%;height:48px;padding:0 14px;margin-bottom:1rem;border:1px solid var(--line);border-radius:11px;font-size:1rem;color:var(--ink);background:var(--field);transition:border-color .15s,box-shadow .15s,background .15s}
+  .pw-form input:focus{outline:none;background:#fff;border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 18%,transparent)}
+  .pw-form>button{width:100%;height:48px;margin-top:.35rem;border:none;border-radius:11px;background:var(--primary);color:#fff;font-size:.9375rem;font-weight:700;cursor:pointer;transition:filter .15s,transform .05s}
+  .pw-form>button:hover{filter:brightness(1.07)}
+  .pw-form>button:active{transform:translateY(1px)}
+  .pw-error{margin:0 0 1rem;padding:.6rem .8rem;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#b91c1c;font-size:.8125rem}
+  .sms-code-row{display:flex;gap:.5rem;margin-bottom:1rem}
+  .sms-code-row input{flex:1;min-width:0;margin-bottom:0}
+  .sms-send-btn{flex:0 0 auto;height:48px;padding:0 14px;border:1px solid var(--primary);border-radius:11px;background:transparent;color:var(--primary);font-size:.875rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:opacity .15s}
+  .sms-send-btn:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 8%,transparent)}
+  .sms-send-btn:disabled{opacity:.45;cursor:default;border-color:var(--line);color:var(--muted)}
+  .sms-hint{margin:.6rem 0 0;font-size:.8125rem;color:var(--muted);min-height:1em}
+  .trust{margin-top:1.4rem;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:.75rem 1rem;font-size:.75rem;color:#94a3b8}
   .trust span{display:inline-flex;align-items:center;gap:.35rem}
   .trust svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
   @media(min-width:1024px){.sidebar{display:flex}.mobile-brand{display:none}}
@@ -1226,15 +1231,17 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
   <aside class="sidebar">
     <div class="tagline">{{if .Tagline}}{{.Tagline}}{{else}}Welcome{{end}}</div>
     <div>
-      {{if .LogoURL}}<img class="brand" src="{{.LogoURL}}" alt="{{.SiteName}}">{{else if .SiteName}}<h1 class="brand">{{.SiteName}}</h1>{{else}}<h1 class="brand">Sign in</h1>{{end}}
+      {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('sb-brand');if(f)f.style.display='block'">{{end}}
+      <h1 class="brand-txt" id="sb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}Sign in{{end}}</h1>
       {{if .Description}}<p class="desc">{{.Description}}</p>{{end}}
     </div>
-    {{if .FooterText}}<div class="footer"><span>{{.FooterText}}</span></div>{{end}}
+    {{if .FooterText}}<div class="footer">{{.FooterText}}</div>{{end}}
   </aside>
   <main class="panel">
-    <div>
+    <div style="width:100%;max-width:25rem">
       <div class="mobile-brand">
-        {{if .LogoURL}}<img src="{{.LogoURL}}" alt="{{.SiteName}}">{{else if .SiteName}}<h1>{{.SiteName}}</h1>{{else}}<h1>Sign in</h1>{{end}}
+        {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('mb-brand');if(f)f.style.display='block'">{{end}}
+        <h1 class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}Sign in{{end}}</h1>
       </div>
       <div class="card">
         <h2>{{if .SiteName}}Sign in to {{.SiteName}}{{else}}Sign in{{end}}</h2>
