@@ -1547,30 +1547,31 @@ func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Device Login</title>
+<title>设备登录</title>
 <style>
-  body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
-  .card{background:#fff;border-radius:12px;padding:2.5rem 3rem;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;min-width:320px}
-  h1{font-size:1.3rem;margin:0 0 .5rem;color:#111}
-  p{color:#666;font-size:.9rem;margin:0 0 1.5rem}
-  input[type=text]{width:100%;padding:.75rem;font-size:1.4rem;text-align:center;letter-spacing:.3em;border:2px solid #ddd;border-radius:8px;box-sizing:border-box;text-transform:uppercase}
-  input[type=text]:focus{outline:none;border-color:#4f46e5}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100dvh;margin:0;background:#faf9f7;color:#1a1917;padding:1.25rem;-webkit-font-smoothing:antialiased}
+  .card{background:#fff;border:1px solid #e9e5dd;border-radius:16px;padding:clamp(1.75rem,5vw,2.5rem);box-shadow:0 10px 40px -14px rgba(26,25,23,.12);text-align:center;width:100%;max-width:22rem}
+  h1{font-size:1.4rem;font-weight:750;letter-spacing:-.02em;margin:0 0 .5rem}
+  p{color:#8a857c;font-size:.9rem;margin:0 0 1.5rem}
+  input[type=text]{width:100%;padding:.85rem;font-size:1.5rem;text-align:center;letter-spacing:.3em;border:1px solid #e9e5dd;border-radius:10px;background:#f5f2ec;text-transform:uppercase;transition:border-color .15s,box-shadow .15s,background .15s}
+  input[type=text]:focus{outline:none;background:#fff;border-color:#1a1917;box-shadow:0 0 0 3px rgba(26,25,23,.08)}
   .providers{margin-top:1.2rem}
-  button,a.btn{display:block;width:100%;margin:.5rem 0;padding:.75rem;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none;font-size:.95rem;border:none;cursor:pointer;text-align:center;box-sizing:border-box}
-  button:hover,a.btn:hover{background:#4338ca}
-  .error{color:#e53e3e;font-size:.85rem;margin-top:.5rem;display:none}
+  button,a.btn{display:block;width:100%;margin:.55rem 0;padding:.85rem;border-radius:10px;background:#111827;color:#fff;text-decoration:none;font-size:.9375rem;font-weight:650;border:none;cursor:pointer;text-align:center;transition:filter .15s}
+  button:hover,a.btn:hover{filter:brightness(1.15)}
+  .error{color:#b23a1e;font-size:.85rem;margin-top:.6rem;display:none}
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>Device Login</h1>
-  <p>Enter the code shown in your terminal</p>
+  <h1>设备登录</h1>
+  <p>请输入终端中显示的验证码</p>
   <form id="form" onsubmit="return go()">
     <input type="text" id="code" maxlength="9" placeholder="XXXX-XXXX" value="{{.Code}}" autofocus autocomplete="off">
-    <div class="error" id="err">Invalid or expired code</div>
+    <div class="error" id="err">验证码无效或已过期</div>
     <div class="providers" id="providers" style="{{if not .Code}}display:none{{end}}">
-      {{range .Providers}}<button type="submit" name="provider" value="{{.Name}}">{{.DisplayName}}</button>{{end}}
-      {{if eq (len .Providers) 0}}<button type="submit">Continue</button>{{end}}
+      {{range .Providers}}<button type="submit" name="provider" value="{{.Name}}">使用 {{.DisplayName}} 登录</button>{{end}}
+      {{if eq (len .Providers) 0}}<button type="submit">继续</button>{{end}}
     </div>
   </form>
 </div>
@@ -2017,47 +2018,49 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Request access — {{.ProjectName}}</title>
+<title>申请访问 · {{.ProjectName}}</title>
 <style>
-  body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5;padding:1rem}
-  .card{background:#fff;border-radius:12px;padding:2.5rem 3rem;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:520px;width:100%;box-sizing:border-box}
-  h1{font-size:1.4rem;margin:0 0 .8rem;color:#111}
-  p{color:#555;line-height:1.6;font-size:.95rem;margin:.4rem 0}
-  .muted{color:#888;font-size:.85rem}
-  textarea{width:100%;min-height:6rem;padding:.65rem;border:1px solid #ddd;border-radius:6px;font:inherit;box-sizing:border-box;resize:vertical}
-  textarea:focus{outline:none;border-color:#4f46e5}
-  button{padding:.7rem 1.4rem;border-radius:8px;background:#4f46e5;color:#fff;border:none;font-size:.95rem;cursor:pointer;margin-top:1rem}
-  button:hover{background:#4338ca}
-  .err{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;padding:.6rem .8rem;border-radius:6px;margin-top:1rem;font-size:.85rem}
-  .ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;padding:.6rem .8rem;border-radius:6px;margin-top:1rem;font-size:.9rem}
-  a{color:#4f46e5;text-decoration:none}
-  a:hover{text-decoration:underline}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100dvh;margin:0;background:#faf9f7;color:#1a1917;padding:1.25rem;-webkit-font-smoothing:antialiased}
+  .card{background:#fff;border:1px solid #e9e5dd;border-radius:16px;padding:clamp(1.75rem,5vw,2.5rem);box-shadow:0 10px 40px -14px rgba(26,25,23,.12);max-width:30rem;width:100%}
+  h1{font-size:1.5rem;font-weight:750;letter-spacing:-.02em;margin:0 0 .7rem}
+  p{color:#57534c;line-height:1.7;font-size:.95rem;margin:.4rem 0}
+  .muted{color:#8a857c;font-size:.85rem}
+  textarea{width:100%;min-height:6.5rem;margin-top:.4rem;padding:.75rem .85rem;border:1px solid #e9e5dd;border-radius:10px;font:inherit;background:#f5f2ec;resize:vertical;transition:border-color .15s,box-shadow .15s,background .15s}
+  textarea:focus{outline:none;background:#fff;border-color:#1a1917;box-shadow:0 0 0 3px rgba(26,25,23,.08)}
+  label{display:block;font-size:.8125rem;font-weight:600;color:#4a463f}
+  button{padding:.8rem 1.6rem;border-radius:10px;background:#111827;color:#fff;border:none;font-size:.9375rem;font-weight:650;cursor:pointer;margin-top:1.1rem;transition:filter .15s}
+  button:hover{filter:brightness(1.15)}
+  .err{color:#b23a1e;background:#fdf3f0;border:1px solid #f0cdc4;padding:.7rem .9rem;border-radius:10px;margin-top:1rem;font-size:.875rem}
+  .ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;padding:.7rem .9rem;border-radius:10px;margin-top:1rem;font-size:.9rem}
+  a{color:#1a1917;text-decoration:underline;text-underline-offset:2px}
+  a:hover{opacity:.7}
 </style>
 </head>
 <body>
 <div class="card">
 {{if eq .Phase "form"}}
-  <h1>Request access</h1>
-  <p><strong>{{.ProjectName}}</strong> is private. Send the owner a quick note explaining why you need access — they'll decide and you'll be let in once approved.</p>
+  <h1>申请访问</h1>
+  <p><strong>{{.ProjectName}}</strong> 是私有项目。给项目所有者留言说明你为什么需要访问，通过后即可进入。</p>
   <form method="POST" action="/_oauth/request-access">
     <input type="hidden" name="project_id" value="{{.ProjectID}}">
-    <label for="reason" class="muted">Reason (optional)</label>
-    <textarea id="reason" name="reason" maxlength="1000" placeholder="What do you need this for?"></textarea>
-    <button type="submit">Send request</button>
+    <label for="reason">申请理由（可选）</label>
+    <textarea id="reason" name="reason" maxlength="1000" placeholder="你需要用它做什么？"></textarea>
+    <button type="submit">发送申请</button>
   </form>
-  <p class="muted" style="margin-top:1.2rem">Signed in as {{.Email}}. <a href="/_oauth/logout?redirect=/">Sign out</a></p>
+  <p class="muted" style="margin-top:1.2rem">已登录为 {{.Email}}。<a href="/_oauth/logout?redirect=/">退出登录</a></p>
 {{else if eq .Phase "submitted"}}
-  <h1>Request submitted</h1>
-  <div class="ok">We've notified the owner of <strong>{{.ProjectName}}</strong>. You'll be able to reach this project once they approve your request.</div>
-  <p class="muted">Signed in as {{.Email}}.</p>
+  <h1>申请已提交</h1>
+  <div class="ok">已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。</div>
+  <p class="muted">已登录为 {{.Email}}。</p>
 {{else if eq .Phase "already-allowed"}}
-  <h1>You already have access</h1>
-  <p>{{.ProjectName}} is already accessible from your account. <a href="/">Try opening it again</a> — if it still fails, ask the owner to verify.</p>
-  <p class="muted">Signed in as {{.Email}}.</p>
+  <h1>你已有访问权限</h1>
+  <p>{{.ProjectName}} 已可从你的账户访问。<a href="/">再试一次打开</a> —— 若仍失败，请联系所有者核实。</p>
+  <p class="muted">已登录为 {{.Email}}。</p>
 {{else if eq .Phase "error"}}
-  <h1>Something went wrong</h1>
+  <h1>出错了</h1>
   <div class="err">{{.Error}}</div>
-  <p class="muted">If this keeps happening, contact the project owner directly.</p>
+  <p class="muted">若持续出现，请直接联系项目所有者。</p>
 {{end}}
 </div>
 </body>
