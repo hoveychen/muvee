@@ -1,13 +1,9 @@
 package api
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"net/http"
 	"time"
 
@@ -15,13 +11,12 @@ import (
 	"github.com/hoveychen/muvee/internal/sms"
 )
 
-// SMS login tuning. Codes are short-lived and rate-limited per phone number
-// (across all projects) so the endpoint cannot be used to burn SMS quota.
+// SMS send-rate limits (per phone, across all projects) so the endpoint cannot
+// be used to burn SMS quota. Code generation, expiry and verification are owned
+// by the provider (Aliyun PNVS in prod, dev fallback otherwise).
 const (
-	smsCodeTTL          = 5 * time.Minute
-	smsResendInterval   = 60 * time.Second
-	smsDailySendCap     = 10
-	smsMaxVerifyAttempt = 5
+	smsResendInterval = 60 * time.Second
+	smsDailySendCap   = 10
 )
 
 // checkInternalKey guards the /api/internal/* endpoints. Both muvee-server and
@@ -32,21 +27,32 @@ func checkInternalKey(r *http.Request) bool {
 	return expected != "" && subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
 
-func hashSMSCode(code string) string {
-	sum := sha256.Sum256([]byte(code))
-	return hex.EncodeToString(sum[:])
-}
-
-// generateSMSCode returns a random 6-digit numeric code.
-func generateSMSCode() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+// smsRateLimited reports whether the phone has hit the resend or daily cap, and
+// if so writes a 429. Shared by the downstream and platform send endpoints.
+func (s *Server) smsRateLimited(w http.ResponseWriter, r *http.Request, phone string) bool {
+	now := time.Now()
+	recent, err := s.store.CountSMSCodesSince(r.Context(), phone, now.Add(-smsResendInterval))
 	if err != nil {
-		return "", err
+		jsonErr(w, err, http.StatusInternalServerError)
+		return true
 	}
-	return fmt.Sprintf("%06d", n.Int64()), nil
+	if recent > 0 {
+		writeSMSRateLimited(w, int(smsResendInterval.Seconds()))
+		return true
+	}
+	daily, err := s.store.CountSMSCodesSince(r.Context(), phone, now.Add(-24*time.Hour))
+	if err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
+		return true
+	}
+	if daily >= smsDailySendCap {
+		writeSMSRateLimited(w, int((24 * time.Hour).Seconds()))
+		return true
+	}
+	return false
 }
 
-// handleInternalAuthSMSSendCode issues and delivers a one-time login code for
+// handleInternalAuthSMSSendCode asks the provider to deliver a code for
 // muvee-authservice's downstream phone form. Rate-limited per phone. Requires
 // the project to have sms_login_enabled. Authenticated via X-Muvee-Internal-Key.
 func (s *Server) handleInternalAuthSMSSendCode(w http.ResponseWriter, r *http.Request) {
@@ -87,49 +93,25 @@ func (s *Server) handleInternalAuthSMSSendCode(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	now := time.Now()
-	// Resend throttle: at most one code per phone per smsResendInterval.
-	recent, err := s.store.CountSMSCodesSince(r.Context(), phone, now.Add(-smsResendInterval))
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
+	if s.smsRateLimited(w, r, phone) {
 		return
 	}
-	if recent > 0 {
-		writeSMSRateLimited(w, int(smsResendInterval.Seconds()))
-		return
-	}
-	// Daily cap per phone.
-	daily, err := s.store.CountSMSCodesSince(r.Context(), phone, now.Add(-24*time.Hour))
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
-	}
-	if daily >= smsDailySendCap {
-		writeSMSRateLimited(w, int((24 * time.Hour).Seconds()))
-		return
-	}
-
-	code, err := generateSMSCode()
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
-	}
-	if _, err := s.store.CreateSMSCode(r.Context(), &projectID, phone, hashSMSCode(code), now.Add(smsCodeTTL)); err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
-	}
-	if err := s.smsSender.SendCode(r.Context(), phone, code); err != nil {
+	if err := s.verifyProvider.SendCode(r.Context(), phone); err != nil {
 		jsonErr(w, fmt.Errorf("failed to send sms: %w", err), http.StatusBadGateway)
+		return
+	}
+	if err := s.store.RecordSMSSend(r.Context(), &projectID, phone); err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
 		return
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// handleInternalAuthSMSVerify checks a submitted code and, on success, upserts
-// the identity via oauth_accounts (provider='phone', provider_user_id=<E.164>)
-// -- the same identity-only contract as social/password logins. Returns the
-// display fields authservice bakes into the forward JWT. 401 for a wrong or
-// expired code, 429 once the per-code attempt cap is exhausted.
+// handleInternalAuthSMSVerify checks a submitted code via the provider and, on
+// success, upserts the identity via oauth_accounts (provider='phone',
+// provider_user_id=<E.164>) -- the same identity-only contract as
+// social/password logins. Returns the display fields authservice bakes into the
+// forward JWT. 401 for a wrong or expired code.
 func (s *Server) handleInternalAuthSMSVerify(w http.ResponseWriter, r *http.Request) {
 	if !checkInternalKey(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -144,8 +126,7 @@ func (s *Server) handleInternalAuthSMSVerify(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, fmt.Errorf("invalid json: %w", err), http.StatusBadRequest)
 		return
 	}
-	projectID, err := uuid.Parse(body.ProjectID)
-	if err != nil {
+	if _, err := uuid.Parse(body.ProjectID); err != nil {
 		jsonErr(w, fmt.Errorf("invalid project_id"), http.StatusBadRequest)
 		return
 	}
@@ -159,27 +140,13 @@ func (s *Server) handleInternalAuthSMSVerify(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	rec, err := s.store.LatestUnconsumedSMSCode(r.Context(), &projectID, phone)
+	ok, err := s.verifyProvider.CheckCode(r.Context(), phone, body.Code)
 	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
+		jsonErr(w, fmt.Errorf("verify failed: %w", err), http.StatusBadGateway)
 		return
 	}
-	if rec == nil || time.Now().After(rec.ExpiresAt) {
+	if !ok {
 		jsonErr(w, fmt.Errorf("invalid or expired code"), http.StatusUnauthorized)
-		return
-	}
-	if rec.Attempts >= smsMaxVerifyAttempt {
-		_ = s.store.ConsumeSMSCode(r.Context(), rec.ID)
-		writeSMSRateLimited(w, int(smsResendInterval.Seconds()))
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(hashSMSCode(body.Code)), []byte(rec.CodeHash)) != 1 {
-		_ = s.store.IncrementSMSCodeAttempts(r.Context(), rec.ID)
-		jsonErr(w, fmt.Errorf("invalid or expired code"), http.StatusUnauthorized)
-		return
-	}
-	if err := s.store.ConsumeSMSCode(r.Context(), rec.ID); err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
 		return
 	}
 

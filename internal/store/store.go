@@ -2007,64 +2007,20 @@ func (s *Store) DeleteProjectPasswordAccount(ctx context.Context, projectID, id 
 	return err
 }
 
-// ─── SMS Verification Codes ───────────────────────────────────────────────────
+// ─── SMS Send Ledger ──────────────────────────────────────────────────────────
+//
+// Verification codes are generated and verified by the provider (Aliyun PNVS),
+// so the server no longer stores a code. sms_verification_codes is now a pure
+// send-ledger: one row per code-send, read only by CountSMSCodesSince for
+// per-phone rate limiting.
 
-const smsCodeColumns = `id, phone, project_id, code_hash, expires_at, attempts, consumed_at, created_at`
-
-func scanSMSCode(row pgx.Row, c *SMSVerificationCode) error {
-	return row.Scan(&c.ID, &c.Phone, &c.ProjectID, &c.CodeHash, &c.ExpiresAt,
-		&c.Attempts, &c.ConsumedAt, &c.CreatedAt)
-}
-
-// CreateSMSCode inserts a new verification code. The caller hashes the code
-// (sha256) and computes expiresAt before calling; the plaintext never reaches
-// the store.
-func (s *Store) CreateSMSCode(ctx context.Context, projectID *uuid.UUID, phone, codeHash string, expiresAt time.Time) (*SMSVerificationCode, error) {
-	var c SMSVerificationCode
-	err := scanSMSCode(s.db.QueryRow(ctx, `
-		INSERT INTO sms_verification_codes (id, phone, project_id, code_hash, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())
-		RETURNING `+smsCodeColumns,
-		uuid.New(), phone, projectID, codeHash, expiresAt), &c)
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-// LatestUnconsumedSMSCode returns the most recent not-yet-consumed code for a
-// (project, phone) pair, or (nil, nil) when there is none. A nil projectID
-// matches platform login codes (project_id IS NULL). Expiry and the attempt
-// cap are enforced by the caller so it can distinguish the failure modes
-// (expired vs too-many-attempts vs wrong code).
-func (s *Store) LatestUnconsumedSMSCode(ctx context.Context, projectID *uuid.UUID, phone string) (*SMSVerificationCode, error) {
-	var c SMSVerificationCode
-	// IS NOT DISTINCT FROM matches NULL=NULL (platform) and id=id (downstream)
-	// uniformly, so one query serves both scopes.
-	err := scanSMSCode(s.db.QueryRow(ctx, `
-		SELECT `+smsCodeColumns+` FROM sms_verification_codes
-		WHERE project_id IS NOT DISTINCT FROM $1 AND phone = $2 AND consumed_at IS NULL
-		ORDER BY created_at DESC LIMIT 1`, projectID, phone), &c)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-// IncrementSMSCodeAttempts bumps the failed-attempt counter for a code.
-func (s *Store) IncrementSMSCodeAttempts(ctx context.Context, id uuid.UUID) error {
+// RecordSMSSend appends a send-ledger row for rate limiting (one per code
+// sent). projectID is nil for platform codes, set for downstream project
+// codes. The code itself is not stored — Aliyun PNVS owns it.
+func (s *Store) RecordSMSSend(ctx context.Context, projectID *uuid.UUID, phone string) error {
 	_, err := s.db.Exec(ctx, `
-		UPDATE sms_verification_codes SET attempts = attempts + 1 WHERE id = $1`, id)
-	return err
-}
-
-// ConsumeSMSCode marks a code as used so it can never be replayed.
-func (s *Store) ConsumeSMSCode(ctx context.Context, id uuid.UUID) error {
-	_, err := s.db.Exec(ctx, `
-		UPDATE sms_verification_codes SET consumed_at = NOW() WHERE id = $1`, id)
+		INSERT INTO sms_verification_codes (id, phone, project_id, created_at)
+		VALUES ($1, $2, $3, NOW())`, uuid.New(), phone, projectID)
 	return err
 }
 

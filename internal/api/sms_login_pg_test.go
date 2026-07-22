@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -16,24 +15,25 @@ import (
 	"github.com/hoveychen/muvee/internal/store"
 )
 
-// capturingSender records the last code handed to it so the verify half of the
-// flow can submit the real code. Stands in for the Aliyun/Log sender.
-type capturingSender struct{ lastPhone, lastCode string }
-
-func (c *capturingSender) SendCode(_ context.Context, phone, code string) error {
-	c.lastPhone, c.lastCode = phone, code
-	return nil
+// fakeVerifyProvider stands in for the Aliyun PNVS provider: it records sends
+// and returns a preset CheckCode result. Shared by the SMS pg tests.
+type fakeVerifyProvider struct {
+	sent []string
+	pass bool
 }
 
-// TestSMSLogin_PG is a real-database integration test for the phone/SMS login
-// endpoints. It drives the actual send-code + verify handlers against a live
-// Postgres so the SQL in the store layer (CreateSMSCode / LatestUnconsumedSMSCode
-// / CountSMSCodesSince / IncrementSMSCodeAttempts / ConsumeSMSCode) and the
-// handler-level expiry, attempt-cap, and resend-throttle logic are exercised
-// together — none of which the store-less unit tests can reach.
-//
-// It only runs when TEST_DATABASE_URL points at a disposable Postgres with
-// permission to apply db/migrations, e.g.:
+func (f *fakeVerifyProvider) SendCode(_ context.Context, phone string) error {
+	f.sent = append(f.sent, phone)
+	return nil
+}
+func (f *fakeVerifyProvider) CheckCode(_ context.Context, _, _ string) (bool, error) {
+	return f.pass, nil
+}
+
+// TestSMSLogin_PG is a real-database integration test for the downstream phone
+// login endpoints against the PNVS-style provider flow: send records a ledger
+// row (rate limiting), the provider owns code verification, and a passing
+// verify mints a phone identity via oauth_accounts.
 //
 //	docker run -d -p 15432:5432 -e POSTGRES_USER=muvee -e POSTGRES_PASSWORD=muvee -e POSTGRES_DB=muvee postgres:16-alpine
 //	TEST_DATABASE_URL=postgres://muvee:muvee@localhost:15432/muvee?sslmode=disable JWT_SECRET=test-secret-at-least-32-bytes-long go test ./internal/api/ -run TestSMSLogin_PG
@@ -58,20 +58,16 @@ func TestSMSLogin_PG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.New: %v", err)
 	}
-	sender := &capturingSender{}
-	s := &Server{store: st, auth: authSvc, smsSender: sender}
+	fake := &fakeVerifyProvider{}
+	s := &Server{store: st, auth: authSvc, verifyProvider: fake}
 
-	// Project with SMS login enabled.
 	var ownerID string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO users (email) VALUES ('sms-pg@example.com')
 		 ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING id`).Scan(&ownerID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	owner, err := st.GetUserByEmail(ctx, "sms-pg@example.com")
-	if err != nil {
-		t.Fatalf("get user: %v", err)
-	}
+	owner, _ := st.GetUserByEmail(ctx, "sms-pg@example.com")
 	proj, err := st.CreateProject(ctx, &store.Project{
 		Name: "sms-pg-test", ProjectType: store.ProjectTypeDomainOnly,
 		DomainPrefix: "sms-pg-test", OwnerID: owner.ID,
@@ -85,6 +81,7 @@ func TestSMSLogin_PG(t *testing.T) {
 	}
 	pid := proj.ID.String()
 	const phone = "+8613800138000"
+	defer pool.Exec(ctx, `DELETE FROM sms_verification_codes WHERE phone = $1`, phone)
 
 	key := internalAPIKey()
 	post := func(path, body string, h http.HandlerFunc) *httptest.ResponseRecorder {
@@ -96,78 +93,42 @@ func TestSMSLogin_PG(t *testing.T) {
 	}
 	sendBody := `{"project_id":"` + pid + `","phone":"` + phone + `"}`
 
-	// 1) Send a code → 200 and the sender captured it.
+	// 1) Send → 200, provider received the phone, ledger row recorded.
 	if w := post("/api/internal/auth/sms/send-code", sendBody, s.handleInternalAuthSMSSendCode); w.Code != http.StatusOK {
-		t.Fatalf("send #1: got %d, want 200 (%s)", w.Code, w.Body.String())
+		t.Fatalf("send #1: got %d (%s)", w.Code, w.Body.String())
 	}
-	code := sender.lastCode
-	if len(code) != 6 {
-		t.Fatalf("captured code %q is not 6 digits", code)
+	if len(fake.sent) != 1 || fake.sent[0] != phone {
+		t.Fatalf("provider did not receive send for %s: %v", phone, fake.sent)
 	}
 
-	// 2) Immediate resend → 429 (60s throttle).
+	// 2) Immediate resend → 429 (60s throttle off the ledger row).
 	if w := post("/api/internal/auth/sms/send-code", sendBody, s.handleInternalAuthSMSSendCode); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("resend: got %d, want 429", w.Code)
 	}
 
-	verify := func(c string) *httptest.ResponseRecorder {
-		return post("/api/internal/auth/sms/verify",
-			`{"project_id":"`+pid+`","phone":"`+phone+`","code":"`+c+`"}`, s.handleInternalAuthSMSVerify)
+	verifyBody := `{"project_id":"` + pid + `","phone":"` + phone + `","code":"123456"}`
+
+	// 3) Provider rejects → 401.
+	fake.pass = false
+	if w := post("/api/internal/auth/sms/verify", verifyBody, s.handleInternalAuthSMSVerify); w.Code != http.StatusUnauthorized {
+		t.Fatalf("verify (reject): got %d, want 401", w.Code)
 	}
 
-	// 3) Wrong code → 401 (attempts incremented, code not consumed). The real
-	// code is random, so "000000" is wrong except for a 1-in-1e6 collision.
-	if code != "000000" {
-		if w := verify("000000"); w.Code != http.StatusUnauthorized {
-			t.Fatalf("wrong code: got %d, want 401 (%s)", w.Code, w.Body.String())
-		}
-	}
-
-	// 4) Correct code → 200 with a phone identity, then it is consumed.
-	w := verify(code)
+	// 4) Provider passes → 200 with a stable phone identity.
+	fake.pass = true
+	w := post("/api/internal/auth/sms/verify", verifyBody, s.handleInternalAuthSMSVerify)
 	if w.Code != http.StatusOK {
-		t.Fatalf("verify correct: got %d, want 200 (%s)", w.Code, w.Body.String())
+		t.Fatalf("verify (pass): got %d (%s)", w.Code, w.Body.String())
 	}
 	var out struct {
 		UserID string `json:"user_id"`
 		Phone  string `json:"phone"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode verify body: %v", err)
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.UserID == "" || out.Phone != phone {
+		t.Fatalf("verify body user_id=%q phone=%q err=%v", out.UserID, out.Phone, err)
 	}
-	if out.UserID == "" || out.Phone != phone {
-		t.Fatalf("verify body user_id=%q phone=%q", out.UserID, out.Phone)
-	}
-	// The identity must be an oauth_accounts(provider='phone') binding.
 	u, err := authSvc.EnsureIdentityFromOAuth(ctx, "phone", phone, phone, "")
 	if err != nil || u.ID.String() != out.UserID {
 		t.Fatalf("phone identity not stable: err=%v id=%v want %v", err, u.ID, out.UserID)
-	}
-
-	// 5) Replay the now-consumed code → 401 (no unconsumed code remains).
-	if w := verify(code); w.Code != http.StatusUnauthorized {
-		t.Fatalf("replay consumed code: got %d, want 401", w.Code)
-	}
-
-	// 6) Expiry: insert an already-expired code directly, verify → 401.
-	if _, err := st.CreateSMSCode(ctx, &proj.ID, phone, hashSMSCode("111111"), time.Now().Add(-time.Minute)); err != nil {
-		t.Fatalf("create expired code: %v", err)
-	}
-	if w := verify("111111"); w.Code != http.StatusUnauthorized {
-		t.Fatalf("expired code: got %d, want 401", w.Code)
-	}
-
-	// 7) Attempt cap: a fresh code, then exhaust the 5-try cap → 429.
-	if _, err := st.CreateSMSCode(ctx, &proj.ID, phone, hashSMSCode("222222"), time.Now().Add(smsCodeTTL)); err != nil {
-		t.Fatalf("create fresh code: %v", err)
-	}
-	for i := 0; i < smsMaxVerifyAttempt; i++ {
-		if w := verify("999999"); w.Code != http.StatusUnauthorized {
-			t.Fatalf("attempt %d: got %d, want 401", i, w.Code)
-		}
-	}
-	// Next verify (even with the right code) is refused: attempt cap hit.
-	if w := verify("222222"); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("after cap: got %d, want 429", w.Code)
 	}
 }
