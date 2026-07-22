@@ -1490,10 +1490,14 @@ function EnabledProvidersField({ value, onChange }: { value: string; onChange: (
   if (globals === null) return null
   if (globals.length === 0) return null
 
-  const selected = parseProviderSet(value)
-  const isAll = selected.size === 0
+  // "none" is a distinct sentinel: no OAuth at all (password/SMS-only). Empty
+  // string means inherit-all; a comma list means a specific subset.
+  const isNone = value.trim().toLowerCase() === 'none'
+  const selected = isNone ? new Set<string>() : parseProviderSet(value)
+  const isAll = !isNone && selected.size === 0
 
   const toggle = (id: string) => {
+    if (isNone) return // providers are off while "disable all OAuth" is on
     // Materialise the current set first — if value is empty (== all), expand
     // to the full list so the user can deselect individual entries without
     // first being forced to "select all" manually.
@@ -1510,14 +1514,23 @@ function EnabledProvidersField({ value, onChange }: { value: string; onChange: (
   return (
     <div>
       <label className="form-label">SIGN-IN PROVIDERS</label>
-      <div className="flex flex-col gap-2" style={{ marginTop: '0.4rem' }}>
+      <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.9rem', marginTop: '0.4rem' }}>
+        <input
+          type="checkbox"
+          checked={isNone}
+          onChange={e => onChange(e.target.checked ? 'none' : '')}
+        />
+        <span>Disable all OAuth (password / SMS-only sign-in)</span>
+      </label>
+      <div className="flex flex-col gap-2" style={{ marginTop: '0.4rem', opacity: isNone ? 0.4 : 1 }}>
         {globals.map(g => {
-          const checked = isAll || selected.has(g.id)
+          const checked = !isNone && (isAll || selected.has(g.id))
           return (
-            <label key={g.id} className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.9rem' }}>
+            <label key={g.id} className="flex items-center gap-2" style={{ cursor: isNone ? 'default' : 'pointer', fontSize: '0.9rem' }}>
               <input
                 type="checkbox"
                 checked={checked}
+                disabled={isNone}
                 onChange={() => toggle(g.id)}
               />
               <span>{g.display_name}</span>
@@ -1527,7 +1540,7 @@ function EnabledProvidersField({ value, onChange }: { value: string; onChange: (
         })}
       </div>
       <p style={{ fontSize: '0.8125rem', marginTop: '0.4rem', color: 'var(--fg-muted)' }}>
-        Checked = available to the downstream sign-in flow (SDK + ForwardAuth login page). Leaving every provider checked stores the empty inherit-all sentinel.
+        Checked = available to the downstream sign-in flow (SDK + ForwardAuth login page). Leaving every provider checked stores the empty inherit-all sentinel. "Disable all OAuth" makes the project password/SMS-only — pair it with a demo account or phone login so users can still sign in.
       </p>
     </div>
   )
