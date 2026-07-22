@@ -35,12 +35,14 @@ import (
 	"github.com/hoveychen/muvee/internal/muveectlbin"
 	"github.com/hoveychen/muvee/internal/projectevents"
 	"github.com/hoveychen/muvee/internal/scheduler"
+	"github.com/hoveychen/muvee/internal/sms"
 	"github.com/hoveychen/muvee/internal/store"
 )
 
 type Server struct {
 	store              *store.Store
 	auth               *auth.Service
+	smsSender          sms.SMSSender // sends phone login codes; LogSender in dev, Aliyun when configured
 	sched              *scheduler.Scheduler
 	monitor            *monitor.Monitor
 	baseDomain         string
@@ -112,6 +114,7 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 	return &Server{
 		store:              st,
 		auth:               authSvc,
+		smsSender:          sms.NewSenderFromEnv(),
 		sched:              sched,
 		monitor:            mon,
 		baseDomain:         cfg.BaseDomain,
@@ -358,6 +361,7 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		"auth_required":     p.AuthRequired,
 		"access_mode":       p.AccessMode,
 		"password_login":    passwordAccounts > 0,
+		"sms_login":         p.SMSLoginEnabled,
 		"branding": map[string]any{
 			"site_name":            p.BrandingSiteName,
 			"logo_url":             p.BrandingLogoURL,
@@ -730,6 +734,8 @@ func (s *Server) Router() http.Handler {
 	// login form rendered by muvee-authservice. Verifies the bcrypt hash and
 	// upserts the identity via oauth_accounts (provider='password').
 	r.Post("/api/internal/auth/password-login", s.handleInternalAuthPasswordLogin)
+	r.Post("/api/internal/auth/sms/send-code", s.handleInternalAuthSMSSendCode)
+	r.Post("/api/internal/auth/sms/verify", s.handleInternalAuthSMSVerify)
 	// Internal endpoint: returns the current social-OAuth provider configs
 	// (Discord / Apple / Facebook / Twitter) for authservice to instantiate.
 	// Body contains secrets, so X-Muvee-Internal-Key is mandatory.

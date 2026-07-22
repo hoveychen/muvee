@@ -54,6 +54,21 @@ type ProjectPasswordAccount struct {
 	CreatedAt    time.Time `db:"created_at"    json:"created_at"`
 }
 
+// SMSVerificationCode is a one-time phone login code. Only the sha256 hash of
+// the code is stored, never the plaintext. Rows are self-service (created on
+// send) and consumed on successful verify; rate limiting and the per-code
+// attempt cap run off this table.
+type SMSVerificationCode struct {
+	ID         uuid.UUID  `db:"id"          json:"id"`
+	Phone      string     `db:"phone"       json:"phone"`
+	ProjectID  uuid.UUID  `db:"project_id"  json:"project_id"`
+	CodeHash   string     `db:"code_hash"   json:"-"`
+	ExpiresAt  time.Time  `db:"expires_at"  json:"expires_at"`
+	Attempts   int        `db:"attempts"    json:"attempts"`
+	ConsumedAt *time.Time `db:"consumed_at" json:"consumed_at,omitempty"`
+	CreatedAt  time.Time  `db:"created_at"  json:"created_at"`
+}
+
 // PlatformMember records a user's authorization to use the muvee admin plane
 // (the "muvee platform" itself, as distinct from any project deployed on it).
 // Subdomain auth users land in `users` for identity but not here, unless they
@@ -165,6 +180,12 @@ type Project struct {
 	// Empty = inherit the globally-configured set; the SDK and ForwardAuth
 	// login pages both honour this column.
 	EnabledProviders string `db:"enabled_providers"    json:"enabled_providers"`
+	// SMSLoginEnabled turns on the self-service phone / SMS one-time-code login
+	// on this project's downstream ForwardAuth sign-in page. OFF by default:
+	// unlike the demo-account whitelist, SMS login lets anyone with the phone
+	// sign in, so the owner must opt in explicitly. Orthogonal to
+	// EnabledProviders (OAuth) and to the implicit password-login flag.
+	SMSLoginEnabled bool `db:"sms_login_enabled" json:"sms_login_enabled"`
 	// Branding fields drive the visual of the forward-auth login page served
 	// on this project's downstream subdomain. Empty = fall back to the
 	// platform-wide system_settings (and then to built-in defaults). See

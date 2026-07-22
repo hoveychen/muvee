@@ -338,12 +338,12 @@ func (s *Store) ListPlatformMemberUsers(ctx context.Context, scope string) ([]*P
 
 // projectColumns is the full SELECT list for a Project row. git_url is COALESCEd
 // so domain_only projects (which have NULL git_url) scan into an empty string.
-const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of, paused`
+const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of, paused, sms_login_enabled`
 
 // projectColumnsPrefixed is projectColumns with every column qualified by the
 // `p.` alias. Used when the query JOINs another table (e.g. users) so bare
 // column names like `id` or `name` would be ambiguous.
-const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.fixed_host_port, p.fixed_node_id, p.created_at, p.updated_at, p.enabled_providers, p.branding_site_name, p.branding_logo_url, p.branding_favicon_url, p.branding_primary_color, p.branding_sidebar_bg, p.branding_tagline, p.branding_description, p.branding_footer_text, p.branding_trust_text, p.last_image_tag, p.triggers_redeploy_of, p.paused`
+const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.fixed_host_port, p.fixed_node_id, p.created_at, p.updated_at, p.enabled_providers, p.branding_site_name, p.branding_logo_url, p.branding_favicon_url, p.branding_primary_color, p.branding_sidebar_bg, p.branding_tagline, p.branding_description, p.branding_footer_text, p.branding_trust_text, p.last_image_tag, p.triggers_redeploy_of, p.paused, p.sms_login_enabled`
 
 // ownerJoinColumns is the tail of the SELECT list for projects queried with
 // `LEFT JOIN users u ON u.id = p.owner_id`.
@@ -352,13 +352,13 @@ const ownerJoinColumns = `, COALESCE(u.name, '') AS owner_name, COALESCE(u.email
 func scanProject(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.SMSLoginEnabled)
 }
 
 func scanProjectWithOwner(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.SMSLoginEnabled, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
 }
 
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
@@ -494,8 +494,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		p.TriggersRedeployOf = "[]"
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, auth_bypass_paths=$9, container_port=$10, memory_limit=$11, volume_mount_path=$12, description=$13, icon=$14, tags=$15, compose_file_path=$16, expose_service=$17, expose_port=$18, image_ref=$19, auto_deploy_enabled=$20, access_mode=$21, fixed_host_port=$22, fixed_node_id=$23, updated_at=$24, enabled_providers=$25, branding_site_name=$26, branding_logo_url=$27, branding_favicon_url=$28, branding_primary_color=$29, branding_sidebar_bg=$30, branding_tagline=$31, branding_description=$32, branding_footer_text=$33, branding_trust_text=$34, triggers_redeploy_of=$35 WHERE id=$36
-	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.ImageRef, p.AutoDeployEnabled, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.UpdatedAt, p.EnabledProviders, p.BrandingSiteName, p.BrandingLogoURL, p.BrandingFaviconURL, p.BrandingPrimaryColor, p.BrandingSidebarBg, p.BrandingTagline, p.BrandingDescription, p.BrandingFooterText, p.BrandingTrustText, p.TriggersRedeployOf, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, auth_bypass_paths=$9, container_port=$10, memory_limit=$11, volume_mount_path=$12, description=$13, icon=$14, tags=$15, compose_file_path=$16, expose_service=$17, expose_port=$18, image_ref=$19, auto_deploy_enabled=$20, access_mode=$21, fixed_host_port=$22, fixed_node_id=$23, updated_at=$24, enabled_providers=$25, branding_site_name=$26, branding_logo_url=$27, branding_favicon_url=$28, branding_primary_color=$29, branding_sidebar_bg=$30, branding_tagline=$31, branding_description=$32, branding_footer_text=$33, branding_trust_text=$34, triggers_redeploy_of=$35, sms_login_enabled=$36 WHERE id=$37
+	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.ImageRef, p.AutoDeployEnabled, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.UpdatedAt, p.EnabledProviders, p.BrandingSiteName, p.BrandingLogoURL, p.BrandingFaviconURL, p.BrandingPrimaryColor, p.BrandingSidebarBg, p.BrandingTagline, p.BrandingDescription, p.BrandingFooterText, p.BrandingTrustText, p.TriggersRedeployOf, p.SMSLoginEnabled, p.ID)
 	return err
 }
 
@@ -2005,6 +2005,75 @@ func (s *Store) DeleteProjectPasswordAccount(ctx context.Context, projectID, id 
 	_, err := s.db.Exec(ctx, `
 		DELETE FROM project_password_accounts WHERE id = $1 AND project_id = $2`, id, projectID)
 	return err
+}
+
+// ─── SMS Verification Codes ───────────────────────────────────────────────────
+
+const smsCodeColumns = `id, phone, project_id, code_hash, expires_at, attempts, consumed_at, created_at`
+
+func scanSMSCode(row pgx.Row, c *SMSVerificationCode) error {
+	return row.Scan(&c.ID, &c.Phone, &c.ProjectID, &c.CodeHash, &c.ExpiresAt,
+		&c.Attempts, &c.ConsumedAt, &c.CreatedAt)
+}
+
+// CreateSMSCode inserts a new verification code. The caller hashes the code
+// (sha256) and computes expiresAt before calling; the plaintext never reaches
+// the store.
+func (s *Store) CreateSMSCode(ctx context.Context, projectID uuid.UUID, phone, codeHash string, expiresAt time.Time) (*SMSVerificationCode, error) {
+	var c SMSVerificationCode
+	err := scanSMSCode(s.db.QueryRow(ctx, `
+		INSERT INTO sms_verification_codes (id, phone, project_id, code_hash, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+		RETURNING `+smsCodeColumns,
+		uuid.New(), phone, projectID, codeHash, expiresAt), &c)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// LatestUnconsumedSMSCode returns the most recent not-yet-consumed code for a
+// (project, phone) pair, or (nil, nil) when there is none. Expiry and the
+// attempt cap are enforced by the caller so it can distinguish the failure
+// modes (expired vs too-many-attempts vs wrong code).
+func (s *Store) LatestUnconsumedSMSCode(ctx context.Context, projectID uuid.UUID, phone string) (*SMSVerificationCode, error) {
+	var c SMSVerificationCode
+	err := scanSMSCode(s.db.QueryRow(ctx, `
+		SELECT `+smsCodeColumns+` FROM sms_verification_codes
+		WHERE project_id = $1 AND phone = $2 AND consumed_at IS NULL
+		ORDER BY created_at DESC LIMIT 1`, projectID, phone), &c)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// IncrementSMSCodeAttempts bumps the failed-attempt counter for a code.
+func (s *Store) IncrementSMSCodeAttempts(ctx context.Context, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE sms_verification_codes SET attempts = attempts + 1 WHERE id = $1`, id)
+	return err
+}
+
+// ConsumeSMSCode marks a code as used so it can never be replayed.
+func (s *Store) ConsumeSMSCode(ctx context.Context, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE sms_verification_codes SET consumed_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
+// CountSMSCodesSince counts how many codes were issued to a phone number
+// (across all projects) since a cutoff. Used for resend throttling and the
+// daily send cap so one number cannot be used to burn SMS quota.
+func (s *Store) CountSMSCodesSince(ctx context.Context, phone string, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM sms_verification_codes
+		WHERE phone = $1 AND created_at >= $2`, phone, since).Scan(&n)
+	return n, err
 }
 
 // ─── System Settings ──────────────────────────────────────────────────────────

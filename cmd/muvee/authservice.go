@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -246,6 +247,10 @@ func runAuthservice() {
 	// Username/password ("demo account") form submission from the login page.
 	// POST-only, so it never collides with the GET {provider} catch-all below.
 	r.Post("/_oauth/password", handlePasswordLogin)
+	// Self-service phone / SMS login: /send issues a code (AJAX, JSON reply),
+	// /verify checks the code and signs a project-scoped session (form POST).
+	r.Post("/_oauth/sms/send", handleSMSSend)
+	r.Post("/_oauth/sms/verify", handleSMSVerify)
 	r.Get("/_oauth/request-access", handleRequestAccessPage)
 	r.Post("/_oauth/request-access", handleRequestAccessSubmit)
 	// Internal reload endpoint (muvee-server posts here after PUT /admin/settings
@@ -310,14 +315,15 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Password ("demo account") sessions are hard-scoped to the project that
-	// provisioned the account. The claim's email is a passthrough attribute
-	// for downstream (X-Forwarded-User), NOT an access key: being on the
-	// project's account list IS the access grant, so we skip both the domains
-	// check and the email-keyed project ACL below. That grant holds only for
-	// this one project, so a mismatching (or absent) project_id fails closed
-	// back to the login page.
-	if claims.Provider == "password" {
+	// Password ("demo account") and phone (self-service SMS) sessions are
+	// hard-scoped to the project that authenticated them. The claim's email is
+	// a passthrough attribute for downstream (X-Forwarded-User), NOT an access
+	// key: authenticating against the project (a demo account, or a verified
+	// phone code) IS the access grant, so we skip both the domains check and
+	// the email-keyed project ACL below. That grant holds only for this one
+	// project, so a mismatching (or absent) project_id fails closed back to the
+	// login page.
+	if claims.Provider == "password" || claims.Provider == "phone" {
 		if projectID := r.URL.Query().Get("project_id"); projectID != "" && projectID == claims.ProjectID {
 			setUserHeaders(w, claims)
 			w.WriteHeader(http.StatusOK)
@@ -727,10 +733,11 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auto-redirect when only one provider is configured -- unless the
-	// project also offers password login, in which case the selection page
-	// must render so the form stays reachable.
+	// project also offers password or SMS login, in which case the selection
+	// page must render so those forms stay reachable.
 	passwordLogin := cfg != nil && cfg.PasswordLogin
-	if len(allowed) == 1 && !passwordLogin {
+	smsLogin := cfg != nil && cfg.SMSLogin
+	if len(allowed) == 1 && !passwordLogin && !smsLogin {
 		for name := range allowed {
 			http.Redirect(w, r, "/_oauth/login?provider="+name, http.StatusFound)
 			return
@@ -738,8 +745,11 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := buildLoginPageData(cfg, allowed)
-	if r.URL.Query().Get("error") == "invalid_credentials" {
+	switch r.URL.Query().Get("error") {
+	case "invalid_credentials":
 		data.LoginError = "Invalid username or password."
+	case "invalid_code":
+		data.SMSError = "Invalid or expired verification code."
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = loginPageTmpl.Execute(w, data)
@@ -847,6 +857,158 @@ func verifyPasswordUpstream(ctx context.Context, projectID, username, password s
 	}
 }
 
+// smsIdentity is the response of muvee-server's internal sms-verify endpoint:
+// the display fields to bake into the forward JWT.
+type smsIdentity struct {
+	UserID    string `json:"user_id"`
+	Phone     string `json:"phone"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+// sendSMSUpstream asks muvee-server to issue and deliver a login code. It
+// relays the upstream status + JSON body verbatim so the browser sees the
+// rate-limit (429) vs success (200) distinction.
+func sendSMSUpstream(ctx context.Context, projectID, phone string) (int, []byte, error) {
+	body, err := json.Marshal(map[string]string{"project_id": projectID, "phone": phone})
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		muveeServerURL+"/api/internal/auth/sms/send-code", strings.NewReader(string(body)))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, raw, nil
+}
+
+// verifySMSUpstream checks a submitted code against muvee-server. Returns
+// (identity, nil) on success; (nil, nil) when the code is wrong/expired or the
+// attempt cap is hit (the caller re-renders the form); (nil, err) on transport
+// errors so the caller can fail closed.
+func verifySMSUpstream(ctx context.Context, projectID, phone, code string) (*smsIdentity, error) {
+	body, err := json.Marshal(map[string]string{"project_id": projectID, "phone": phone, "code": code})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		muveeServerURL+"/api/internal/auth/sms/verify", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var identity smsIdentity
+		if err := json.NewDecoder(resp.Body).Decode(&identity); err != nil {
+			return nil, err
+		}
+		return &identity, nil
+	case http.StatusUnauthorized, http.StatusTooManyRequests:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("upstream sms-verify returned %d", resp.StatusCode)
+	}
+}
+
+// handleSMSSend proxies a code-request from the login page's phone form to
+// muvee-server, relaying the JSON status so the browser JS can show "sent" or
+// the rate-limit message. Guarded by the project's sms_login toggle.
+func handleSMSSend(w http.ResponseWriter, r *http.Request) {
+	cfg, err := fetchProjectAuthConfigByHost(r.Context(), inboundHost(r))
+	if err != nil {
+		log.Printf("authservice: sms send project-by-host: %v", err)
+		http.Error(w, "send failed", http.StatusBadGateway)
+		return
+	}
+	if cfg == nil || !cfg.SMSLogin {
+		http.Error(w, "sms login is not enabled for this site", http.StatusNotFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	phone := strings.TrimSpace(r.PostFormValue("phone"))
+	status, body, err := sendSMSUpstream(r.Context(), cfg.ProjectID, phone)
+	if err != nil {
+		log.Printf("authservice: sms send (project=%s): %v", cfg.ProjectID, err)
+		http.Error(w, "send failed", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+// handleSMSVerify handles the phone form submission. On a valid code the
+// session JWT is project-scoped (provider "phone") -- like a password session
+// it never roams to other projects' subdomains.
+func handleSMSVerify(w http.ResponseWriter, r *http.Request) {
+	cfg, err := fetchProjectAuthConfigByHost(r.Context(), inboundHost(r))
+	if err != nil {
+		log.Printf("authservice: sms verify project-by-host: %v", err)
+		http.Error(w, "login failed", http.StatusBadGateway)
+		return
+	}
+	if cfg == nil || !cfg.SMSLogin {
+		http.Error(w, "sms login is not enabled for this site", http.StatusNotFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	phone := strings.TrimSpace(r.PostFormValue("phone"))
+	code := strings.TrimSpace(r.PostFormValue("code"))
+	identity, err := verifySMSUpstream(r.Context(), cfg.ProjectID, phone, code)
+	if err != nil {
+		log.Printf("authservice: sms verify (project=%s): %v", cfg.ProjectID, err)
+		http.Error(w, "login failed", http.StatusBadGateway)
+		return
+	}
+	if identity == nil {
+		http.Redirect(w, r, "/_oauth/login?error=invalid_code", http.StatusSeeOther)
+		return
+	}
+	signed, err := signForwardProjectJWT(identity.Phone, identity.Name, identity.AvatarURL, "phone", cfg.ProjectID)
+	if err != nil {
+		http.Error(w, "sign error", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "muvee_fwd_session", Value: signed,
+		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
+	})
+	redirect := "/"
+	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
+		redirect = c.Value
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
+	})
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
+}
+
 // allowedProvidersFromConfig returns the provider map honoured by this
 // inbound host. When cfg is nil (apex / unmapped host) the global provider
 // set is returned unchanged.
@@ -880,6 +1042,10 @@ type loginPageData struct {
 	// the form after a failed attempt.
 	PasswordLogin bool
 	LoginError    string
+	// SMSLogin renders the phone / verification-code form; SMSError is the
+	// user-facing message shown above it after a failed verify.
+	SMSLogin bool
+	SMSError string
 }
 
 type loginProviderItem struct {
@@ -968,6 +1134,7 @@ func buildLoginPageData(cfg *projectAuthConfig, allowed map[string]auth.Provider
 		SidebarBg:     sidebar,
 		Providers:     items,
 		PasswordLogin: cfg != nil && cfg.PasswordLogin,
+		SMSLogin:      cfg != nil && cfg.SMSLogin,
 	}
 }
 
@@ -1043,6 +1210,11 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
   .pw-form button{width:100%;padding:10px 16px;border:none;border-radius:8px;background:{{.PrimaryColor}};color:#fff;font-size:.875rem;font-weight:500;cursor:pointer}
   .pw-form button:hover{filter:brightness(1.08)}
   .pw-error{margin:0 0 .75rem;padding:.5rem .75rem;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;color:#b91c1c;font-size:.8125rem}
+  .sms-code-row{display:flex;gap:.5rem;margin-bottom:.75rem}
+  .sms-code-row input{margin-bottom:0}
+  .sms-send-btn{flex:0 0 auto;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;color:#334155;font-size:.8125rem;font-weight:500;cursor:pointer;white-space:nowrap}
+  .sms-send-btn:disabled{opacity:.5;cursor:default}
+  .sms-hint{margin:.5rem 0 0;font-size:.75rem;color:#64748b;min-height:1em}
   .trust{margin-top:1.25rem;display:flex;align-items:center;justify-content:center;gap:1rem;font-size:.75rem;color:#94a3b8}
   .trust span{display:inline-flex;align-items:center;gap:.35rem}
   .trust svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -1077,6 +1249,38 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
           <input id="pw-password" name="password" type="password" autocomplete="current-password" required>
           <button type="submit">Sign in</button>
         </form>{{end}}
+        {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">or</div>{{end}}
+        <form class="pw-form sms-form" method="post" action="/_oauth/sms/verify">
+          {{if .SMSError}}<p class="pw-error">{{.SMSError}}</p>{{end}}
+          <label for="sms-phone">Phone number</label>
+          <input id="sms-phone" name="phone" type="tel" autocomplete="tel" required>
+          <label for="sms-code">Verification code</label>
+          <div class="sms-code-row">
+            <input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
+            <button type="button" id="sms-send" class="sms-send-btn">Send code</button>
+          </div>
+          <button type="submit">Sign in</button>
+          <p class="sms-hint" id="sms-hint"></p>
+        </form>
+        <script>
+        (function(){
+          var btn=document.getElementById('sms-send'),phone=document.getElementById('sms-phone'),hint=document.getElementById('sms-hint');
+          if(!btn){return;}
+          var left=0,tid=0;
+          function tick(){if(left<=0){btn.disabled=false;btn.textContent='Send code';return;}btn.textContent='Resend ('+left+'s)';left--;tid=setTimeout(tick,1000);}
+          btn.addEventListener('click',function(){
+            if(!phone.value){hint.textContent='Enter your phone number first.';return;}
+            btn.disabled=true;hint.textContent='Sending...';
+            fetch('/_oauth/sms/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'phone='+encodeURIComponent(phone.value)})
+              .then(function(res){return res.json().then(function(j){return {ok:res.ok,body:j};}).catch(function(){return {ok:res.ok,body:{}};});})
+              .then(function(r){
+                if(r.ok){hint.textContent='Code sent. Check your phone.';left=60;tick();}
+                else{btn.disabled=false;hint.textContent=(r.body&&r.body.error)?r.body.error:'Failed to send code.';}
+              })
+              .catch(function(){btn.disabled=false;hint.textContent='Network error, please retry.';});
+          });
+        })();
+        </script>{{end}}
       </div>
       {{if .TrustItems}}<div class="trust">
         {{range .TrustItems}}<span><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>{{.}}</span>{{end}}
@@ -1608,8 +1812,11 @@ type projectAuthConfig struct {
 	AccessMode       string           `json:"access_mode"`
 	// PasswordLogin is true when the project has at least one enabled demo
 	// account, which makes the login page render the username/password form.
-	PasswordLogin bool            `json:"password_login"`
-	Branding      projectBranding `json:"branding"`
+	PasswordLogin bool `json:"password_login"`
+	// SMSLogin is the project's explicit sms_login_enabled toggle; true renders
+	// the self-service phone / verification-code form on the login page.
+	SMSLogin bool            `json:"sms_login"`
+	Branding projectBranding `json:"branding"`
 }
 
 // projectBranding holds the per-project branding overrides plus the
@@ -1962,11 +2169,19 @@ func signForwardJWT(email, name, avatarURL, provider string) (string, error) {
 // still admitted via the ProjectID binding in handleVerify, NOT the
 // email-keyed ACL that OAuth sessions use.
 func signForwardPasswordJWT(email, name, avatarURL, projectID string) (string, error) {
+	return signForwardProjectJWT(email, name, avatarURL, "password", projectID)
+}
+
+// signForwardProjectJWT signs a project-scoped session (provider "password" or
+// "phone"). ProjectID binds the session to the single project that
+// authenticated it -- handleVerify enforces the binding and skips the
+// email-keyed ACL that roaming OAuth sessions use.
+func signForwardProjectJWT(email, name, avatarURL, provider, projectID string) (string, error) {
 	claims := authClaims{
 		Email:     email,
 		Name:      name,
 		AvatarURL: avatarURL,
-		Provider:  "password",
+		Provider:  provider,
 		ProjectID: projectID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),

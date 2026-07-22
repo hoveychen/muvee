@@ -1434,6 +1434,11 @@ function AuthTab({ projectId, form, onChange, onSave, saving, saveError }: {
         onChange={v => onChange({ ...form, enabled_providers: v })}
       />
 
+      <SMSLoginField
+        value={Boolean(form.sms_login_enabled)}
+        onChange={v => onChange({ ...form, sms_login_enabled: v })}
+      />
+
       <DemoAccountsSection projectId={projectId} />
 
       {saveError && (
@@ -1523,6 +1528,25 @@ function EnabledProvidersField({ value, onChange }: { value: string; onChange: (
       </div>
       <p style={{ fontSize: '0.8125rem', marginTop: '0.4rem', color: 'var(--fg-muted)' }}>
         Checked = available to the downstream sign-in flow (SDK + ForwardAuth login page). Leaving every provider checked stores the empty inherit-all sentinel.
+      </p>
+    </div>
+  )
+}
+
+// SMSLoginField toggles self-service phone / SMS verification-code sign-in on
+// the downstream login page (projects.sms_login_enabled). Off by default: it is
+// a much wider door than the owner-provisioned demo accounts, so opting in is
+// explicit.
+function SMSLoginField({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div>
+      <label className="form-label">PHONE / SMS LOGIN</label>
+      <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.9rem', marginTop: '0.4rem' }}>
+        <input type="checkbox" checked={value} onChange={e => onChange(e.target.checked)} />
+        <span>Allow self-service sign-in with a phone number and SMS code</span>
+      </label>
+      <p style={{ fontSize: '0.8125rem', marginTop: '0.4rem', color: 'var(--fg-muted)' }}>
+        When on, anyone who can receive the code at their phone number can sign in; a stable identity is created on first login. Sending real messages needs the server's ALIYUN_SMS_* credentials — until they are set, codes are written to the server log for local testing.
       </p>
     </div>
   )

@@ -70,6 +70,10 @@ export interface Project {
   // downstream sign-in flow may use (e.g. "google,feishu"). Empty = inherit
   // the globally-configured set.
   enabled_providers: string
+  // When true, the downstream login page offers self-service phone / SMS
+  // verification-code sign-in. Off by default (anyone with the phone can sign
+  // in, unlike the owner-provisioned demo accounts).
+  sms_login_enabled: boolean
   // Per-project branding for the forward-auth login page served on this
   // project's downstream subdomain. Empty = fall back to platform settings,
   // then built-in defaults.
