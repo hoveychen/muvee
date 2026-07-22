@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -66,24 +65,3 @@ func TestSMSHandlers_ValidationBeforeStore(t *testing.T) {
 	}
 }
 
-func TestGenerateSMSCode(t *testing.T) {
-	re := regexp.MustCompile(`^\d{6}$`)
-	for i := 0; i < 50; i++ {
-		code, err := generateSMSCode()
-		if err != nil {
-			t.Fatalf("generateSMSCode error: %v", err)
-		}
-		if !re.MatchString(code) {
-			t.Fatalf("code %q is not 6 digits", code)
-		}
-	}
-}
-
-func TestHashSMSCode(t *testing.T) {
-	if hashSMSCode("123456") != hashSMSCode("123456") {
-		t.Fatal("hash not deterministic")
-	}
-	if hashSMSCode("123456") == hashSMSCode("654321") {
-		t.Fatal("distinct codes produced same hash")
-	}
-}

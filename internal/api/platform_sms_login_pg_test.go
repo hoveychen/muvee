@@ -16,16 +16,11 @@ import (
 )
 
 // TestPlatformSMSLogin_PG is a real-database integration test for the platform
-// (admin-plane) phone login. It drives the public send-code + verify handlers
-// against a live Postgres, covering: platform-scope code storage (project_id IS
-// NULL), the synthetic-email identity landing in platform_members, muvee_session
-// issuance, consumed-code replay, and the access_mode → authorized mapping
-// (open ⇒ authorized, request ⇒ pending). Reuses capturingSender from
-// sms_login_pg_test.go (same package).
+// (admin-plane) phone login against the PNVS-style provider flow: a passing
+// verify runs the synthetic-email identity through EnsurePlatformMember, signs
+// muvee_session, and maps access_mode to authorized (open ⇒ authorized,
+// request ⇒ pending). Uses fakeVerifyProvider (see sms_login_pg_test.go).
 //
-// Runs only with TEST_DATABASE_URL set:
-//
-//	docker run -d -p 15432:5432 -e POSTGRES_USER=muvee -e POSTGRES_PASSWORD=muvee -e POSTGRES_DB=muvee postgres:16-alpine
 //	TEST_DATABASE_URL=postgres://muvee:muvee@localhost:15432/muvee?sslmode=disable go test ./internal/api/ -run TestPlatformSMSLogin_PG
 func TestPlatformSMSLogin_PG(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -49,8 +44,8 @@ func TestPlatformSMSLogin_PG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.New: %v", err)
 	}
-	sender := &capturingSender{}
-	s := &Server{store: st, auth: authSvc, smsSender: sender}
+	fake := &fakeVerifyProvider{pass: true}
+	s := &Server{store: st, auth: authSvc, verifyProvider: fake}
 
 	post := func(path, body string, h http.HandlerFunc) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
@@ -58,16 +53,12 @@ func TestPlatformSMSLogin_PG(t *testing.T) {
 		h(w, r)
 		return w
 	}
-
-	// login helper: send + verify a phone, returns the verify recorder.
 	login := func(phone string) *httptest.ResponseRecorder {
 		if w := post("/auth/phone/send-code", `{"phone":"`+phone+`"}`, s.handlePlatformSMSSendCode); w.Code != http.StatusOK {
 			t.Fatalf("send %s: got %d (%s)", phone, w.Code, w.Body.String())
 		}
-		code := sender.lastCode
-		return post("/auth/phone/verify", `{"phone":"`+phone+`","code":"`+code+`"}`, s.handlePlatformSMSVerify)
+		return post("/auth/phone/verify", `{"phone":"`+phone+`","code":"123456"}`, s.handlePlatformSMSVerify)
 	}
-
 	cleanup := func(phone string) {
 		synth := auth.SyntheticPhoneEmail(phone)
 		pool.Exec(ctx, `DELETE FROM sms_verification_codes WHERE phone=$1`, phone)
@@ -91,17 +82,14 @@ func TestPlatformSMSLogin_PG(t *testing.T) {
 		t.Fatalf("verify: got %d (%s)", w.Code, w.Body.String())
 	}
 	var out struct {
-		OK       bool   `json:"ok"`
-		Redirect string `json:"redirect"`
+		OK bool `json:"ok"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || !out.OK {
 		t.Fatalf("verify body: ok=%v err=%v (%s)", out.OK, err, w.Body.String())
 	}
-	// muvee_session cookie must be set.
 	if !strings.Contains(w.Header().Get("Set-Cookie"), "muvee_session=") {
 		t.Fatalf("no muvee_session cookie: %q", w.Header().Get("Set-Cookie"))
 	}
-	// Synthetic-email user landed in platform_members, authorized (open mode).
 	u, err := st.GetUserByEmail(ctx, synth)
 	if err != nil || u == nil {
 		t.Fatalf("synthetic user missing: err=%v", err)
@@ -112,11 +100,6 @@ func TestPlatformSMSLogin_PG(t *testing.T) {
 	}
 	if !pm.Authorized {
 		t.Errorf("open mode: member should be authorized")
-	}
-
-	// Replaying the consumed code fails.
-	if w := post("/auth/phone/verify", `{"phone":"`+phone+`","code":"`+sender.lastCode+`"}`, s.handlePlatformSMSVerify); w.Code != http.StatusUnauthorized {
-		t.Errorf("replay consumed code: got %d, want 401", w.Code)
 	}
 
 	// ── request mode: a new phone becomes a PENDING (unauthorized) member ──
