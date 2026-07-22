@@ -96,13 +96,13 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 
 	// Allowed keys (extend as needed)
 	allowed := map[string]bool{
-		"onboarded":                                true,
-		"site_name":                                true,
-		"logo_url":                                 true,
-		"favicon_url":                              true,
-		"access_mode":                              true,
-		"auto_deploy_master_enabled":               true,
-		"auto_deploy_poll_interval_seconds":        true,
+		"onboarded":                         true,
+		"site_name":                         true,
+		"logo_url":                          true,
+		"favicon_url":                       true,
+		"access_mode":                       true,
+		"auto_deploy_master_enabled":        true,
+		"auto_deploy_poll_interval_seconds": true,
 		"auto_deploy_image_watch_interval_seconds": true,
 		// Social OAuth providers (downstream / ForwardAuth only). All
 		// values stored as plain strings; "true"/"false" for the
