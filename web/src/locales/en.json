@@ -65,7 +65,18 @@
     "errorNotInvited": "Your account is not on the invitation list. Please contact an administrator.",
     "errorDomainNotAllowed": "Your email domain is not permitted on this platform.",
     "errorOAuthFailed": "Sign-in failed. Please try again.",
-    "errorGeneric": "Sign-in could not be completed."
+    "errorGeneric": "Sign-in could not be completed.",
+    "or": "or",
+    "phonePlaceholder": "Phone number",
+    "codePlaceholder": "Verification code",
+    "sendCode": "Send code",
+    "resendIn": "Resend in {{s}}s",
+    "sending": "Sending…",
+    "codeSent": "Code sent. Check your phone.",
+    "sendFailed": "Failed to send code.",
+    "phoneRequired": "Enter your phone number first.",
+    "networkError": "Network error, please retry.",
+    "errorInvalidCode": "Invalid or expired verification code."
   },
   "projects": {
     "sectionLabel": "PROJECTS",
