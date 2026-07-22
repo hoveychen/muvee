@@ -150,7 +150,7 @@ func TestSMSLogin_PG(t *testing.T) {
 	}
 
 	// 6) Expiry: insert an already-expired code directly, verify → 401.
-	if _, err := st.CreateSMSCode(ctx, proj.ID, phone, hashSMSCode("111111"), time.Now().Add(-time.Minute)); err != nil {
+	if _, err := st.CreateSMSCode(ctx, &proj.ID, phone, hashSMSCode("111111"), time.Now().Add(-time.Minute)); err != nil {
 		t.Fatalf("create expired code: %v", err)
 	}
 	if w := verify("111111"); w.Code != http.StatusUnauthorized {
@@ -158,7 +158,7 @@ func TestSMSLogin_PG(t *testing.T) {
 	}
 
 	// 7) Attempt cap: a fresh code, then exhaust the 5-try cap → 429.
-	if _, err := st.CreateSMSCode(ctx, proj.ID, phone, hashSMSCode("222222"), time.Now().Add(smsCodeTTL)); err != nil {
+	if _, err := st.CreateSMSCode(ctx, &proj.ID, phone, hashSMSCode("222222"), time.Now().Add(smsCodeTTL)); err != nil {
 		t.Fatalf("create fresh code: %v", err)
 	}
 	for i := 0; i < smsMaxVerifyAttempt; i++ {

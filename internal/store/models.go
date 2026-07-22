@@ -61,7 +61,9 @@ type ProjectPasswordAccount struct {
 type SMSVerificationCode struct {
 	ID         uuid.UUID  `db:"id"          json:"id"`
 	Phone      string     `db:"phone"       json:"phone"`
-	ProjectID  uuid.UUID  `db:"project_id"  json:"project_id"`
+	// ProjectID is nil for platform (admin-plane) login codes and set for
+	// downstream project login codes.
+	ProjectID  *uuid.UUID `db:"project_id"  json:"project_id,omitempty"`
 	CodeHash   string     `db:"code_hash"   json:"-"`
 	ExpiresAt  time.Time  `db:"expires_at"  json:"expires_at"`
 	Attempts   int        `db:"attempts"    json:"attempts"`
