@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/hoveychen/muvee/internal/auth"
 	"github.com/hoveychen/muvee/internal/sms"
@@ -23,9 +22,8 @@ func platformPhoneLoginEnabled() bool {
 	return false
 }
 
-// handlePlatformSMSSendCode issues and delivers a login code for the platform
-// login page. Public (no internal key) but rate-limited per phone. Codes are
-// stored with a NULL project_id (platform scope).
+// handlePlatformSMSSendCode asks the provider to deliver a login code for the
+// platform login page. Public (no internal key) but rate-limited per phone.
 func (s *Server) handlePlatformSMSSendCode(w http.ResponseWriter, r *http.Request) {
 	if !platformPhoneLoginEnabled() {
 		http.Error(w, "phone login is not enabled", http.StatusNotFound)
@@ -44,47 +42,25 @@ func (s *Server) handlePlatformSMSSendCode(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	now := time.Now()
-	recent, err := s.store.CountSMSCodesSince(r.Context(), phone, now.Add(-smsResendInterval))
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
+	if s.smsRateLimited(w, r, phone) {
 		return
 	}
-	if recent > 0 {
-		writeSMSRateLimited(w, int(smsResendInterval.Seconds()))
-		return
-	}
-	daily, err := s.store.CountSMSCodesSince(r.Context(), phone, now.Add(-24*time.Hour))
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
-	}
-	if daily >= smsDailySendCap {
-		writeSMSRateLimited(w, int((24 * time.Hour).Seconds()))
-		return
-	}
-
-	code, err := generateSMSCode()
-	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
-	}
-	// nil project_id => platform-scope code.
-	if _, err := s.store.CreateSMSCode(r.Context(), nil, phone, hashSMSCode(code), now.Add(smsCodeTTL)); err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
-		return
-	}
-	if err := s.smsSender.SendCode(r.Context(), phone, code); err != nil {
+	if err := s.verifyProvider.SendCode(r.Context(), phone); err != nil {
 		jsonErr(w, fmt.Errorf("failed to send sms: %w", err), http.StatusBadGateway)
+		return
+	}
+	// nil project_id => platform-scope send-ledger row (for rate limiting).
+	if err := s.store.RecordSMSSend(r.Context(), nil, phone); err != nil {
+		jsonErr(w, err, http.StatusInternalServerError)
 		return
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// handlePlatformSMSVerify checks a submitted code and, on success, signs a
-// muvee_session for the platform admin plane. The phone user flows through the
-// existing EnsurePlatformMember policy via a synthetic email (see
-// auth.HandlePhoneLogin). Public, but the code is single-use and rate-limited.
+// handlePlatformSMSVerify checks a submitted code via the provider and, on
+// success, signs a muvee_session for the platform admin plane. The phone user
+// flows through the existing EnsurePlatformMember policy via a synthetic email
+// (see auth.HandlePhoneLogin). Public, rate-limited on send.
 func (s *Server) handlePlatformSMSVerify(w http.ResponseWriter, r *http.Request) {
 	if !platformPhoneLoginEnabled() {
 		http.Error(w, "phone login is not enabled", http.StatusNotFound)
@@ -108,35 +84,19 @@ func (s *Server) handlePlatformSMSVerify(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rec, err := s.store.LatestUnconsumedSMSCode(r.Context(), nil, phone)
+	ok, err := s.verifyProvider.CheckCode(r.Context(), phone, body.Code)
 	if err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
+		jsonErr(w, fmt.Errorf("verify failed: %w", err), http.StatusBadGateway)
 		return
 	}
-	if rec == nil || time.Now().After(rec.ExpiresAt) {
+	if !ok {
 		jsonErr(w, fmt.Errorf("invalid or expired code"), http.StatusUnauthorized)
-		return
-	}
-	if rec.Attempts >= smsMaxVerifyAttempt {
-		_ = s.store.ConsumeSMSCode(r.Context(), rec.ID)
-		writeSMSRateLimited(w, int(smsResendInterval.Seconds()))
-		return
-	}
-	if hashSMSCode(body.Code) != rec.CodeHash {
-		_ = s.store.IncrementSMSCodeAttempts(r.Context(), rec.ID)
-		jsonErr(w, fmt.Errorf("invalid or expired code"), http.StatusUnauthorized)
-		return
-	}
-	if err := s.store.ConsumeSMSCode(r.Context(), rec.ID); err != nil {
-		jsonErr(w, err, http.StatusInternalServerError)
 		return
 	}
 
 	_, jwtToken, err := s.auth.HandlePhoneLogin(r.Context(), phone)
 	if err != nil {
 		if errors.Is(err, auth.ErrNotInvited) {
-			// 200 with an error field so the SPA shows the invite-mode message
-			// rather than treating it as a transport failure.
 			jsonOK(w, map[string]any{"error": "not_invited"})
 			return
 		}

@@ -54,23 +54,6 @@ type ProjectPasswordAccount struct {
 	CreatedAt    time.Time `db:"created_at"    json:"created_at"`
 }
 
-// SMSVerificationCode is a one-time phone login code. Only the sha256 hash of
-// the code is stored, never the plaintext. Rows are self-service (created on
-// send) and consumed on successful verify; rate limiting and the per-code
-// attempt cap run off this table.
-type SMSVerificationCode struct {
-	ID         uuid.UUID  `db:"id"          json:"id"`
-	Phone      string     `db:"phone"       json:"phone"`
-	// ProjectID is nil for platform (admin-plane) login codes and set for
-	// downstream project login codes.
-	ProjectID  *uuid.UUID `db:"project_id"  json:"project_id,omitempty"`
-	CodeHash   string     `db:"code_hash"   json:"-"`
-	ExpiresAt  time.Time  `db:"expires_at"  json:"expires_at"`
-	Attempts   int        `db:"attempts"    json:"attempts"`
-	ConsumedAt *time.Time `db:"consumed_at" json:"consumed_at,omitempty"`
-	CreatedAt  time.Time  `db:"created_at"  json:"created_at"`
-}
-
 // PlatformMember records a user's authorization to use the muvee admin plane
 // (the "muvee platform" itself, as distinct from any project deployed on it).
 // Subdomain auth users land in `users` for identity but not here, unless they

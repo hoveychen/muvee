@@ -42,7 +42,7 @@ import (
 type Server struct {
 	store              *store.Store
 	auth               *auth.Service
-	smsSender          sms.SMSSender // sends phone login codes; LogSender in dev, Aliyun when configured
+	verifyProvider     sms.VerifyProvider // phone login: PNVS when configured, dev LogVerifyProvider otherwise
 	sched              *scheduler.Scheduler
 	monitor            *monitor.Monitor
 	baseDomain         string
@@ -114,7 +114,7 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 	return &Server{
 		store:              st,
 		auth:               authSvc,
-		smsSender:          sms.NewSenderFromEnv(),
+		verifyProvider:     sms.NewVerifyProviderFromEnv(),
 		sched:              sched,
 		monitor:            mon,
 		baseDomain:         cfg.BaseDomain,
