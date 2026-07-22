@@ -1046,6 +1046,10 @@ type loginPageData struct {
 	// user-facing message shown above it after a failed verify.
 	SMSLogin bool
 	SMSError string
+	// MultipleMethods is true when more than one sign-in method is offered, so
+	// the template shows a "choose a method" sub-heading (and the "or" dividers
+	// are meaningful). Single-method pages skip that copy.
+	MultipleMethods bool
 }
 
 type loginProviderItem struct {
@@ -1093,7 +1097,9 @@ func buildLoginPageData(cfg *projectAuthConfig, allowed map[string]auth.Provider
 
 	// Default primary uses the same indigo the legacy template used so
 	// projects without branding stay visually familiar.
-	primary := safeColor(b.PrimaryColor, "#4f46e5")
+	// Default primary is an ink near-black, not the tell-tale "AI purple".
+	// Per-project branding_primary_color overrides it.
+	primary := safeColor(b.PrimaryColor, "#111827")
 	// Sidebar defaults to a deep slate so the white logo / tagline pop;
 	// projects that only set primary_color get a sidebar tinted with their
 	// brand colour for free.
@@ -1122,19 +1128,30 @@ func buildLoginPageData(cfg *projectAuthConfig, allowed map[string]auth.Provider
 		items = append(items, loginProviderItem{Name: name, DisplayName: p.DisplayName(), Icon: providerIcons[name]})
 	}
 
+	passwordLogin := cfg != nil && cfg.PasswordLogin
+	smsLogin := cfg != nil && cfg.SMSLogin
+	methods := len(items)
+	if passwordLogin {
+		methods++
+	}
+	if smsLogin {
+		methods++
+	}
+
 	return loginPageData{
-		SiteName:      siteName,
-		LogoURL:       logoURL,    // empty = template hides the <img>
-		FaviconURL:    faviconURL, // empty = template omits the <link rel="icon">
-		Tagline:       b.Tagline,
-		Description:   b.Description,
-		FooterText:    b.FooterText, // empty = template hides the sidebar footer
-		TrustItems:    parseTrustItems(b.TrustText),
-		PrimaryColor:  primary,
-		SidebarBg:     sidebar,
-		Providers:     items,
-		PasswordLogin: cfg != nil && cfg.PasswordLogin,
-		SMSLogin:      cfg != nil && cfg.SMSLogin,
+		SiteName:        siteName,
+		LogoURL:         logoURL,    // empty = template hides the <img>
+		FaviconURL:      faviconURL, // empty = template omits the <link rel="icon">
+		Tagline:         b.Tagline,
+		Description:     b.Description,
+		FooterText:      b.FooterText, // empty = template hides the sidebar footer
+		TrustItems:      parseTrustItems(b.TrustText),
+		PrimaryColor:    primary,
+		SidebarBg:       sidebar,
+		Providers:       items,
+		PasswordLogin:   passwordLogin,
+		SMSLogin:        smsLogin,
+		MultipleMethods: methods > 1,
 	}
 }
 
@@ -1178,117 +1195,119 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .SiteName}}{{.SiteName}} — Sign in{{else}}Sign in{{end}}</title>
+<title>{{if .SiteName}}{{.SiteName}} · 登录{{else}}登录{{end}}</title>
 {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}">{{end}}
 <style>
   *{box-sizing:border-box}
-  :root{--primary:{{.PrimaryColor}};--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--field:#f1f5f9}
+  :root{--primary:{{.PrimaryColor}};--ink:#1a1917;--muted:#6f6b64;--line:#e9e5dd;--field:#f5f2ec}
   html,body{height:100%}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:var(--ink);background:#f8fafc;-webkit-font-smoothing:antialiased}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased}
   .page{display:flex;min-height:100dvh}
-  .sidebar{display:none;flex-direction:column;justify-content:space-between;width:46%;padding:3.5rem;background:{{.SidebarBg}};color:#fff;position:relative;overflow:hidden}
-  .sidebar::after{content:"";position:absolute;inset:auto -20% -30% auto;width:60%;height:60%;background:radial-gradient(closest-side,rgba(255,255,255,.10),transparent);pointer-events:none}
-  .sidebar .tagline{font-size:.75rem;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.65)}
-  .brand-txt{font-size:3.5rem;font-weight:800;line-height:1.05;letter-spacing:-.03em;margin:0}
-  .brand-logo{max-height:72px;max-width:100%;object-fit:contain;display:block}
-  .sidebar .desc{margin-top:1.25rem;font-size:1.0625rem;line-height:1.7;color:rgba(255,255,255,.82);max-width:26rem;white-space:pre-line}
-  .sidebar .footer{font-size:.8125rem;color:rgba(255,255,255,.6)}
-  .panel{flex:1;display:flex;align-items:center;justify-content:center;padding:clamp(1.25rem,5vw,3rem)}
-  .card{width:100%;max-width:25rem;background:#fff;border:1px solid var(--line);border-radius:18px;padding:clamp(1.5rem,5vw,2.25rem);box-shadow:0 10px 40px -12px rgba(15,23,42,.12)}
-  .mobile-brand{margin-bottom:1.75rem;text-align:center}
-  .mobile-brand .brand-logo{max-height:52px;margin:0 auto}
-  .mobile-brand .brand-txt{font-size:2rem;color:var(--ink)}
-  .card h2{margin:0 0 .35rem;font-size:1.375rem;font-weight:700;letter-spacing:-.01em}
-  .card .sub{margin:0 0 1.75rem;font-size:.9375rem;color:var(--muted)}
-  .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:12px 16px;margin-top:.6rem;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink);font-size:.9375rem;font-weight:600;text-decoration:none;transition:border-color .15s,background .15s,transform .05s}
+  .sidebar{display:none;flex-direction:column;justify-content:space-between;width:42%;padding:3.75rem;background:{{.SidebarBg}};color:#fff;position:relative;overflow:hidden}
+  .sidebar::before{content:"";position:absolute;inset:0;background:linear-gradient(150deg,rgba(255,255,255,.06),transparent 42%);pointer-events:none}
+  .sidebar::after{content:"";position:absolute;inset:auto -25% -32% auto;width:65%;height:65%;background:radial-gradient(closest-side,rgba(255,255,255,.12),transparent);pointer-events:none}
+  .sidebar>*{position:relative}
+  .sidebar .tagline{font-size:.75rem;letter-spacing:.28em;text-transform:uppercase;color:rgba(255,255,255,.55)}
+  .brand-txt{font-size:3.25rem;font-weight:800;line-height:1.04;letter-spacing:-.035em;margin:0}
+  .brand-logo{max-height:64px;max-width:100%;object-fit:contain;display:block}
+  .sidebar .desc{margin-top:1.25rem;font-size:1.0625rem;line-height:1.75;color:rgba(255,255,255,.78);max-width:24rem;white-space:pre-line}
+  .sidebar .footer{font-size:.8125rem;color:rgba(255,255,255,.5)}
+  .panel{flex:1;display:flex;align-items:center;justify-content:center;padding:clamp(1.5rem,6vw,3.5rem)}
+  .form-col{width:100%;max-width:23rem}
+  .mobile-brand{margin-bottom:2.25rem}
+  .mobile-brand .brand-logo{max-height:48px}
+  .mobile-brand .brand-txt{font-size:2.125rem;color:var(--ink)}
+  .head{margin:0 0 .3rem;font-size:1.6rem;font-weight:750;letter-spacing:-.02em}
+  .sub{margin:0 0 1.9rem;font-size:.9375rem;color:var(--muted)}
+  .head+.forms,.sub+.forms{margin-top:0}
+  .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:13px 16px;margin-top:.55rem;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font-size:.9375rem;font-weight:600;text-decoration:none;transition:border-color .15s,background .15s,transform .04s}
   .btn:first-of-type{margin-top:0}
-  .btn:hover{border-color:var(--primary);background:#f8fafc}
+  .btn:hover{border-color:var(--ink);background:#fbfaf8}
   .btn:active{transform:translateY(1px)}
-  .btn .icon{display:inline-flex;color:#475569}
-  .divider{display:flex;align-items:center;gap:.75rem;margin:1.4rem 0;color:#94a3b8;font-size:.6875rem;text-transform:uppercase;letter-spacing:.1em}
+  .btn .icon{display:inline-flex;color:var(--muted)}
+  .divider{display:flex;align-items:center;gap:.85rem;margin:1.5rem 0;color:#a8a29a;font-size:.75rem}
   .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
-  .pw-form label{display:block;margin-bottom:.4rem;font-size:.8125rem;font-weight:600;color:#334155}
-  .pw-form input{width:100%;height:48px;padding:0 14px;margin-bottom:1rem;border:1px solid var(--line);border-radius:11px;font-size:1rem;color:var(--ink);background:var(--field);transition:border-color .15s,box-shadow .15s,background .15s}
-  .pw-form input:focus{outline:none;background:#fff;border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 18%,transparent)}
-  .pw-form>button{width:100%;height:48px;margin-top:.35rem;border:none;border-radius:11px;background:var(--primary);color:#fff;font-size:.9375rem;font-weight:700;cursor:pointer;transition:filter .15s,transform .05s}
-  .pw-form>button:hover{filter:brightness(1.07)}
+  .pw-form label{display:block;margin-bottom:.45rem;font-size:.8125rem;font-weight:600;color:#4a463f}
+  .pw-form input{width:100%;height:50px;padding:0 15px;margin-bottom:1.1rem;border:1px solid var(--line);border-radius:10px;font-size:1rem;color:var(--ink);background:var(--field);transition:border-color .15s,box-shadow .15s,background .15s}
+  .pw-form input::placeholder{color:#b3ada3}
+  .pw-form input:focus{outline:none;background:#fff;border-color:var(--ink);box-shadow:0 0 0 3px rgba(26,25,23,.08)}
+  .pw-form>button{width:100%;height:50px;margin-top:.5rem;border:none;border-radius:10px;background:var(--primary);color:#fff;font-size:.9375rem;font-weight:650;letter-spacing:.02em;cursor:pointer;transition:filter .15s,transform .04s}
+  .pw-form>button:hover{filter:brightness(1.12)}
   .pw-form>button:active{transform:translateY(1px)}
-  .pw-error{margin:0 0 1rem;padding:.6rem .8rem;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#b91c1c;font-size:.8125rem}
-  .sms-code-row{display:flex;gap:.5rem;margin-bottom:1rem}
+  .pw-error{margin:0 0 1.1rem;padding:.65rem .85rem;border:1px solid #f0cdc4;border-radius:9px;background:#fdf3f0;color:#b23a1e;font-size:.8125rem}
+  .sms-code-row{display:flex;gap:.55rem;margin-bottom:1.1rem}
   .sms-code-row input{flex:1;min-width:0;margin-bottom:0}
-  .sms-send-btn{flex:0 0 auto;height:48px;padding:0 14px;border:1px solid var(--primary);border-radius:11px;background:transparent;color:var(--primary);font-size:.875rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:opacity .15s}
-  .sms-send-btn:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 8%,transparent)}
-  .sms-send-btn:disabled{opacity:.45;cursor:default;border-color:var(--line);color:var(--muted)}
-  .sms-hint{margin:.6rem 0 0;font-size:.8125rem;color:var(--muted);min-height:1em}
-  .trust{margin-top:1.4rem;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:.75rem 1rem;font-size:.75rem;color:#94a3b8}
+  .sms-send-btn{flex:0 0 auto;height:50px;padding:0 15px;border:1px solid var(--ink);border-radius:10px;background:transparent;color:var(--ink);font-size:.8125rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .15s}
+  .sms-send-btn:hover:not(:disabled){background:#f5f2ec}
+  .sms-send-btn:disabled{opacity:.4;cursor:default;border-color:var(--line);color:var(--muted)}
+  .sms-hint{margin:.7rem 0 0;font-size:.8125rem;color:var(--muted);min-height:1em}
+  .trust{margin-top:1.6rem;display:flex;align-items:center;flex-wrap:wrap;gap:.6rem 1.1rem;font-size:.75rem;color:#a8a29a}
   .trust span{display:inline-flex;align-items:center;gap:.35rem}
   .trust svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-  @media(min-width:1024px){.sidebar{display:flex}.mobile-brand{display:none}}
+  @media(min-width:1024px){.sidebar{display:flex}.mobile-brand{display:none}.panel{justify-content:flex-start;padding-left:min(9vw,7rem)}}
 </style>
 </head>
 <body>
 <div class="page">
   <aside class="sidebar">
-    <div class="tagline">{{if .Tagline}}{{.Tagline}}{{else}}Welcome{{end}}</div>
+    <div>{{if .Tagline}}<div class="tagline">{{.Tagline}}</div>{{end}}</div>
     <div>
       {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('sb-brand');if(f)f.style.display='block'">{{end}}
-      <h1 class="brand-txt" id="sb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}Sign in{{end}}</h1>
+      <div class="brand-txt" id="sb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}登录{{end}}</div>
       {{if .Description}}<p class="desc">{{.Description}}</p>{{end}}
     </div>
     {{if .FooterText}}<div class="footer">{{.FooterText}}</div>{{end}}
   </aside>
   <main class="panel">
-    <div style="width:100%;max-width:25rem">
+    <div class="form-col">
       <div class="mobile-brand">
         {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('mb-brand');if(f)f.style.display='block'">{{end}}
-        <h1 class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}Sign in{{end}}</h1>
+        <div class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}登录{{end}}</div>
       </div>
-      <div class="card">
-        <h2>{{if .SiteName}}Sign in to {{.SiteName}}{{else}}Sign in{{end}}</h2>
-        <p class="sub">Choose your sign-in method below.</p>
-        {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}Continue with {{.DisplayName}}</a>{{end}}
-        {{if .PasswordLogin}}{{if .Providers}}<div class="divider">or</div>{{end}}
-        <form class="pw-form" method="post" action="/_oauth/password">
-          {{if .LoginError}}<p class="pw-error">{{.LoginError}}</p>{{end}}
-          <label for="pw-username">Username</label>
-          <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" required>
-          <label for="pw-password">Password</label>
-          <input id="pw-password" name="password" type="password" autocomplete="current-password" required>
-          <button type="submit">Sign in</button>
-        </form>{{end}}
-        {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">or</div>{{end}}
-        <form class="pw-form sms-form" method="post" action="/_oauth/sms/verify">
-          {{if .SMSError}}<p class="pw-error">{{.SMSError}}</p>{{end}}
-          <label for="sms-phone">Phone number</label>
-          <input id="sms-phone" name="phone" type="tel" autocomplete="tel" required>
-          <label for="sms-code">Verification code</label>
-          <div class="sms-code-row">
-            <input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
-            <button type="button" id="sms-send" class="sms-send-btn">Send code</button>
-          </div>
-          <button type="submit">Sign in</button>
-          <p class="sms-hint" id="sms-hint"></p>
-        </form>
-        <script>
-        (function(){
-          var btn=document.getElementById('sms-send'),phone=document.getElementById('sms-phone'),hint=document.getElementById('sms-hint');
-          if(!btn){return;}
-          var left=0,tid=0;
-          function tick(){if(left<=0){btn.disabled=false;btn.textContent='Send code';return;}btn.textContent='Resend ('+left+'s)';left--;tid=setTimeout(tick,1000);}
-          btn.addEventListener('click',function(){
-            if(!phone.value){hint.textContent='Enter your phone number first.';return;}
-            btn.disabled=true;hint.textContent='Sending...';
-            fetch('/_oauth/sms/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'phone='+encodeURIComponent(phone.value)})
-              .then(function(res){return res.json().then(function(j){return {ok:res.ok,body:j};}).catch(function(){return {ok:res.ok,body:{}};});})
-              .then(function(r){
-                if(r.ok){hint.textContent='Code sent. Check your phone.';left=60;tick();}
-                else{btn.disabled=false;hint.textContent=(r.body&&r.body.error)?r.body.error:'Failed to send code.';}
-              })
-              .catch(function(){btn.disabled=false;hint.textContent='Network error, please retry.';});
-          });
-        })();
-        </script>{{end}}
-      </div>
+      <h1 class="head">欢迎回来</h1>
+      {{if .MultipleMethods}}<p class="sub">选择一种方式登录{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}登录 {{.SiteName}}{{else}}登录你的账户{{end}}</p>{{end}}
+      {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}使用 {{.DisplayName}} 登录</a>{{end}}
+      {{if .PasswordLogin}}{{if .Providers}}<div class="divider">或</div>{{end}}
+      <form class="pw-form" method="post" action="/_oauth/password">
+        {{if .LoginError}}<p class="pw-error">{{.LoginError}}</p>{{end}}
+        <label for="pw-username">用户名</label>
+        <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" placeholder="请输入用户名" required>
+        <label for="pw-password">密码</label>
+        <input id="pw-password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
+        <button type="submit">登录</button>
+      </form>{{end}}
+      {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">或</div>{{end}}
+      <form class="pw-form sms-form" method="post" action="/_oauth/sms/verify">
+        {{if .SMSError}}<p class="pw-error">{{.SMSError}}</p>{{end}}
+        <label for="sms-phone">手机号</label>
+        <input id="sms-phone" name="phone" type="tel" autocomplete="tel" inputmode="numeric" placeholder="请输入手机号" required>
+        <label for="sms-code">验证码</label>
+        <div class="sms-code-row">
+          <input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" required>
+          <button type="button" id="sms-send" class="sms-send-btn">获取验证码</button>
+        </div>
+        <button type="submit">登录</button>
+        <p class="sms-hint" id="sms-hint"></p>
+      </form>
+      <script>
+      (function(){
+        var btn=document.getElementById('sms-send'),phone=document.getElementById('sms-phone'),hint=document.getElementById('sms-hint');
+        if(!btn){return;}
+        var left=0;
+        function tick(){if(left<=0){btn.disabled=false;btn.textContent='获取验证码';return;}btn.textContent='重新获取('+left+'s)';left--;setTimeout(tick,1000);}
+        btn.addEventListener('click',function(){
+          if(!phone.value){hint.textContent='请先输入手机号';return;}
+          btn.disabled=true;hint.textContent='发送中…';
+          fetch('/_oauth/sms/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'phone='+encodeURIComponent(phone.value)})
+            .then(function(res){return res.json().then(function(j){return {ok:res.ok,body:j};}).catch(function(){return {ok:res.ok,body:{}};});})
+            .then(function(r){
+              if(r.ok){hint.textContent='验证码已发送，请查收短信';left=60;tick();}
+              else{btn.disabled=false;hint.textContent=(r.body&&r.body.error)?r.body.error:'发送失败，请重试';}
+            })
+            .catch(function(){btn.disabled=false;hint.textContent='网络错误，请重试';});
+        });
+      })();
+      </script>{{end}}
       {{if .TrustItems}}<div class="trust">
         {{range .TrustItems}}<span><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>{{.}}</span>{{end}}
       </div>{{end}}
