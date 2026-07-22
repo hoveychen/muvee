@@ -1,20 +1,28 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/hoveychen/muvee/internal/auth"
 	"github.com/hoveychen/muvee/internal/sms"
 )
 
-// platformPhoneLoginEnabled gates the platform (admin-plane) phone login. Off
-// unless PLATFORM_PHONE_LOGIN is explicitly enabled. Surfaced to the login page
-// via handleListProviders so the form only renders when the endpoints are live.
-func platformPhoneLoginEnabled() bool {
+// platformPhoneLoginEnabled gates the platform (admin-plane) phone login. Reads
+// the platform_phone_login_enabled setting (admin-editable via /admin/settings),
+// falling back to the PLATFORM_PHONE_LOGIN env var. Off by default. Surfaced to
+// the login page via handleListProviders so the form only renders when live.
+func (s *Server) platformPhoneLoginEnabled(ctx context.Context) bool {
+	if s.store != nil {
+		if v, err := s.store.GetSetting(ctx, "platform_phone_login_enabled"); err == nil && strings.TrimSpace(v) != "" {
+			return v == "true"
+		}
+	}
 	switch os.Getenv("PLATFORM_PHONE_LOGIN") {
 	case "1", "true", "TRUE", "yes", "on":
 		return true
@@ -25,7 +33,7 @@ func platformPhoneLoginEnabled() bool {
 // handlePlatformSMSSendCode asks the provider to deliver a login code for the
 // platform login page. Public (no internal key) but rate-limited per phone.
 func (s *Server) handlePlatformSMSSendCode(w http.ResponseWriter, r *http.Request) {
-	if !platformPhoneLoginEnabled() {
+	if !s.platformPhoneLoginEnabled(r.Context()) {
 		http.Error(w, "phone login is not enabled", http.StatusNotFound)
 		return
 	}
@@ -45,7 +53,7 @@ func (s *Server) handlePlatformSMSSendCode(w http.ResponseWriter, r *http.Reques
 	if s.smsRateLimited(w, r, phone) {
 		return
 	}
-	if err := s.verifyProvider.SendCode(r.Context(), phone); err != nil {
+	if err := s.smsProvider(r.Context()).SendCode(r.Context(), phone); err != nil {
 		jsonErr(w, fmt.Errorf("failed to send sms: %w", err), http.StatusBadGateway)
 		return
 	}
@@ -62,7 +70,7 @@ func (s *Server) handlePlatformSMSSendCode(w http.ResponseWriter, r *http.Reques
 // flows through the existing EnsurePlatformMember policy via a synthetic email
 // (see auth.HandlePhoneLogin). Public, rate-limited on send.
 func (s *Server) handlePlatformSMSVerify(w http.ResponseWriter, r *http.Request) {
-	if !platformPhoneLoginEnabled() {
+	if !s.platformPhoneLoginEnabled(r.Context()) {
 		http.Error(w, "phone login is not enabled", http.StatusNotFound)
 		return
 	}
@@ -84,7 +92,7 @@ func (s *Server) handlePlatformSMSVerify(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ok, err := s.verifyProvider.CheckCode(r.Context(), phone, body.Code)
+	ok, err := s.smsProvider(r.Context()).CheckCode(r.Context(), phone, body.Code)
 	if err != nil {
 		jsonErr(w, fmt.Errorf("verify failed: %w", err), http.StatusBadGateway)
 		return
