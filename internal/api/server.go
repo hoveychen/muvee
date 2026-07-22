@@ -29,13 +29,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/skill"
 	"github.com/hoveychen/muvee/internal/auth"
-	"github.com/hoveychen/muvee/internal/sms"
 	"github.com/hoveychen/muvee/internal/domains"
 	"github.com/hoveychen/muvee/internal/gitrepo"
 	"github.com/hoveychen/muvee/internal/monitor"
 	"github.com/hoveychen/muvee/internal/muveectlbin"
 	"github.com/hoveychen/muvee/internal/projectevents"
 	"github.com/hoveychen/muvee/internal/scheduler"
+	"github.com/hoveychen/muvee/internal/sms"
 	"github.com/hoveychen/muvee/internal/store"
 )
 
