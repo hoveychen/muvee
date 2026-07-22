@@ -10,13 +10,14 @@ const MONO = 'var(--font-mono)'
 // ─── Field helper ─────────────────────────────────────────────────────────────
 
 function Field({
-  label, value, onChange, hint, placeholder,
+  label, value, onChange, hint, placeholder, type,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   hint?: string
   placeholder?: string
+  type?: string
 }) {
   return (
     <div style={{ marginBottom: '18px' }}>
@@ -25,6 +26,7 @@ function Field({
       </label>
       <input
         className="form-input"
+        type={type || 'text'}
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
@@ -371,6 +373,74 @@ function AppleProviderCard({
   )
 }
 
+// SMSLoginSection configures Aliyun PNVS (号码认证服务) phone/SMS login. Stored
+// in system_settings (admin-editable), read settings-first with ALIYUN_SMS_*
+// env fallback by the server. Matches SocialOAuthSection's plain-English style.
+function SMSLoginSection({ initial }: { initial: SystemSettings }) {
+  const [s, setS] = useState(() => ({
+    platform_phone_login_enabled: initial.platform_phone_login_enabled || 'false',
+    sms_access_key_id: initial.sms_access_key_id || '',
+    sms_access_key_secret: initial.sms_access_key_secret || '',
+    sms_sign_name: initial.sms_sign_name || '',
+    sms_template_code: initial.sms_template_code || '',
+    sms_template_param: initial.sms_template_param || '',
+  }))
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const set = (k: keyof typeof s) => (v: string) => setS(p => ({ ...p, [k]: v }))
+  const save = async () => {
+    setSaving(true)
+    try {
+      await api.admin.updateSettings(s)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch {
+      // error surfaced by api layer
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <section className="card">
+      <div className="card-header">Phone / SMS login (Aliyun PNVS)</div>
+      <div style={{ padding: '20px' }}>
+        <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '16px' }}>
+          Aliyun 号码认证服务 (PNVS) 短信认证 — the platform generates and verifies the code.
+          Leave the credentials blank to use the dev log fallback (code printed to the server log).
+        </p>
+        <label className="flex items-center gap-2" style={{ cursor: 'pointer', marginBottom: '16px' }}>
+          <input
+            type="checkbox"
+            checked={s.platform_phone_login_enabled === 'true'}
+            onChange={e => set('platform_phone_login_enabled')(e.target.checked ? 'true' : 'false')}
+          />
+          <span>Enable phone login on the platform admin login page</span>
+        </label>
+        <Field label="AccessKey ID" value={s.sms_access_key_id} onChange={set('sms_access_key_id')} />
+        <Field label="AccessKey Secret" type="password" value={s.sms_access_key_secret} onChange={set('sms_access_key_secret')} />
+        <Field label="Sign name (短信签名)" value={s.sms_sign_name} onChange={set('sms_sign_name')} placeholder="恒创联众" />
+        <Field label="Template code (模板号)" value={s.sms_template_code} onChange={set('sms_template_code')} placeholder="100001" />
+        <Field
+          label="Template param"
+          value={s.sms_template_param}
+          onChange={set('sms_template_param')}
+          placeholder={'{"code":"##code##","min":"5"}'}
+          hint={'Fills template variables. The code is auto-generated (##code## placeholder); add extra vars such as min. Default when blank: {"code":"##code##"}'}
+        />
+        <button
+          className="btn-primary"
+          onClick={save}
+          disabled={saving}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+        >
+          {saving ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={13} />}
+          {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: string) => string }) {
   void t // reserved for future i18n keys
   const forwardAuthBaseURL = initial.forward_auth_base_url || ''
@@ -660,6 +730,9 @@ export default function AdminSettingsPage() {
 
         {/* ── Social Login Providers (downstream only) ─────────────────────── */}
         {initialSettings && <SocialOAuthSection initial={initialSettings} t={t} />}
+
+        {/* ── Phone / SMS login (Aliyun PNVS) ──────────────────────────────── */}
+        {initialSettings && <SMSLoginSection initial={initialSettings} />}
 
         {/* ── System Health ─────────────────────────────────────────────────── */}
         <section className="card">

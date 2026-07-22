@@ -96,13 +96,13 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 
 	// Allowed keys (extend as needed)
 	allowed := map[string]bool{
-		"onboarded":                                true,
-		"site_name":                                true,
-		"logo_url":                                 true,
-		"favicon_url":                              true,
-		"access_mode":                              true,
-		"auto_deploy_master_enabled":               true,
-		"auto_deploy_poll_interval_seconds":        true,
+		"onboarded":                         true,
+		"site_name":                         true,
+		"logo_url":                          true,
+		"favicon_url":                       true,
+		"access_mode":                       true,
+		"auto_deploy_master_enabled":        true,
+		"auto_deploy_poll_interval_seconds": true,
 		"auto_deploy_image_watch_interval_seconds": true,
 		// Social OAuth providers (downstream / ForwardAuth only). All
 		// values stored as plain strings; "true"/"false" for the
@@ -136,6 +136,19 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		"apple_team_id":          true,
 		"apple_key_id":           true,
 		"apple_private_key_p8":   true, // raw .p8 PEM contents
+		// Phone / SMS login via Aliyun 号码认证服务 (PNVS). access_key_secret is
+		// sensitive but stored plain, same threat model as the social secrets
+		// above. sms_sign_name/sms_template_code come from the PNVS console;
+		// sms_template_param defaults to {"code":"##code##"} when empty. These
+		// are read (settings-first, ALIYUN_SMS_* env fallback) by the SMS
+		// endpoints via Server.smsProvider. platform_phone_login_enabled gates
+		// the platform (admin-plane) phone login form.
+		"sms_access_key_id":            true,
+		"sms_access_key_secret":        true,
+		"sms_sign_name":                true,
+		"sms_template_code":            true,
+		"sms_template_param":           true,
+		"platform_phone_login_enabled": true,
 	}
 
 	ctx := r.Context()

@@ -42,7 +42,8 @@ import (
 type Server struct {
 	store              *store.Store
 	auth               *auth.Service
-	verifyProvider     sms.VerifyProvider // phone login: PNVS when configured, dev LogVerifyProvider otherwise
+	devSMS             *sms.LogVerifyProvider // persistent dev fallback (in-memory codes); used when PNVS settings/env absent
+	smsOverride        sms.VerifyProvider     // test-only: when non-nil, smsProvider returns this
 	sched              *scheduler.Scheduler
 	monitor            *monitor.Monitor
 	baseDomain         string
@@ -114,7 +115,7 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 	return &Server{
 		store:              st,
 		auth:               authSvc,
-		verifyProvider:     sms.NewVerifyProviderFromEnv(),
+		devSMS:             sms.NewLogVerifyProvider(),
 		sched:              sched,
 		monitor:            mon,
 		baseDomain:         cfg.BaseDomain,
@@ -951,7 +952,7 @@ func (s *Server) Router() http.Handler {
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"providers":   s.auth.ListProviders(),
-		"phone_login": platformPhoneLoginEnabled(),
+		"phone_login": s.platformPhoneLoginEnabled(r.Context()),
 	})
 }
 

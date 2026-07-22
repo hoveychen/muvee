@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,37 +24,29 @@ type VerifyProvider interface {
 	CheckCode(ctx context.Context, phone, code string) (bool, error)
 }
 
-// NewVerifyProviderFromEnv returns a PNVSProvider when all four ALIYUN_SMS_*
-// variables are set, otherwise a LogVerifyProvider. SignName/TemplateCode come
-// from the PNVS console (号码认证服务 → 短信认证, no enterprise qualification
-// required for individuals). Fill the env vars and restart to go live — no code
-// change needed.
-func NewVerifyProviderFromEnv() VerifyProvider {
-	id := os.Getenv("ALIYUN_SMS_ACCESS_KEY_ID")
-	secret := os.Getenv("ALIYUN_SMS_ACCESS_KEY_SECRET")
-	sign := os.Getenv("ALIYUN_SMS_SIGN_NAME")
-	tmpl := os.Getenv("ALIYUN_SMS_TEMPLATE_CODE")
-	if id == "" || secret == "" || sign == "" || tmpl == "" {
-		log.Printf("[sms] ALIYUN_SMS_* not fully configured; using dev LogVerifyProvider")
-		return NewLogVerifyProvider()
-	}
+// DefaultTemplateParam is used when no template param is configured. PNVS auto
+// fills the generated code into the ##code## placeholder. Templates with extra
+// variables (e.g. ${min}) must override this via the sms_template_param setting.
+const DefaultTemplateParam = `{"code":"##code##"}`
+
+// NewPNVSProvider builds a PNVS-backed VerifyProvider from explicit credentials
+// (read from platform settings / env by the caller). SignName and TemplateCode
+// come from the PNVS console (号码认证服务 → 短信认证, individual-friendly, no
+// enterprise qualification). templateParam defaults to DefaultTemplateParam
+// when empty. Returns an error if the SDK client cannot be constructed.
+func NewPNVSProvider(accessKeyID, accessKeySecret, signName, templateCode, templateParam string) (VerifyProvider, error) {
 	client, err := dypnsapi.NewClient(&openapi.Config{
-		AccessKeyId:     tea.String(id),
-		AccessKeySecret: tea.String(secret),
+		AccessKeyId:     tea.String(accessKeyID),
+		AccessKeySecret: tea.String(accessKeySecret),
 		Endpoint:        tea.String("dypnsapi.aliyuncs.com"),
 	})
 	if err != nil {
-		log.Printf("[sms] PNVS client init failed (%v); using dev LogVerifyProvider", err)
-		return NewLogVerifyProvider()
+		return nil, err
 	}
-	// The verification-code template variable defaults to ##code## (PNVS auto
-	// fills the generated code). Overridable via env in case the console
-	// template uses a different variable name.
-	tp := os.Getenv("ALIYUN_SMS_TEMPLATE_PARAM")
-	if tp == "" {
-		tp = `{"code":"##code##"}`
+	if templateParam == "" {
+		templateParam = DefaultTemplateParam
 	}
-	return &PNVSProvider{client: client, signName: sign, templateCode: tmpl, templateParam: tp}
+	return &PNVSProvider{client: client, signName: signName, templateCode: templateCode, templateParam: templateParam}, nil
 }
 
 // PNVSProvider calls Aliyun 号码认证服务 (Dypnsapi) SendSmsVerifyCode /

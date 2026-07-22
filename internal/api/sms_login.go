@@ -1,15 +1,55 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/sms"
 )
+
+// smsProvider resolves the phone-login VerifyProvider from platform settings
+// (falling back to ALIYUN_SMS_* env). All four PNVS creds present => a
+// PNVSProvider; otherwise the persistent dev LogVerifyProvider. Resolved
+// per-request so admin settings changes take effect without a restart.
+func (s *Server) smsProvider(ctx context.Context) sms.VerifyProvider {
+	if s.smsOverride != nil {
+		return s.smsOverride
+	}
+	id := s.settingOrEnv(ctx, "sms_access_key_id", "ALIYUN_SMS_ACCESS_KEY_ID")
+	secret := s.settingOrEnv(ctx, "sms_access_key_secret", "ALIYUN_SMS_ACCESS_KEY_SECRET")
+	sign := s.settingOrEnv(ctx, "sms_sign_name", "ALIYUN_SMS_SIGN_NAME")
+	tmpl := s.settingOrEnv(ctx, "sms_template_code", "ALIYUN_SMS_TEMPLATE_CODE")
+	if id == "" || secret == "" || sign == "" || tmpl == "" {
+		return s.devSMS
+	}
+	param := s.settingOrEnv(ctx, "sms_template_param", "ALIYUN_SMS_TEMPLATE_PARAM")
+	p, err := sms.NewPNVSProvider(id, secret, sign, tmpl, param)
+	if err != nil {
+		log.Printf("[sms] PNVS provider init failed (%v); using dev fallback", err)
+		return s.devSMS
+	}
+	return p
+}
+
+// settingOrEnv returns the system_settings value for key, or the env var when
+// the setting is empty/unset. Platform config lives in settings (admin-editable
+// via /admin/settings); env is the deployment fallback.
+func (s *Server) settingOrEnv(ctx context.Context, key, envName string) string {
+	if s.store != nil {
+		if v, err := s.store.GetSetting(ctx, key); err == nil && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return os.Getenv(envName)
+}
 
 // SMS send-rate limits (per phone, across all projects) so the endpoint cannot
 // be used to burn SMS quota. Code generation, expiry and verification are owned
@@ -96,7 +136,7 @@ func (s *Server) handleInternalAuthSMSSendCode(w http.ResponseWriter, r *http.Re
 	if s.smsRateLimited(w, r, phone) {
 		return
 	}
-	if err := s.verifyProvider.SendCode(r.Context(), phone); err != nil {
+	if err := s.smsProvider(r.Context()).SendCode(r.Context(), phone); err != nil {
 		jsonErr(w, fmt.Errorf("failed to send sms: %w", err), http.StatusBadGateway)
 		return
 	}
@@ -140,7 +180,7 @@ func (s *Server) handleInternalAuthSMSVerify(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	ok, err := s.verifyProvider.CheckCode(r.Context(), phone, body.Code)
+	ok, err := s.smsProvider(r.Context()).CheckCode(r.Context(), phone, body.Code)
 	if err != nil {
 		jsonErr(w, fmt.Errorf("verify failed: %w", err), http.StatusBadGateway)
 		return
