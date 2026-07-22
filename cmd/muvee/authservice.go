@@ -745,11 +745,12 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := buildLoginPageData(cfg, allowed)
+	data.M = loginMessages(acceptLang(r))
 	switch r.URL.Query().Get("error") {
 	case "invalid_credentials":
-		data.LoginError = "Invalid username or password."
+		data.LoginError = data.M.BadCredentials
 	case "invalid_code":
-		data.SMSError = "Invalid or expired verification code."
+		data.SMSError = data.M.BadCode
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = loginPageTmpl.Execute(w, data)
@@ -1050,6 +1051,53 @@ type loginPageData struct {
 	// the template shows a "choose a method" sub-heading (and the "or" dividers
 	// are meaningful). Single-method pages skip that copy.
 	MultipleMethods bool
+	// M holds the localized UI strings (zh/en), chosen per-request from the
+	// Accept-Language header. See loginMessages.
+	M loginMsg
+}
+
+// loginMsg is the localized string set for the login page. EN toggles
+// word-order-sensitive phrasing (e.g. the OAuth button) in the template.
+type loginMsg struct {
+	EN                                                      bool
+	WelcomeBack, ChooseMethod, SignInTo, YourAccount        string
+	Or, Username, UsernamePH, Password, PasswordPH, Login   string
+	Phone, PhonePH, Code, CodePH, GetCode, Resend           string
+	Sending, CodeSent, SendFailed, NetworkErr, PhoneRequired string
+	BadCredentials, BadCode                                 string
+}
+
+// acceptLang picks "en" or "zh" from the request's Accept-Language header,
+// defaulting to zh (this is a China-first deployment). Only the highest-q tag
+// is considered.
+func acceptLang(r *http.Request) string {
+	al := strings.ToLower(r.Header.Get("Accept-Language"))
+	if i := strings.IndexAny(al, ",;"); i >= 0 {
+		al = al[:i]
+	}
+	if strings.HasPrefix(strings.TrimSpace(al), "en") {
+		return "en"
+	}
+	return "zh"
+}
+
+func loginMessages(lang string) loginMsg {
+	if lang == "en" {
+		return loginMsg{
+			EN: true, WelcomeBack: "Welcome back", ChooseMethod: "Choose how to sign in to", SignInTo: "Sign in to", YourAccount: "Sign in to your account",
+			Or: "or", Username: "Username", UsernamePH: "Enter your username", Password: "Password", PasswordPH: "Enter your password", Login: "Sign in",
+			Phone: "Phone number", PhonePH: "Enter your phone number", Code: "Verification code", CodePH: "6-digit code", GetCode: "Get code", Resend: "Resend",
+			Sending: "Sending…", CodeSent: "Code sent. Check your phone.", SendFailed: "Failed to send code.", NetworkErr: "Network error, please retry.", PhoneRequired: "Enter your phone number first.",
+			BadCredentials: "Invalid username or password.", BadCode: "Invalid or expired verification code.",
+		}
+	}
+	return loginMsg{
+		EN: false, WelcomeBack: "欢迎回来", ChooseMethod: "选择一种方式登录", SignInTo: "登录", YourAccount: "登录你的账户",
+		Or: "或", Username: "用户名", UsernamePH: "请输入用户名", Password: "密码", PasswordPH: "请输入密码", Login: "登录",
+		Phone: "手机号", PhonePH: "请输入手机号", Code: "验证码", CodePH: "6 位验证码", GetCode: "获取验证码", Resend: "重新获取",
+		Sending: "发送中…", CodeSent: "验证码已发送，请查收短信", SendFailed: "发送失败，请重试", NetworkErr: "网络错误，请重试", PhoneRequired: "请先输入手机号",
+		BadCredentials: "用户名或密码错误", BadCode: "验证码错误或已过期",
+	}
 }
 
 type loginProviderItem struct {
@@ -1191,11 +1239,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
-<html lang="en">
+<html lang="{{if .M.EN}}en{{else}}zh{{end}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .SiteName}}{{.SiteName}} · 登录{{else}}登录{{end}}</title>
+<title>{{if .SiteName}}{{.SiteName}} · {{end}}{{.M.WelcomeBack}}</title>
 {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}">{{end}}
 <style>
   *{box-sizing:border-box}
@@ -1253,7 +1301,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
     <div>{{if .Tagline}}<div class="tagline">{{.Tagline}}</div>{{end}}</div>
     <div>
       {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('sb-brand');if(f)f.style.display='block'">{{end}}
-      <div class="brand-txt" id="sb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}登录{{end}}</div>
+      <div class="brand-txt" id="sb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}{{.M.Login}}{{end}}</div>
       {{if .Description}}<p class="desc">{{.Description}}</p>{{end}}
     </div>
     {{if .FooterText}}<div class="footer">{{.FooterText}}</div>{{end}}
@@ -1262,49 +1310,50 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
     <div class="form-col">
       <div class="mobile-brand">
         {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('mb-brand');if(f)f.style.display='block'">{{end}}
-        <div class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}登录{{end}}</div>
+        <div class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}{{.M.Login}}{{end}}</div>
       </div>
-      <h1 class="head">欢迎回来</h1>
-      {{if .MultipleMethods}}<p class="sub">选择一种方式登录{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}登录 {{.SiteName}}{{else}}登录你的账户{{end}}</p>{{end}}
-      {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}使用 {{.DisplayName}} 登录</a>{{end}}
-      {{if .PasswordLogin}}{{if .Providers}}<div class="divider">或</div>{{end}}
+      <h1 class="head">{{.M.WelcomeBack}}</h1>
+      {{if .MultipleMethods}}<p class="sub">{{.M.ChooseMethod}}{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}{{.M.SignInTo}} {{.SiteName}}{{else}}{{.M.YourAccount}}{{end}}</p>{{end}}
+      {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{if $.M.EN}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</a>{{end}}
+      {{if .PasswordLogin}}{{if .Providers}}<div class="divider">{{.M.Or}}</div>{{end}}
       <form class="pw-form" method="post" action="/_oauth/password">
         {{if .LoginError}}<p class="pw-error">{{.LoginError}}</p>{{end}}
-        <label for="pw-username">用户名</label>
-        <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" placeholder="请输入用户名" required>
-        <label for="pw-password">密码</label>
-        <input id="pw-password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
-        <button type="submit">登录</button>
+        <label for="pw-username">{{.M.Username}}</label>
+        <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" placeholder="{{.M.UsernamePH}}" required>
+        <label for="pw-password">{{.M.Password}}</label>
+        <input id="pw-password" name="password" type="password" autocomplete="current-password" placeholder="{{.M.PasswordPH}}" required>
+        <button type="submit">{{.M.Login}}</button>
       </form>{{end}}
-      {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">或</div>{{end}}
+      {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">{{.M.Or}}</div>{{end}}
       <form class="pw-form sms-form" method="post" action="/_oauth/sms/verify">
         {{if .SMSError}}<p class="pw-error">{{.SMSError}}</p>{{end}}
-        <label for="sms-phone">手机号</label>
-        <input id="sms-phone" name="phone" type="tel" autocomplete="tel" inputmode="numeric" placeholder="请输入手机号" required>
-        <label for="sms-code">验证码</label>
+        <label for="sms-phone">{{.M.Phone}}</label>
+        <input id="sms-phone" name="phone" type="tel" autocomplete="tel" inputmode="numeric" placeholder="{{.M.PhonePH}}" required>
+        <label for="sms-code">{{.M.Code}}</label>
         <div class="sms-code-row">
-          <input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" required>
-          <button type="button" id="sms-send" class="sms-send-btn">获取验证码</button>
+          <input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="{{.M.CodePH}}" required>
+          <button type="button" id="sms-send" class="sms-send-btn">{{.M.GetCode}}</button>
         </div>
-        <button type="submit">登录</button>
+        <button type="submit">{{.M.Login}}</button>
         <p class="sms-hint" id="sms-hint"></p>
       </form>
       <script>
       (function(){
+        var MSG={get:'{{.M.GetCode}}',resend:'{{.M.Resend}}',phoneRequired:'{{.M.PhoneRequired}}',sending:'{{.M.Sending}}',sent:'{{.M.CodeSent}}',failed:'{{.M.SendFailed}}',neterr:'{{.M.NetworkErr}}'};
         var btn=document.getElementById('sms-send'),phone=document.getElementById('sms-phone'),hint=document.getElementById('sms-hint');
         if(!btn){return;}
         var left=0;
-        function tick(){if(left<=0){btn.disabled=false;btn.textContent='获取验证码';return;}btn.textContent='重新获取('+left+'s)';left--;setTimeout(tick,1000);}
+        function tick(){if(left<=0){btn.disabled=false;btn.textContent=MSG.get;return;}btn.textContent=MSG.resend+'('+left+'s)';left--;setTimeout(tick,1000);}
         btn.addEventListener('click',function(){
-          if(!phone.value){hint.textContent='请先输入手机号';return;}
-          btn.disabled=true;hint.textContent='发送中…';
+          if(!phone.value){hint.textContent=MSG.phoneRequired;return;}
+          btn.disabled=true;hint.textContent=MSG.sending;
           fetch('/_oauth/sms/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'phone='+encodeURIComponent(phone.value)})
             .then(function(res){return res.json().then(function(j){return {ok:res.ok,body:j};}).catch(function(){return {ok:res.ok,body:{}};});})
             .then(function(r){
-              if(r.ok){hint.textContent='验证码已发送，请查收短信';left=60;tick();}
-              else{btn.disabled=false;hint.textContent=(r.body&&r.body.error)?r.body.error:'发送失败，请重试';}
+              if(r.ok){hint.textContent=MSG.sent;left=60;tick();}
+              else{btn.disabled=false;hint.textContent=(r.body&&r.body.error)?r.body.error:MSG.failed;}
             })
-            .catch(function(){btn.disabled=false;hint.textContent='网络错误，请重试';});
+            .catch(function(){btn.disabled=false;hint.textContent=MSG.neterr;});
         });
       })();
       </script>{{end}}
@@ -1543,11 +1592,11 @@ func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const pageTmpl = `<!DOCTYPE html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>设备登录</title>
+<title>{{if eq .Lang "en"}}Device login{{else}}设备登录{{end}}</title>
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100dvh;margin:0;background:#faf9f7;color:#1a1917;padding:1.25rem;-webkit-font-smoothing:antialiased}
@@ -1564,14 +1613,14 @@ func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
 <div class="card">
-  <h1>设备登录</h1>
-  <p>请输入终端中显示的验证码</p>
+  <h1>{{if eq .Lang "en"}}Device login{{else}}设备登录{{end}}</h1>
+  <p>{{if eq .Lang "en"}}Enter the code shown in your terminal{{else}}请输入终端中显示的验证码{{end}}</p>
   <form id="form" onsubmit="return go()">
     <input type="text" id="code" maxlength="9" placeholder="XXXX-XXXX" value="{{.Code}}" autofocus autocomplete="off">
-    <div class="error" id="err">验证码无效或已过期</div>
+    <div class="error" id="err">{{if eq .Lang "en"}}Invalid or expired code{{else}}验证码无效或已过期{{end}}</div>
     <div class="providers" id="providers" style="{{if not .Code}}display:none{{end}}">
-      {{range .Providers}}<button type="submit" name="provider" value="{{.Name}}">使用 {{.DisplayName}} 登录</button>{{end}}
-      {{if eq (len .Providers) 0}}<button type="submit">继续</button>{{end}}
+      {{range .Providers}}<button type="submit" name="provider" value="{{.Name}}">{{if eq $.Lang "en"}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</button>{{end}}
+      {{if eq (len .Providers) 0}}<button type="submit">{{if eq .Lang "en"}}Continue{{else}}继续{{end}}</button>{{end}}
     </div>
   </form>
 </div>
@@ -1617,7 +1666,8 @@ function go(){
 	_ = t.Execute(w, struct {
 		Code      string
 		Providers []providerItem
-	}{Code: formatted, Providers: items})
+		Lang      string
+	}{Code: formatted, Providers: items, Lang: acceptLang(r)})
 	return
 }
 
@@ -2014,11 +2064,11 @@ func submitAccessRequestInternal(ctx context.Context, projectID, email, reason s
 // bundle) because authservice already serves /_oauth/login the same way and
 // the page has no client-side state worth pulling in React for.
 const requestAccessPageTmpl = `<!DOCTYPE html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>申请访问 · {{.ProjectName}}</title>
+<title>{{if eq .Lang "en"}}Request access{{else}}申请访问{{end}} · {{.ProjectName}}</title>
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100dvh;margin:0;background:#faf9f7;color:#1a1917;padding:1.25rem;-webkit-font-smoothing:antialiased}
@@ -2040,27 +2090,27 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
 <body>
 <div class="card">
 {{if eq .Phase "form"}}
-  <h1>申请访问</h1>
-  <p><strong>{{.ProjectName}}</strong> 是私有项目。给项目所有者留言说明你为什么需要访问，通过后即可进入。</p>
+  <h1>{{if eq .Lang "en"}}Request access{{else}}申请访问{{end}}</h1>
+  <p><strong>{{.ProjectName}}</strong> {{if eq .Lang "en"}}is private. Send the owner a note explaining why you need access — you'll be let in once approved.{{else}}是私有项目。给项目所有者留言说明你为什么需要访问，通过后即可进入。{{end}}</p>
   <form method="POST" action="/_oauth/request-access">
     <input type="hidden" name="project_id" value="{{.ProjectID}}">
-    <label for="reason">申请理由（可选）</label>
-    <textarea id="reason" name="reason" maxlength="1000" placeholder="你需要用它做什么？"></textarea>
-    <button type="submit">发送申请</button>
+    <label for="reason">{{if eq .Lang "en"}}Reason (optional){{else}}申请理由（可选）{{end}}</label>
+    <textarea id="reason" name="reason" maxlength="1000" placeholder="{{if eq .Lang "en"}}What do you need this for?{{else}}你需要用它做什么？{{end}}"></textarea>
+    <button type="submit">{{if eq .Lang "en"}}Send request{{else}}发送申请{{end}}</button>
   </form>
-  <p class="muted" style="margin-top:1.2rem">已登录为 {{.Email}}。<a href="/_oauth/logout?redirect=/">退出登录</a></p>
+  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Email}}. <a href="/_oauth/logout?redirect=/">Sign out</a>{{else}}已登录为 {{.Email}}。<a href="/_oauth/logout?redirect=/">退出登录</a>{{end}}</p>
 {{else if eq .Phase "submitted"}}
-  <h1>申请已提交</h1>
-  <div class="ok">已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。</div>
-  <p class="muted">已登录为 {{.Email}}。</p>
+  <h1>{{if eq .Lang "en"}}Request submitted{{else}}申请已提交{{end}}</h1>
+  <div class="ok">{{if eq .Lang "en"}}We've notified the owner of <strong>{{.ProjectName}}</strong>. You'll be able to reach this project once they approve.{{else}}已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。{{end}}</div>
+  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Email}}.{{else}}已登录为 {{.Email}}。{{end}}</p>
 {{else if eq .Phase "already-allowed"}}
-  <h1>你已有访问权限</h1>
-  <p>{{.ProjectName}} 已可从你的账户访问。<a href="/">再试一次打开</a> —— 若仍失败，请联系所有者核实。</p>
-  <p class="muted">已登录为 {{.Email}}。</p>
+  <h1>{{if eq .Lang "en"}}You already have access{{else}}你已有访问权限{{end}}</h1>
+  <p>{{if eq .Lang "en"}}{{.ProjectName}} is already reachable from your account. <a href="/">Try opening it again</a> — if it still fails, ask the owner to verify.{{else}}{{.ProjectName}} 已可从你的账户访问。<a href="/">再试一次打开</a> —— 若仍失败，请联系所有者核实。{{end}}</p>
+  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Email}}.{{else}}已登录为 {{.Email}}。{{end}}</p>
 {{else if eq .Phase "error"}}
-  <h1>出错了</h1>
+  <h1>{{if eq .Lang "en"}}Something went wrong{{else}}出错了{{end}}</h1>
   <div class="err">{{.Error}}</div>
-  <p class="muted">若持续出现，请直接联系项目所有者。</p>
+  <p class="muted">{{if eq .Lang "en"}}If this keeps happening, contact the project owner directly.{{else}}若持续出现，请直接联系项目所有者。{{end}}</p>
 {{end}}
 </div>
 </body>
@@ -2068,7 +2118,11 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
 
 // renderRequestAccessPage executes requestAccessPageTmpl with the given fields.
 // Kept as a single helper so the GET / POST branches can't drift on look.
-func renderRequestAccessPage(w http.ResponseWriter, status int, data map[string]string) {
+func renderRequestAccessPage(w http.ResponseWriter, r *http.Request, status int, data map[string]string) {
+	if data == nil {
+		data = map[string]string{}
+	}
+	data["Lang"] = acceptLang(r)
 	t := template.Must(template.New("request-access").Parse(requestAccessPageTmpl))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -2089,7 +2143,7 @@ func renderRequestAccessPage(w http.ResponseWriter, status int, data map[string]
 func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 	projectID := strings.TrimSpace(r.URL.Query().Get("project"))
 	if projectID == "" {
-		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
 			"Phase": "error", "Error": "Missing ?project=<id> in the URL.",
 		})
 		return
@@ -2121,18 +2175,18 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 	info, err := fetchProjectInfoInternal(r.Context(), projectID)
 	if err != nil {
 		log.Printf("authservice: fetch project info (%s): %v", projectID, err)
-		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
 		})
 		return
 	}
 	if info == nil {
-		renderRequestAccessPage(w, http.StatusNotFound, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusNotFound, map[string]string{
 			"Phase": "error", "Error": "Project not found.",
 		})
 		return
 	}
-	renderRequestAccessPage(w, http.StatusOK, map[string]string{
+	renderRequestAccessPage(w, r, http.StatusOK, map[string]string{
 		"Phase":       "form",
 		"ProjectID":   info.ID,
 		"ProjectName": info.Name,
@@ -2151,7 +2205,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
 			"Phase": "error", "Error": "Invalid form submission.",
 		})
 		return
@@ -2159,7 +2213,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	projectID := strings.TrimSpace(r.PostFormValue("project_id"))
 	reason := strings.TrimSpace(r.PostFormValue("reason"))
 	if projectID == "" {
-		renderRequestAccessPage(w, http.StatusBadRequest, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
 			"Phase": "error", "Error": "Missing project id.",
 		})
 		return
@@ -2167,7 +2221,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	info, err := fetchProjectInfoInternal(r.Context(), projectID)
 	if err != nil || info == nil {
 		log.Printf("authservice: fetch project info (%s): %v", projectID, err)
-		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
 		})
 		return
@@ -2175,7 +2229,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	res, err := submitAccessRequestInternal(r.Context(), projectID, claims.Email, reason)
 	if err != nil {
 		log.Printf("authservice: submit access request (project=%s email=%s): %v", projectID, claims.Email, err)
-		renderRequestAccessPage(w, http.StatusBadGateway, map[string]string{
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Could not submit your request. Try again in a moment.",
 		})
 		return
@@ -2184,7 +2238,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	if res.AlreadyAllowed {
 		phase = "already-allowed"
 	}
-	renderRequestAccessPage(w, http.StatusOK, map[string]string{
+	renderRequestAccessPage(w, r, http.StatusOK, map[string]string{
 		"Phase":       phase,
 		"ProjectID":   info.ID,
 		"ProjectName": info.Name,

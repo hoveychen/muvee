@@ -123,6 +123,7 @@ func TestLoginPageTmpl_EscapesUserContent(t *testing.T) {
 		Description:  `<b>bold</b>`,
 		PrimaryColor: safeColor("nope", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
+		M:            loginMessages("zh"),
 	}
 	var buf bytes.Buffer
 	if err := loginPageTmpl.Execute(&buf, data); err != nil {
@@ -165,6 +166,7 @@ func TestLoginPageTmpl_FaviconAndFooter(t *testing.T) {
 		FooterText:   "© 2026 Acme — support@acme.com",
 		PrimaryColor: safeColor("", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
+		M:            loginMessages("zh"),
 	}
 	var buf bytes.Buffer
 	if err := loginPageTmpl.Execute(&buf, withBoth); err != nil {
@@ -186,6 +188,7 @@ func TestLoginPageTmpl_FaviconAndFooter(t *testing.T) {
 		SiteName:     "Acme",
 		PrimaryColor: safeColor("", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
+		M:            loginMessages("zh"),
 	}
 	buf.Reset()
 	if err := loginPageTmpl.Execute(&buf, empty); err != nil {
@@ -211,6 +214,7 @@ func TestLoginPageTmpl_CardCopyUsesSiteName(t *testing.T) {
 		TrustItems:   []string{"Encrypted", "SSO", "OAuth verified"},
 		PrimaryColor: safeColor("", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
+		M:            loginMessages("zh"),
 	}
 	var buf bytes.Buffer
 	if err := loginPageTmpl.Execute(&buf, data); err != nil {
@@ -241,6 +245,7 @@ func TestLoginPageTmpl_CardCopyUsesSiteName(t *testing.T) {
 	empty := loginPageData{
 		PrimaryColor: safeColor("", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
+		M:            loginMessages("zh"),
 	}
 	buf.Reset()
 	if err := loginPageTmpl.Execute(&buf, empty); err != nil {
@@ -300,6 +305,7 @@ func TestLoginPageTmpl_EmptyTrustHidesRow(t *testing.T) {
 		TrustItems:   nil,
 		PrimaryColor: safeColor("", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
+		M:            loginMessages("zh"),
 	}
 	var buf bytes.Buffer
 	if err := loginPageTmpl.Execute(&buf, data); err != nil {
@@ -321,6 +327,7 @@ func TestLoginPageTmpl_TrustRowRenders(t *testing.T) {
 		TrustItems:   []string{"SOC 2", "HIPAA", `<script>alert(1)</script>`},
 		PrimaryColor: safeColor("", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
+		M:            loginMessages("zh"),
 	}
 	var buf bytes.Buffer
 	if err := loginPageTmpl.Execute(&buf, data); err != nil {
