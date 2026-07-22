@@ -1,11 +1,36 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/hoveychen/muvee/internal/sms"
 )
+
+// TestSMSProvider_OverrideAndFallback covers the resolver seam without a DB:
+// smsOverride wins; otherwise, with no store and no env, it returns the
+// persistent dev provider.
+func TestSMSProvider_OverrideAndFallback(t *testing.T) {
+	t.Setenv("ALIYUN_SMS_ACCESS_KEY_ID", "")
+	t.Setenv("ALIYUN_SMS_ACCESS_KEY_SECRET", "")
+	t.Setenv("ALIYUN_SMS_SIGN_NAME", "")
+	t.Setenv("ALIYUN_SMS_TEMPLATE_CODE", "")
+
+	dev := sms.NewLogVerifyProvider()
+	s := &Server{devSMS: dev}
+	if got := s.smsProvider(context.Background()); got != dev {
+		t.Error("expected dev provider when no override/settings/env")
+	}
+
+	override := sms.NewLogVerifyProvider()
+	s.smsOverride = override
+	if got := s.smsProvider(context.Background()); got != override {
+		t.Error("smsOverride should take precedence")
+	}
+}
 
 func TestSMSHandlers_RejectMissingOrWrongKey(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")

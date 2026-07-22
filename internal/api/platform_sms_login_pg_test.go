@@ -45,7 +45,7 @@ func TestPlatformSMSLogin_PG(t *testing.T) {
 		t.Fatalf("auth.New: %v", err)
 	}
 	fake := &fakeVerifyProvider{pass: true}
-	s := &Server{store: st, auth: authSvc, verifyProvider: fake}
+	s := &Server{store: st, auth: authSvc, smsOverride: fake}
 
 	post := func(path, body string, h http.HandlerFunc) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))

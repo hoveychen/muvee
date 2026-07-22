@@ -38,23 +38,26 @@ func TestLogVerifyProvider_SendThenCheck(t *testing.T) {
 	}
 }
 
-func TestNewVerifyProviderFromEnv_FallsBackToLog(t *testing.T) {
-	t.Setenv("ALIYUN_SMS_ACCESS_KEY_ID", "")
-	t.Setenv("ALIYUN_SMS_ACCESS_KEY_SECRET", "")
-	t.Setenv("ALIYUN_SMS_SIGN_NAME", "")
-	t.Setenv("ALIYUN_SMS_TEMPLATE_CODE", "")
-	if _, ok := NewVerifyProviderFromEnv().(*LogVerifyProvider); !ok {
-		t.Fatal("expected LogVerifyProvider when PNVS env is unset")
+func TestNewPNVSProvider(t *testing.T) {
+	p, err := NewPNVSProvider("id", "secret", "muvee", "SMS_1", "")
+	if err != nil {
+		t.Fatalf("NewPNVSProvider: %v", err)
 	}
-}
-
-func TestNewVerifyProviderFromEnv_PNVSWhenConfigured(t *testing.T) {
-	t.Setenv("ALIYUN_SMS_ACCESS_KEY_ID", "id")
-	t.Setenv("ALIYUN_SMS_ACCESS_KEY_SECRET", "secret")
-	t.Setenv("ALIYUN_SMS_SIGN_NAME", "muvee")
-	t.Setenv("ALIYUN_SMS_TEMPLATE_CODE", "SMS_1")
-	if _, ok := NewVerifyProviderFromEnv().(*PNVSProvider); !ok {
-		t.Fatal("expected PNVSProvider when all env vars are set")
+	pv, ok := p.(*PNVSProvider)
+	if !ok {
+		t.Fatal("expected *PNVSProvider")
+	}
+	// Empty templateParam falls back to the default placeholder.
+	if pv.templateParam != DefaultTemplateParam {
+		t.Errorf("templateParam = %q, want default %q", pv.templateParam, DefaultTemplateParam)
+	}
+	// A supplied templateParam is kept (e.g. templates with a ${min} variable).
+	p2, err := NewPNVSProvider("id", "secret", "muvee", "SMS_1", `{"code":"##code##","min":"5"}`)
+	if err != nil {
+		t.Fatalf("NewPNVSProvider (param): %v", err)
+	}
+	if p2.(*PNVSProvider).templateParam != `{"code":"##code##","min":"5"}` {
+		t.Errorf("supplied templateParam not kept")
 	}
 }
 

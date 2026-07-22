@@ -59,7 +59,7 @@ func TestSMSLogin_PG(t *testing.T) {
 		t.Fatalf("auth.New: %v", err)
 	}
 	fake := &fakeVerifyProvider{}
-	s := &Server{store: st, auth: authSvc, verifyProvider: fake}
+	s := &Server{store: st, auth: authSvc, smsOverride: fake}
 
 	var ownerID string
 	if err := pool.QueryRow(ctx,
