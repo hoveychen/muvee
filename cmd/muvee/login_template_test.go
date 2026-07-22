@@ -23,7 +23,7 @@ func TestBuildLoginPageData_FallbackChain(t *testing.T) {
 			cfg:         nil,
 			wantSite:    "", // template branches on empty to render the bare "Sign in" heading
 			wantLogo:    "",
-			wantPrimary: "#4f46e5",
+			wantPrimary: "#111827",
 			wantSidebar: "#0f172a",
 		},
 		{
@@ -37,7 +37,7 @@ func TestBuildLoginPageData_FallbackChain(t *testing.T) {
 			},
 			wantSite:    "Muvee",
 			wantLogo:    "https://cdn/platform.png",
-			wantPrimary: "#4f46e5",
+			wantPrimary: "#111827",
 			wantSidebar: "#0f172a",
 		},
 		{
@@ -48,7 +48,7 @@ func TestBuildLoginPageData_FallbackChain(t *testing.T) {
 			},
 			wantSite:    "myapp",
 			wantLogo:    "",
-			wantPrimary: "#4f46e5",
+			wantPrimary: "#111827",
 			wantSidebar: "#0f172a",
 		},
 		{
@@ -89,7 +89,7 @@ func TestBuildLoginPageData_FallbackChain(t *testing.T) {
 				},
 			},
 			wantSite:    "",
-			wantPrimary: "#4f46e5",
+			wantPrimary: "#111827",
 			wantSidebar: "#0f172a",
 		},
 	}
@@ -218,8 +218,8 @@ func TestLoginPageTmpl_CardCopyUsesSiteName(t *testing.T) {
 	}
 	body := buf.String()
 
-	if !strings.Contains(body, "Sign in to Acme") {
-		t.Error("expected heading to interpolate SiteName")
+	if !strings.Contains(body, "登录 Acme") {
+		t.Error("expected SiteName to be interpolated into the sign-in copy")
 	}
 	if !strings.Contains(body, `class="trust"`) {
 		t.Error("expected trust-indicator row in rendered card")
@@ -235,9 +235,9 @@ func TestLoginPageTmpl_CardCopyUsesSiteName(t *testing.T) {
 		}
 	}
 
-	// Empty SiteName must NOT degenerate into "Sign in to Sign in" — the
-	// template branches on emptiness and falls back to a bare "Sign in"
-	// heading. This is the apex-host path where no project was matched.
+	// Empty SiteName (apex-host path, no project matched) must still render a
+	// sensible page: the constant welcome heading plus a bare "登录" brand
+	// fallback, with no nonsensical doubling.
 	empty := loginPageData{
 		PrimaryColor: safeColor("", "#4f46e5"),
 		SidebarBg:    safeColor("", "#0f172a"),
@@ -247,11 +247,11 @@ func TestLoginPageTmpl_CardCopyUsesSiteName(t *testing.T) {
 		t.Fatalf("execute empty: %v", err)
 	}
 	emptyBody := buf.String()
-	if strings.Contains(emptyBody, "Sign in to Sign in") {
-		t.Error("empty SiteName produced nonsensical 'Sign in to Sign in' heading")
+	if !strings.Contains(emptyBody, "欢迎回来") {
+		t.Error("expected the welcome heading")
 	}
-	if !strings.Contains(emptyBody, ">Sign in<") {
-		t.Error("expected bare 'Sign in' fallback heading when SiteName is empty")
+	if !strings.Contains(emptyBody, ">登录<") {
+		t.Error("expected bare '登录' brand fallback when SiteName is empty")
 	}
 }
 
