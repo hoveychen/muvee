@@ -2674,6 +2674,49 @@ func waitForTaskTerminal(ctx context.Context, taskID uuid.UUID, timeout, interva
 	}
 }
 
+// deleteCleanupPlan describes how deleteProject should tear down a project's
+// running container(s) before the DB row (and its ON DELETE CASCADE task rows)
+// disappear. mode is "compose" for compose/image stacks torn down with
+// `docker compose down`, or "single" for a lone `docker run` container removed
+// with `docker rm -f muvee-<prefix>`.
+type deleteCleanupPlan struct {
+	mode     string
+	nodeID   uuid.UUID
+	deployID uuid.UUID
+}
+
+// planDeleteCleanup decides whether and how to dispatch a container-cleanup task
+// when a project is deleted. It returns ok=false when there is nothing to clean
+// up (never deployed, no locatable node, or a domain-only reservation).
+//
+// The historical gap this closes: only compose/image projects were cleaned up,
+// so deleting a `deployment`-type project left its `muvee-<prefix>` container
+// running under `--restart unless-stopped`, squatting its host port forever. A
+// project later recreated on the same domain_prefix could then never route to
+// its own new container. deployment projects do not set PinnedNodeID, so their
+// node is located from the most recent deployment that recorded one.
+func planDeleteCleanup(proj *store.Project, deployments []*store.Deployment) (deleteCleanupPlan, bool) {
+	if proj == nil {
+		return deleteCleanupPlan{}, false
+	}
+	switch proj.ProjectType {
+	case store.ProjectTypeCompose, store.ProjectTypeImage:
+		if proj.PinnedNodeID != nil && len(deployments) > 0 {
+			return deleteCleanupPlan{mode: "compose", nodeID: *proj.PinnedNodeID, deployID: deployments[0].ID}, true
+		}
+	case store.ProjectTypeDeployment:
+		// deployments is newest-first (ListDeployments ORDER BY created_at DESC);
+		// the live `muvee-<prefix>` container is on the newest deployment that
+		// recorded a node.
+		for _, d := range deployments {
+			if d.NodeID != nil {
+				return deleteCleanupPlan{mode: "single", nodeID: *d.NodeID, deployID: d.ID}, true
+			}
+		}
+	}
+	return deleteCleanupPlan{}, false
+}
+
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
@@ -2686,28 +2729,40 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proj, _ := s.store.GetProject(r.Context(), id)
-	// Tear down the compose stack on its pinned node BEFORE deleting the project
-	// row, and wait for the teardown to finish. This ordering is load-bearing:
+	// Tear down the project's container(s) BEFORE deleting the project row, and
+	// wait for the teardown to finish. This ordering is load-bearing:
 	//   1. tasks.deployment_id is ON DELETE CASCADE onto deployments, which are
 	//      ON DELETE CASCADE onto projects. Deleting the project first would
 	//      cascade-delete the cleanup task we just dispatched before the agent
 	//      (which polls every ~5s) ever claims it, orphaning the old container.
 	//      It keeps binding its host port, so a project later recreated with the
 	//      same domain_prefix can never route to its new container.
-	//   2. Cleanup runs `docker compose -p muvee-<domain_prefix> down`, whose
-	//      project name collides with any same-prefix stack deployed afterwards.
-	//      Running it late/async could tear down that *new* stack; finishing it
-	//      before we return closes the collision window.
+	//   2. Cleanup runs `docker compose -p muvee-<domain_prefix> down` (compose/
+	//      image) or `docker rm -f muvee-<domain_prefix>` (single container),
+	//      whose name collides with any same-prefix deploy afterwards. Running it
+	//      late/async could tear down that *new* container; finishing it before we
+	//      return closes the collision window.
+	// planDeleteCleanup covers deployment-type projects too — historically they
+	// fell through this guard and their container was orphaned forever.
 	// Best-effort: if the node is offline we time out and delete anyway.
-	if proj != nil && (proj.ProjectType == store.ProjectTypeCompose || proj.ProjectType == store.ProjectTypeImage) && proj.PinnedNodeID != nil {
-		if deployments, err := s.store.ListDeployments(r.Context(), proj.ID); err == nil && len(deployments) > 0 {
-			// Detach from the request context so a client-side timeout can't
-			// abort the teardown midway and re-orphan the container.
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), projectDeleteCleanupTimeout)
-			if taskID, derr := s.sched.DispatchComposeCleanup(cleanupCtx, proj, deployments[0].ID); derr == nil && taskID != uuid.Nil {
-				waitForTaskTerminal(cleanupCtx, taskID, projectDeleteCleanupTimeout, projectDeleteCleanupPoll, s.store.GetTask)
+	if proj != nil {
+		if deployments, err := s.store.ListDeployments(r.Context(), proj.ID); err == nil {
+			if plan, ok := planDeleteCleanup(proj, deployments); ok {
+				// Detach from the request context so a client-side timeout can't
+				// abort the teardown midway and re-orphan the container.
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), projectDeleteCleanupTimeout)
+				var taskID uuid.UUID
+				var derr error
+				if plan.mode == "compose" {
+					taskID, derr = s.sched.DispatchComposeCleanup(cleanupCtx, proj, plan.deployID)
+				} else {
+					taskID, derr = s.sched.DispatchCleanup(cleanupCtx, plan.nodeID, &store.Deployment{ID: plan.deployID}, proj.DomainPrefix)
+				}
+				if derr == nil && taskID != uuid.Nil {
+					waitForTaskTerminal(cleanupCtx, taskID, projectDeleteCleanupTimeout, projectDeleteCleanupPoll, s.store.GetTask)
+				}
+				cancel()
 			}
-			cancel()
 		}
 	}
 	// Clean up hosted git repo if applicable.
@@ -4166,7 +4221,7 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 					if stopped, err := s.store.StopProjectDeployments(r.Context(), dep.ProjectID, task.DeploymentID); err == nil {
 						for _, old := range stopped {
 							if old.NodeID != nil && task.NodeID != nil && *old.NodeID != *task.NodeID {
-								_ = s.sched.DispatchCleanup(r.Context(), *old.NodeID, old, project.DomainPrefix)
+								_, _ = s.sched.DispatchCleanup(r.Context(), *old.NodeID, old, project.DomainPrefix)
 							}
 						}
 					}

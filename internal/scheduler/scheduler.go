@@ -148,10 +148,15 @@ func (s *Scheduler) PickBuilderNode(ctx context.Context) (*store.Node, error) {
 	return nil, fmt.Errorf("no active builder nodes")
 }
 
-// DispatchCleanup sends a cleanup task to a specific node to remove a stale container.
-// This is used when a deployment migrates to a different node and the old container
-// on the previous node must be removed.
-func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stoppedDeployment *store.Deployment, domainPrefix string) error {
+// DispatchCleanup sends a cleanup task to a specific node to remove a stale
+// single-container (`docker rm -f muvee-<prefix>`) deployment. Used both when a
+// deployment migrates to a different node and the old container on the previous
+// node must be removed, and when a deployment-type project is deleted. Returns
+// the created task's ID so the caller can wait for it to reach a terminal state
+// (deleteProject must block before deleting the project row, otherwise the ON
+// DELETE CASCADE drops the task before the agent claims it and re-orphans the
+// container).
+func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stoppedDeployment *store.Deployment, domainPrefix string) (uuid.UUID, error) {
 	task := &store.Task{
 		Type:         store.TaskTypeCleanup,
 		NodeID:       &nodeID,
@@ -160,8 +165,11 @@ func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stopp
 			"domain_prefix": domainPrefix,
 		},
 	}
-	_, err := s.store.CreateTask(ctx, task)
-	return err
+	created, err := s.store.CreateTask(ctx, task)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
 }
 
 // DispatchRuntimeLogs creates a runtime_logs task on the node where the given
