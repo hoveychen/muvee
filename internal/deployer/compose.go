@@ -165,6 +165,12 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	var workspaceMount string
 	if cfg.InlineComposeYAML != "" && cfg.VolumeMountPath != "" && cfg.VolumeNFSBasePath != "" && cfg.ProjectID != "" {
 		nfsHostPath := filepath.Join(cfg.VolumeNFSBasePath, cfg.ProjectID)
+		// Whether we're creating the dir for the first time. muvee runs as root,
+		// so a fresh dir is owned root:root and an image running as a non-root
+		// user can't write into it; we chown it below once the dir (and any
+		// migrated data) is in place.
+		_, statErr := os.Stat(nfsHostPath)
+		freshVolume := os.IsNotExist(statErr)
 		if err := os.MkdirAll(nfsHostPath, 0755); err != nil {
 			return 0, fmt.Errorf("create workspace dir: %w", err)
 		}
@@ -179,6 +185,9 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 			); err != nil {
 				logFn(fmt.Sprintf("legacy volume migration warning: %v (continuing with empty workspace)", err))
 			}
+		}
+		if freshVolume {
+			chownVolumeToImageUser(ctx, nfsHostPath, parsed.Services[cfg.ExposeService].Image, logFn)
 		}
 		workspaceMount = fmt.Sprintf("%s:%s:rw", nfsHostPath, cfg.VolumeMountPath)
 	}

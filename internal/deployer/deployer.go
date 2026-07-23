@@ -148,8 +148,16 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 	if cfg.VolumeNFSBasePath != "" && cfg.VolumeMountPath != "" {
 		volumeHostPath := filepath.Join(cfg.VolumeNFSBasePath, cfg.ProjectID)
 		logFn(fmt.Sprintf("Creating workspace volume directory: %s", volumeHostPath))
+		// muvee runs as root, so a fresh dir is owned root:root; an image that
+		// runs as a non-root user can't write into its bind-mounted workspace.
+		// Chown to the image's user on first creation.
+		_, statErr := os.Stat(volumeHostPath)
+		freshVolume := os.IsNotExist(statErr)
 		if err := os.MkdirAll(volumeHostPath, 0755); err != nil {
 			return 0, fmt.Errorf("create workspace volume dir: %w", err)
+		}
+		if freshVolume {
+			chownVolumeToImageUser(ctx, volumeHostPath, cfg.ImageTag, logFn)
 		}
 		dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:%s:rw", volumeHostPath, cfg.VolumeMountPath))
 	}
