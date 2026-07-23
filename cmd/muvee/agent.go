@@ -877,18 +877,41 @@ func runContainerStatusReporter(ctx context.Context, baseURL, secret string) {
 	}
 }
 
+type containerStatus struct {
+	DomainPrefix string `json:"domain_prefix"`
+	RestartCount int    `json:"restart_count"`
+	OOMKilled    bool   `json:"oom_killed"`
+	HostPort     int    `json:"host_port,omitempty"`
+}
+
+// suppressAmbiguousHostPorts zeroes the HostPort of every status whose
+// domain_prefix is carried by more than one container on this node. When a
+// stale orphan container coexists with the current one (both labelled
+// muvee.domain_prefix=<prefix>), the control plane keys its host_port refresh
+// purely on domain_prefix, so a report from the orphan would overwrite the live
+// deployment's port and mis-route Traefik. Reporting host_port=0 makes the
+// server leave the persisted port untouched (see shouldRefreshHostPort) until
+// the ambiguity is resolved. restart_count / oom_killed are left intact — only
+// the routing-critical host_port is at risk.
+func suppressAmbiguousHostPorts(statuses []containerStatus) []containerStatus {
+	counts := make(map[string]int, len(statuses))
+	for _, s := range statuses {
+		counts[s.DomainPrefix]++
+	}
+	for i := range statuses {
+		if counts[statuses[i].DomainPrefix] > 1 {
+			statuses[i].HostPort = 0
+		}
+	}
+	return statuses
+}
+
 func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 	names, err := listMuveeContainerNames(ctx)
 	if err != nil || len(names) == 0 {
 		return
 	}
 
-	type containerStatus struct {
-		DomainPrefix string `json:"domain_prefix"`
-		RestartCount int    `json:"restart_count"`
-		OOMKilled    bool   `json:"oom_killed"`
-		HostPort     int    `json:"host_port,omitempty"`
-	}
 	var statuses []containerStatus
 
 	for _, name := range names {
@@ -916,6 +939,19 @@ func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 	if len(statuses) == 0 {
 		return
 	}
+	// Guard against an orphan container polluting the control plane's
+	// domain_prefix-keyed host_port refresh. If two containers share a prefix we
+	// cannot say which owns the live port, so we report none of theirs.
+	seen := make(map[string]int, len(statuses))
+	for _, s := range statuses {
+		seen[s.DomainPrefix]++
+	}
+	for prefix, n := range seen {
+		if n > 1 {
+			log.Printf("Container status: %d containers share domain_prefix=%s; suppressing host_port report to avoid mis-routing (likely a stale orphan container — check for duplicates)", n, prefix)
+		}
+	}
+	statuses = suppressAmbiguousHostPorts(statuses)
 	body, _ := json.Marshal(statuses)
 	resp, _ := agentPost(baseURL+"/api/agent/container-statuses", secret, "application/json", jsonReader(body))
 	if resp != nil {

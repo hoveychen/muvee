@@ -264,6 +264,16 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 		return 0, fmt.Errorf("docker compose pull: %w", err)
 	}
 
+	// Sweep foreign containers reusing this domain_prefix that `--remove-orphans`
+	// can't see — chiefly the legacy bare `muvee-<prefix>` container left by a
+	// deleted deployment-type project. Left alive it keeps binding this domain's
+	// host port, so the control plane routes the domain to it instead of the new
+	// stack.
+	for _, foreign := range composeForeignContainers(cfg.DomainPrefix, listContainersByDomainPrefix(ctx, cfg.DomainPrefix)) {
+		logFn(fmt.Sprintf("Removing foreign container %s squatting domain %s before compose up...", foreign, cfg.DomainPrefix))
+		_ = runCmd(ctx, logFn, "docker", "rm", "-f", foreign)
+	}
+
 	logFn("Starting compose project (docker compose up -d)...")
 	if err := runCmdComposeEnv(ctx, logFn, composeEnv, "docker", composeArgs("up", "-d", "--remove-orphans")...); err != nil {
 		return 0, fmt.Errorf("docker compose up: %w", err)
