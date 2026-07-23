@@ -72,6 +72,14 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 	logFn(fmt.Sprintf("Stopping old container %s (if any)...", oldContainer))
 	_ = runCmd(ctx, logFn, "docker", "rm", "-f", oldContainer)
 
+	// Sweep foreign containers that reused this domain_prefix (e.g. compose-style
+	// leftovers muvee-<prefix>-<service>-N from a prior compose/image project).
+	// Without this they keep binding this domain's host port after we take it over.
+	for _, foreign := range singleDeployForeignContainers(cfg.DomainPrefix, listContainersByDomainPrefix(ctx, cfg.DomainPrefix)) {
+		logFn(fmt.Sprintf("Removing foreign container %s squatting domain %s...", foreign, cfg.DomainPrefix))
+		_ = runCmd(ctx, logFn, "docker", "rm", "-f", foreign)
+	}
+
 	// Pre-flight port probe for fixed-port deploys. The old container has been
 	// removed already so its own listener no longer counts as a conflict.
 	if cfg.FixedHostPort > 0 {
