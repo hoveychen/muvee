@@ -612,6 +612,7 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 		"compose_file_path": project.ComposeFilePath,
 		"expose_service":    project.ExposeService,
 		"expose_port":       project.ExposePort,
+		"memory_limit":      project.MemoryLimit,
 		"env_vars":          envVars,
 	}
 	if project.FixedHostPort != nil {
@@ -684,6 +685,7 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 		"expose_service":      "app",
 		"expose_port":         project.ContainerPort,
 		"volume_mount_path":   project.VolumeMountPath,
+		"memory_limit":        project.MemoryLimit,
 		"env_vars":            envVars,
 	}
 	if project.FixedHostPort != nil {
