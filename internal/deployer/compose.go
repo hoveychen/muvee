@@ -56,6 +56,11 @@ type ComposeConfig struct {
 	// same on-disk directory (mirrors the deployment-type pattern).
 	VolumeMountPath   string
 	VolumeNFSBasePath string
+	// MemoryLimit sets the expose service's Docker memory cap (e.g. "1600m",
+	// "2g"); empty means unlimited. Mirrors Config.MemoryLimit for the
+	// single-container path — injected as mem_limit/memswap_limit in the
+	// generated compose override.
+	MemoryLimit string
 	// WorkBaseDir is the deploy-node directory under which per-project clones
 	// are kept. Defaults to /var/lib/muvee/compose.
 	WorkBaseDir string
@@ -197,7 +202,7 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	// agent can find it again after a restart reassigns the host port. Compose
 	// merges this on top of the user's compose file.
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
-	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, cfg.FixedHostPort, workspaceMount)
+	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, cfg.FixedHostPort, workspaceMount, cfg.MemoryLimit)
 	if err := os.WriteFile(overridePath, []byte(override), 0644); err != nil {
 		return 0, fmt.Errorf("write override file: %w", err)
 	}
@@ -422,7 +427,7 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 // appends a volumes entry. When fixedHostPort is non-zero, the published
 // host port is locked to that exact value instead of "0" (Docker-assigned
 // ephemeral). Pure function so all branches are unit-testable.
-func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fixedHostPort int, workspaceMount string) string {
+func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fixedHostPort int, workspaceMount, memoryLimit string) string {
 	hostSpec := "0"
 	if fixedHostPort > 0 {
 		hostSpec = strconv.Itoa(fixedHostPort)
@@ -442,6 +447,16 @@ func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fi
 			"    volumes:\n"+
 				"      - \"%s\"\n",
 			workspaceMount,
+		)
+	}
+	if memoryLimit != "" {
+		// memswap_limit == mem_limit disables swap (mirrors the single-container
+		// deployer's --memory/--memory-swap convention): the container fails fast
+		// on exceeding its cap rather than thrashing the host's swap.
+		out += fmt.Sprintf(
+			"    mem_limit: \"%s\"\n"+
+				"    memswap_limit: \"%s\"\n",
+			memoryLimit, memoryLimit,
 		)
 	}
 	return out

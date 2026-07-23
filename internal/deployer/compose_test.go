@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildComposeOverrideYAMLNoWorkspace(t *testing.T) {
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "")
 
 	mustContain(t, got, "services:")
 	mustContain(t, got, "  app:")
@@ -25,7 +25,7 @@ func TestBuildComposeOverrideYAMLNoWorkspace(t *testing.T) {
 
 func TestBuildComposeOverrideYAMLWithWorkspace(t *testing.T) {
 	mount := "/srv/muvee/volumes/abc-123:/workspace:rw"
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, mount)
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, mount, "")
 
 	mustContain(t, got, "    volumes:")
 	mustContain(t, got, `      - "`+mount+`"`)
@@ -37,8 +37,30 @@ func TestBuildComposeOverrideYAMLWithWorkspace(t *testing.T) {
 	}
 }
 
+func TestBuildComposeOverrideYAMLMemoryLimit(t *testing.T) {
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "1600m")
+
+	// Limit is injected on the expose service; memswap == mem disables swap
+	// (mirrors the single-container deployer convention).
+	mustContain(t, got, `    mem_limit: "1600m"`)
+	mustContain(t, got, `    memswap_limit: "1600m"`)
+
+	// It must sit under the expose service, not at top level.
+	if i := strings.Index(got, "    mem_limit:"); i < 0 || strings.Index(got, "  app:") > i {
+		t.Fatalf("mem_limit should appear after `  app:` at service indent level:\n%s", got)
+	}
+}
+
+func TestBuildComposeOverrideYAMLNoMemoryLimit(t *testing.T) {
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "")
+
+	if strings.Contains(got, "mem_limit") {
+		t.Fatalf("override must not declare mem_limit when memoryLimit is empty:\n%s", got)
+	}
+}
+
 func TestBuildComposeOverrideYAMLFixedHostPort(t *testing.T) {
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 13000, "")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 13000, "", "")
 
 	mustContain(t, got, `      - "13000:8080"`)
 	if strings.Contains(got, `"0:8080"`) {
