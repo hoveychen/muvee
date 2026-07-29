@@ -88,6 +88,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY}
       BASE_DOMAIN: ${BASE_DOMAIN}
+      BASE_DOMAINS: ${BASE_DOMAINS}
       AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://muvee-authservice:4181}
       AGENT_SECRET: ${AGENT_SECRET}
       REGISTRY_ADDR: ${REGISTRY_ADDR}
@@ -169,6 +170,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_EMAILS: ${ADMIN_EMAILS}
       BASE_DOMAIN: ${BASE_DOMAIN}
+      BASE_DOMAINS: ${BASE_DOMAINS}
       PORT: "4181"
     depends_on:
       muvee-server:
