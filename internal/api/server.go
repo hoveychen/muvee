@@ -138,11 +138,46 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 	}
 }
 
+// Traffic retention: project_traffic gets one row per HTTP request Traefik
+// serves, so it has to expire on a timer that covers every project. It used to
+// be pruned inside GetProjectTraffic, which meant a project nobody opened the
+// traffic page for never expired anything — that grew to 18M rows / 5.2GB and
+// filled the server's disk.
+const (
+	trafficRetention        = 7 * 24 * time.Hour
+	trafficPurgeInterval    = time.Hour
+	trafficPurgeQueryBudget = 5 * time.Minute
+)
+
 // StartBackgroundWorkers launches the server's long-running goroutines (visit
-// recorder batch flusher, etc.). Safe to skip in tests that don't exercise
-// those paths.
+// recorder batch flusher, traffic retention sweeper, etc.). Safe to skip in
+// tests that don't exercise those paths.
 func (s *Server) StartBackgroundWorkers(ctx context.Context) {
 	go s.visits.Run(ctx)
+	go s.runTrafficRetention(ctx)
+}
+
+// runTrafficRetention sweeps expired project_traffic rows until ctx is
+// cancelled, starting with one sweep at boot so a backlog is not left waiting
+// for the first tick.
+func (s *Server) runTrafficRetention(ctx context.Context) {
+	ticker := time.NewTicker(trafficPurgeInterval)
+	defer ticker.Stop()
+	for {
+		purgeCtx, cancel := context.WithTimeout(ctx, trafficPurgeQueryBudget)
+		n, err := s.store.PurgeOldProjectTraffic(purgeCtx, trafficRetention)
+		cancel()
+		if err != nil {
+			log.Printf("traffic retention: purged %d rows then failed: %v", n, err)
+		} else if n > 0 {
+			log.Printf("traffic retention: purged %d rows older than %s", n, trafficRetention)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // refreshDomainOnlyCache replaces the in-memory set of domain_only project
