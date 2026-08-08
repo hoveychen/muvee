@@ -1869,14 +1869,12 @@ func (s *Store) InsertProjectTraffic(ctx context.Context, t *ProjectTraffic) err
 }
 
 // GetProjectTraffic returns the most recent traffic entries for a project,
-// newest first. Also prunes rows older than 7 days on each call.
+// newest first. Retention is not this function's job — see
+// PurgeOldProjectTraffic, which the server runs on a timer for every project.
 func (s *Store) GetProjectTraffic(ctx context.Context, projectID uuid.UUID, limit int) ([]*ProjectTraffic, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	_, _ = s.db.Exec(ctx,
-		`DELETE FROM project_traffic WHERE project_id=$1 AND observed_at < NOW() - INTERVAL '7 days'`,
-		projectID)
 	rows, err := s.db.Query(ctx, `
 		SELECT id, project_id, observed_at, client_ip, host, method, path,
 		       status, duration_ms, bytes_sent, user_agent, referer
@@ -1900,6 +1898,35 @@ func (s *Store) GetProjectTraffic(ctx context.Context, projectID uuid.UUID, limi
 		items = append(items, &t)
 	}
 	return items, nil
+}
+
+// trafficPurgeBatch caps how many rows a single DELETE statement removes, so a
+// large backlog is drained in short transactions instead of one long-running
+// one that pins WAL and bloats the table further.
+const trafficPurgeBatch = 10000
+
+// PurgeOldProjectTraffic deletes traffic rows older than olderThan across every
+// project and returns how many rows were removed. Retention deliberately does
+// not take a project_id: rows have to expire for projects nobody is looking at
+// too, which is exactly what the old read-path pruning got wrong.
+func (s *Store) PurgeOldProjectTraffic(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	var total int64
+	for {
+		tag, err := s.db.Exec(ctx, `
+			DELETE FROM project_traffic
+			WHERE ctid IN (
+			  SELECT ctid FROM project_traffic WHERE observed_at < $1 LIMIT $2
+			)`, cutoff, trafficPurgeBatch)
+		if err != nil {
+			return total, err
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < trafficPurgeBatch {
+			return total, nil
+		}
+	}
 }
 
 // ─── Project Password Accounts ────────────────────────────────────────────────
