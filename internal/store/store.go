@@ -790,13 +790,43 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 	if err != nil {
 		return res, err
 	}
-	res.IsAdmin = role == UserRoleAdmin
+	return s.projectAccessForUser(ctx, res.UserID, role, projectID)
+}
+
+// IsProjectAccessAllowedByUserID is the user-id-keyed counterpart, used by the
+// ForwardAuth path for downstream users whose IdP surfaced no email address
+// (identity bound on (provider, sub) via oauth_accounts instead). The allow
+// rules are identical — the only difference is how the user row is found.
+//
+// Note that such a user can never satisfy a project's auth_allowed_domains
+// whitelist (there is no address to match), so the caller skips the domain
+// check for them: reaching a private project requires an explicit
+// project_access_users grant, and a public project admits any registered user.
+func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.UUID, projectID uuid.UUID) (AccessCheckResult, error) {
+	var res AccessCheckResult
+	var role UserRole
+	err := s.db.QueryRow(ctx, `SELECT id, role FROM users WHERE id = $1`, userID).Scan(&res.UserID, &role)
+	if err == pgx.ErrNoRows {
+		return res, nil
+	}
+	if err != nil {
+		return res, err
+	}
+	return s.projectAccessForUser(ctx, res.UserID, role, projectID)
+}
+
+// projectAccessForUser holds the shared allow rules, applied once the user row
+// has been resolved by either key: platform admins always pass; public projects
+// pass any registered user; private projects pass the owner and users listed in
+// project_access_users.
+func (s *Store) projectAccessForUser(ctx context.Context, userID uuid.UUID, role UserRole, projectID uuid.UUID) (AccessCheckResult, error) {
+	res := AccessCheckResult{UserID: userID, IsAdmin: role == UserRoleAdmin}
 	if res.IsAdmin {
 		res.Allowed = true
 		return res, nil
 	}
 	var ownerID uuid.UUID
-	err = s.db.QueryRow(ctx, `SELECT access_mode, owner_id FROM projects WHERE id = $1`, projectID).Scan(&res.Mode, &ownerID)
+	err := s.db.QueryRow(ctx, `SELECT access_mode, owner_id FROM projects WHERE id = $1`, projectID).Scan(&res.Mode, &ownerID)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}

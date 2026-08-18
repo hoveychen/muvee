@@ -476,11 +476,8 @@ func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email,
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := s.store.RecordInvitationLinkUse(ctx, consumeLink.ID, user.ID); err != nil {
-			return nil, nil, fmt.Errorf("record invitation link use: %w", err)
-		}
-		if err := s.store.AddProjectAccessUser(ctx, *consumeLink.ProjectID, user.ID, consumeLink.InvitedBy); err != nil {
-			return nil, nil, fmt.Errorf("add project access user: %w", err)
+		if err := s.grantProjectInvite(ctx, consumeLink, user.ID); err != nil {
+			return nil, nil, err
 		}
 		return user, nil, nil
 	}
@@ -646,6 +643,61 @@ func HashInviteToken(token string) string { return hashInviteToken(token) }
 func hashInviteToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+// ErrInviteNotProjectScoped is returned by ConsumeProjectInviteForUserID when
+// the token resolves to a platform-scoped link. Those grant platform
+// membership, which is email-keyed from the domain gate down, so a user
+// identified only by id cannot be admitted through one.
+var ErrInviteNotProjectScoped = fmt.Errorf("invitation link is not project-scoped")
+
+// grantProjectInvite records one use of a project-scoped invitation link and
+// puts the user on the project's access list. Shared by the two ways a link
+// gets consumed: EnsurePlatformMember's project-scoped short-circuit (which
+// resolves the user from an email) and ConsumeProjectInviteForUserID (which is
+// handed the id directly).
+func (s *Service) grantProjectInvite(ctx context.Context, link *store.InvitationLink, userID uuid.UUID) error {
+	if err := s.store.RecordInvitationLinkUse(ctx, link.ID, userID); err != nil {
+		return fmt.Errorf("record invitation link use: %w", err)
+	}
+	if err := s.store.AddProjectAccessUser(ctx, *link.ProjectID, userID, link.InvitedBy); err != nil {
+		return fmt.Errorf("add project access user: %w", err)
+	}
+	return nil
+}
+
+// ConsumeProjectInviteForUserID admits an already-resolved user into the
+// project a project-scoped invitation link points at. It is the counterpart of
+// the short-circuit inside EnsurePlatformMember for identities that have no
+// email to be resolved by — Twitter/X and other subject-keyed IdPs, whose
+// users row is bound on (provider, sub) via oauth_accounts.
+//
+// Everything the platform-side branches of EnsurePlatformMember do —
+// ALLOWED_DOMAINS, invite mode, platform_members, ADMIN_EMAILS promotion — is
+// deliberately absent here, for the same reason the email-bearing
+// project-scoped path skips it: admitting an outsider into one project they
+// were invited to says nothing about platform access.
+//
+// Returns (false, nil) when the token matches no valid link, so an expired or
+// revoked link is a no-op rather than an error.
+func (s *Service) ConsumeProjectInviteForUserID(ctx context.Context, userID uuid.UUID, inviteToken string) (bool, error) {
+	if inviteToken == "" {
+		return false, nil
+	}
+	link, err := s.store.GetValidInvitationLinkByHash(ctx, hashInviteToken(inviteToken), time.Now())
+	if err != nil {
+		return false, fmt.Errorf("check invite link: %w", err)
+	}
+	if link == nil {
+		return false, nil
+	}
+	if link.ProjectID == nil {
+		return false, ErrInviteNotProjectScoped
+	}
+	if err := s.grantProjectInvite(ctx, link, userID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Service) checkDomain(email string) error {
