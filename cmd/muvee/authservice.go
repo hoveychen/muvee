@@ -622,6 +622,19 @@ func claimsSubjectForLog(claims *authClaims) string {
 	return "user_id=" + claims.UserID
 }
 
+// claimsAccountLabel is what the auth pages show after "Signed in as". An
+// email-less identity has no address to print, so it falls back to the display
+// name the IdP gave us and finally to the user id, which always exists.
+func claimsAccountLabel(claims *authClaims) string {
+	if claims.Email != "" {
+		return claims.Email
+	}
+	if claims.Name != "" {
+		return claims.Name
+	}
+	return claims.UserID
+}
+
 func setUserHeaders(w http.ResponseWriter, claims *authClaims) {
 	// X-Forwarded-User stays the email wherever there is one — downstream apps
 	// have been reading it as an address since long before subject-keyed
@@ -658,6 +671,7 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"email":      claims.Email,
+		"user_id":    claims.UserID,
 		"name":       claims.Name,
 		"avatar_url": claims.AvatarURL,
 		"provider":   claims.Provider,
@@ -2137,10 +2151,13 @@ type submitAccessRequestResult struct {
 	AlreadyAllowed bool `json:"already_allowed"`
 }
 
-func submitAccessRequestInternal(ctx context.Context, projectID, email, reason string) (*submitAccessRequestResult, error) {
+// email and userID are alternatives, mirroring the access check: the server
+// only needs one of them to find the user whose id the request row is keyed on.
+func submitAccessRequestInternal(ctx context.Context, projectID, email, userID, reason string) (*submitAccessRequestResult, error) {
 	body, err := json.Marshal(map[string]string{
 		"project_id": projectID,
 		"email":      email,
+		"user_id":    userID,
 		"reason":     reason,
 	})
 	if err != nil {
@@ -2208,15 +2225,15 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
     <textarea id="reason" name="reason" maxlength="1000" placeholder="{{if eq .Lang "en"}}What do you need this for?{{else}}你需要用它做什么？{{end}}"></textarea>
     <button type="submit">{{if eq .Lang "en"}}Send request{{else}}发送申请{{end}}</button>
   </form>
-  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Email}}. <a href="/_oauth/logout?redirect=/">Sign out</a>{{else}}已登录为 {{.Email}}。<a href="/_oauth/logout?redirect=/">退出登录</a>{{end}}</p>
+  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Account}}. <a href="/_oauth/logout?redirect=/">Sign out</a>{{else}}已登录为 {{.Account}}。<a href="/_oauth/logout?redirect=/">退出登录</a>{{end}}</p>
 {{else if eq .Phase "submitted"}}
   <h1>{{if eq .Lang "en"}}Request submitted{{else}}申请已提交{{end}}</h1>
   <div class="ok">{{if eq .Lang "en"}}We've notified the owner of <strong>{{.ProjectName}}</strong>. You'll be able to reach this project once they approve.{{else}}已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。{{end}}</div>
-  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Email}}.{{else}}已登录为 {{.Email}}。{{end}}</p>
+  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Account}}.{{else}}已登录为 {{.Account}}。{{end}}</p>
 {{else if eq .Phase "already-allowed"}}
   <h1>{{if eq .Lang "en"}}You already have access{{else}}你已有访问权限{{end}}</h1>
   <p>{{if eq .Lang "en"}}{{.ProjectName}} is already reachable from your account. <a href="/">Try opening it again</a> — if it still fails, ask the owner to verify.{{else}}{{.ProjectName}} 已可从你的账户访问。<a href="/">再试一次打开</a> —— 若仍失败，请联系所有者核实。{{end}}</p>
-  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Email}}.{{else}}已登录为 {{.Email}}。{{end}}</p>
+  <p class="muted">{{if eq .Lang "en"}}Signed in as {{.Account}}.{{else}}已登录为 {{.Account}}。{{end}}</p>
 {{else if eq .Phase "error"}}
   <h1>{{if eq .Lang "en"}}Something went wrong{{else}}出错了{{end}}</h1>
   <div class="err">{{.Error}}</div>
@@ -2300,7 +2317,7 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 		"Phase":       "form",
 		"ProjectID":   info.ID,
 		"ProjectName": info.Name,
-		"Email":       claims.Email,
+		"Account":     claimsAccountLabel(claims),
 	})
 }
 
@@ -2336,9 +2353,9 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	res, err := submitAccessRequestInternal(r.Context(), projectID, claims.Email, reason)
+	res, err := submitAccessRequestInternal(r.Context(), projectID, claims.Email, claims.UserID, reason)
 	if err != nil {
-		log.Printf("authservice: submit access request (project=%s email=%s): %v", projectID, claims.Email, err)
+		log.Printf("authservice: submit access request (project=%s %s): %v", projectID, claimsSubjectForLog(claims), err)
 		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Could not submit your request. Try again in a moment.",
 		})
@@ -2352,7 +2369,7 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 		"Phase":       phase,
 		"ProjectID":   info.ID,
 		"ProjectName": info.Name,
-		"Email":       claims.Email,
+		"Account":     claimsAccountLabel(claims),
 	})
 }
 

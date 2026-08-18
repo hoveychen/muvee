@@ -444,6 +444,7 @@ func (s *Server) handleInternalSubmitAccessRequest(w http.ResponseWriter, r *htt
 	var body struct {
 		ProjectID string `json:"project_id"`
 		Email     string `json:"email"`
+		UserID    string `json:"user_id"`
 		Reason    string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -451,8 +452,11 @@ func (s *Server) handleInternalSubmitAccessRequest(w http.ResponseWriter, r *htt
 		return
 	}
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
-	if body.ProjectID == "" || body.Email == "" {
-		jsonErr(w, fmt.Errorf("project_id and email are required"), http.StatusBadRequest)
+	body.UserID = strings.TrimSpace(body.UserID)
+	// The request row is keyed on users.id either way; email is just the more
+	// common way to find it. An email-less requester sends the id directly.
+	if body.ProjectID == "" || (body.Email == "" && body.UserID == "") {
+		jsonErr(w, fmt.Errorf("project_id and one of email or user_id are required"), http.StatusBadRequest)
 		return
 	}
 	projectID, err := uuid.Parse(body.ProjectID)
@@ -460,7 +464,17 @@ func (s *Server) handleInternalSubmitAccessRequest(w http.ResponseWriter, r *htt
 		jsonErr(w, fmt.Errorf("invalid project_id"), http.StatusBadRequest)
 		return
 	}
-	user, err := s.store.GetUserByEmail(r.Context(), body.Email)
+	var user *store.User
+	if body.Email != "" {
+		user, err = s.store.GetUserByEmail(r.Context(), body.Email)
+	} else {
+		userID, perr := uuid.Parse(body.UserID)
+		if perr != nil {
+			jsonErr(w, fmt.Errorf("invalid user_id"), http.StatusBadRequest)
+			return
+		}
+		user, err = s.store.GetUserByID(r.Context(), userID)
+	}
 	if err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
 		return

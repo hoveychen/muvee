@@ -189,6 +189,7 @@ func handleLoginTokenPoll(w http.ResponseWriter, r *http.Request) {
 			"status": "success",
 			"user": map[string]string{
 				"email":      entry.Email,
+				"user_id":    entry.UserID,
 				"name":       entry.Name,
 				"avatar_url": entry.AvatarURL,
 				"provider":   entry.ProviderName,

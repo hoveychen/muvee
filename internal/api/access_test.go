@@ -206,8 +206,9 @@ func TestHandleInternalSubmitAccessRequest_RejectsBadPayload(t *testing.T) {
 	}{
 		{"invalid json", `{not json`, http.StatusBadRequest},
 		{"missing project_id", `{"email":"a@b.com"}`, http.StatusBadRequest},
-		{"missing email", `{"project_id":"11111111-1111-1111-1111-111111111111"}`, http.StatusBadRequest},
+		{"missing both email and user_id", `{"project_id":"11111111-1111-1111-1111-111111111111"}`, http.StatusBadRequest},
 		{"invalid project_id uuid", `{"project_id":"not-a-uuid","email":"a@b.com"}`, http.StatusBadRequest},
+		{"invalid user_id uuid", `{"project_id":"11111111-1111-1111-1111-111111111111","user_id":"not-a-uuid"}`, http.StatusBadRequest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
