@@ -322,6 +322,16 @@ function ProviderIcon({ id }: { id: string }) {
           <path d="M32 14C21.507 14 13 22.507 13 33s8.507 19 19 19 19-8.507 19-19S42.493 14 32 14zm8.5 26.5l-10-5.5V22h3v11.5l8 4.5-1 2.5z" fill="white"/>
         </svg>
       )
+    case 'entra':
+      // Microsoft's four-square mark (official brand colours).
+      return (
+        <svg width="18" height="18" viewBox="0 0 23 23">
+          <path d="M0 0h11v11H0z" fill="#F25022"/>
+          <path d="M12 0h11v11H12z" fill="#7FBA00"/>
+          <path d="M0 12h11v11H0z" fill="#00A4EF"/>
+          <path d="M12 12h11v11H12z" fill="#FFB900"/>
+        </svg>
+      )
     case 'slack':
       return (
         <svg width="18" height="18" viewBox="0 0 122.8 122.8">

@@ -1160,7 +1160,7 @@ func buildLoginPageData(cfg *projectAuthConfig, allowed map[string]auth.Provider
 	// Provider ordering: same canonical order as elsewhere in authservice
 	// so the visual stays stable across renders (map iteration in Go is
 	// randomised).
-	order := []string{"google", "feishu", "wecom", "dingtalk", "discord", "apple", "facebook", "twitter"}
+	order := []string{"google", "feishu", "wecom", "dingtalk", "entra", "discord", "apple", "facebook", "twitter"}
 	seen := make(map[string]bool)
 	items := make([]loginProviderItem, 0, len(allowed))
 	for _, name := range order {
@@ -1371,6 +1371,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 // they keep their text-only buttons. The values are template.HTML so Go's
 // html/template does not escape the `<svg>` markup.
 var providerIcons = map[string]template.HTML{
+	"entra":    template.HTML(`<svg viewBox="0 0 23 23" width="18" height="18"><path fill="#F25022" d="M0 0h11v11H0z"/><path fill="#7FBA00" d="M12 0h11v11H12z"/><path fill="#00A4EF" d="M0 12h11v11H0z"/><path fill="#FFB900" d="M12 12h11v11H12z"/></svg>`),
 	"discord":  template.HTML(`<svg viewBox="0 -28.5 256 256" width="18" height="18"><path fill="currentColor" d="M216.856 16.597A208.502 208.502 0 0 0 164.042 0c-2.275 4.113-4.933 9.645-6.766 14.046-19.692-2.961-39.203-2.961-58.533 0-1.832-4.4-4.55-9.933-6.846-14.046a207.809 207.809 0 0 0-52.855 16.638C5.618 67.147-3.443 116.4 1.087 164.956c22.169 16.555 43.653 26.612 64.775 33.193A161.094 161.094 0 0 0 79.735 175.3a136.413 136.413 0 0 1-21.846-10.632 108.636 108.636 0 0 0 5.355-4.237c42.122 19.702 87.89 19.702 129.51 0a131.66 131.66 0 0 0 5.355 4.237 136.07 136.07 0 0 1-21.886 10.653c4.006 8.02 8.638 15.67 13.873 22.848 21.142-6.58 42.646-16.637 64.815-33.213 5.316-56.288-9.08-105.09-38.056-148.36ZM85.474 135.095c-12.645 0-23.015-11.805-23.015-26.18s10.149-26.2 23.015-26.2c12.867 0 23.236 11.805 23.015 26.2.02 14.375-10.148 26.18-23.015 26.18Zm85.051 0c-12.645 0-23.014-11.805-23.014-26.18s10.148-26.2 23.014-26.2c12.867 0 23.236 11.805 23.015 26.2 0 14.375-10.148 26.18-23.015 26.18Z"/></svg>`),
 	"apple":    template.HTML(`<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>`),
 	"facebook": template.HTML(`<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.412c0-3.007 1.792-4.668 4.533-4.668 1.313 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.926-1.956 1.874v2.252h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>`),

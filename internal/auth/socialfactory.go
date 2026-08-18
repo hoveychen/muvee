@@ -14,10 +14,11 @@ type SocialConfigs struct {
 	Apple    *AppleConfig    `json:"apple,omitempty"`
 	Facebook *FacebookConfig `json:"facebook,omitempty"`
 	Twitter  *TwitterConfig  `json:"twitter,omitempty"`
+	Entra    *EntraConfig    `json:"entra,omitempty"`
 }
 
 // SocialProviderMetadata returns the static (id, display_name) pairs for the
-// five social providers admins can enable via /admin/settings. Used by the
+// social providers admins can enable via /admin/settings. Used by the
 // downstream-providers listing endpoint to render checkboxes WITHOUT having
 // to actually instantiate the providers (which would require valid creds and
 // — for Apple — a parseable .p8 PEM). Values must stay in sync with each
@@ -29,6 +30,7 @@ func SocialProviderMetadata() []ProviderInfo {
 		{ID: "apple", DisplayName: "Apple"},
 		{ID: "facebook", DisplayName: "Facebook"},
 		{ID: "twitter", DisplayName: "X"},
+		{ID: "entra", DisplayName: "Microsoft"},
 	}
 }
 
@@ -82,6 +84,15 @@ func BuildSocialProviders(forwardAuthBase string, cfg SocialConfigs) (map[string
 		p, err := newTwitterProvider(*cfg.Twitter, forwardAuthBase+"/_oauth/twitter")
 		if err != nil {
 			return nil, fmt.Errorf("twitter: %w", err)
+		}
+		if p != nil {
+			out[p.Name()] = p
+		}
+	}
+	if cfg.Entra != nil {
+		p, err := newEntraProvider(*cfg.Entra, forwardAuthBase+"/_oauth/entra")
+		if err != nil {
+			return nil, fmt.Errorf("entra: %w", err)
 		}
 		if p != nil {
 			out[p.Name()] = p

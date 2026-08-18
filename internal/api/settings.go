@@ -85,6 +85,82 @@ func (s *Server) fetchForwardAuthBaseURL(ctx context.Context) (string, error) {
 	return body.ForwardAuthBaseURL, nil
 }
 
+// allowedSettingKeys is the write allowlist for PUT /api/admin/settings —
+// unknown keys are dropped so the settings table can't be used as arbitrary
+// storage. Package-level (rather than a handler local) so tests can assert a
+// key is actually wired.
+var allowedSettingKeys = map[string]bool{
+	"onboarded":                         true,
+	"site_name":                         true,
+	"logo_url":                          true,
+	"favicon_url":                       true,
+	"access_mode":                       true,
+	"auto_deploy_master_enabled":        true,
+	"auto_deploy_poll_interval_seconds": true,
+	"auto_deploy_image_watch_interval_seconds": true,
+	// Social OAuth providers (downstream / ForwardAuth only). All
+	// values stored as plain strings; "true"/"false" for the
+	// *_enabled toggles. ClientSecret + apple_private_key_p8 are
+	// sensitive but stored unencrypted at rest -- same threat model
+	// as muvee's existing platform-provider env-var path.
+	//
+	// google_* lets admins configure a downstream-only Google OAuth
+	// app distinct from the platform-side env GOOGLE_CLIENT_ID. When
+	// google_enabled = "true", reloadProviders merges this config
+	// over the env-derived Google provider in the authservice map.
+	//
+	// Note: *_redirect_url keys are intentionally absent. The callback
+	// URL is computed by authservice as FORWARD_AUTH_BASE_URL +
+	// "/_oauth/<provider>" and surfaced read-only via the
+	// `forward_auth_base_url` field on GET /api/admin/settings.
+	"google_enabled":         true,
+	"google_client_id":       true,
+	"google_client_secret":   true,
+	"discord_enabled":        true,
+	"discord_client_id":      true,
+	"discord_client_secret":  true,
+	"facebook_enabled":       true,
+	"facebook_client_id":     true,
+	"facebook_client_secret": true,
+	"twitter_enabled":        true,
+	"twitter_client_id":      true,
+	"twitter_client_secret":  true,
+	"apple_enabled":          true,
+	"apple_client_id":        true, // Apple "Services ID"
+	"apple_team_id":          true,
+	"apple_key_id":           true,
+	"apple_private_key_p8":   true, // raw .p8 PEM contents
+	// Microsoft Entra ID (OIDC + OAuth2 authorization code flow). Unlike
+	// the providers above, one credential set drives BOTH planes — Azure
+	// allows several redirect URIs on a single app registration — with two
+	// independent toggles: entra_enabled exposes it on project subdomains
+	// (ForwardAuth) and platform_entra_login_enabled on the muvee platform
+	// login page. entra_tenant_id is a directory GUID (strictest: the ID
+	// token's tid must match), a verified domain, or one of
+	// common/organizations/consumers for multi-tenant.
+	"entra_enabled":                true,
+	"entra_tenant_id":              true,
+	"entra_client_id":              true,
+	"entra_client_secret":          true,
+	"platform_entra_login_enabled": true,
+	// Phone / SMS login via Aliyun 号码认证服务 (PNVS). access_key_secret is
+	// sensitive but stored plain, same threat model as the social secrets
+	// above. sms_sign_name/sms_template_code come from the PNVS console;
+	// sms_template_param defaults to {"code":"##code##"} when empty. These
+	// are read (settings-first, ALIYUN_SMS_* env fallback) by the SMS
+	// endpoints via Server.smsProvider. platform_phone_login_enabled gates
+	// the platform (admin-plane) phone login form.
+	"sms_access_key_id":            true,
+	"sms_access_key_secret":        true,
+	"sms_sign_name":                true,
+	"sms_template_code":            true,
+	"sms_template_param":           true,
+	"platform_phone_login_enabled": true,
+}
+
+// allowedSettingKey reports whether handleUpdateAdminSettings will persist key.
+func allowedSettingKey(k string) bool { return allowedSettingKeys[k] }
+
 // handleUpdateAdminSettings accepts a JSON map of key→value pairs and upserts them.
 // Only known setting keys are accepted to prevent arbitrary data injection.
 func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Request) {
@@ -94,71 +170,18 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Allowed keys (extend as needed)
-	allowed := map[string]bool{
-		"onboarded":                         true,
-		"site_name":                         true,
-		"logo_url":                          true,
-		"favicon_url":                       true,
-		"access_mode":                       true,
-		"auto_deploy_master_enabled":        true,
-		"auto_deploy_poll_interval_seconds": true,
-		"auto_deploy_image_watch_interval_seconds": true,
-		// Social OAuth providers (downstream / ForwardAuth only). All
-		// values stored as plain strings; "true"/"false" for the
-		// *_enabled toggles. ClientSecret + apple_private_key_p8 are
-		// sensitive but stored unencrypted at rest -- same threat model
-		// as muvee's existing platform-provider env-var path.
-		//
-		// google_* lets admins configure a downstream-only Google OAuth
-		// app distinct from the platform-side env GOOGLE_CLIENT_ID. When
-		// google_enabled = "true", reloadProviders merges this config
-		// over the env-derived Google provider in the authservice map.
-		//
-		// Note: *_redirect_url keys are intentionally absent. The callback
-		// URL is computed by authservice as FORWARD_AUTH_BASE_URL +
-		// "/_oauth/<provider>" and surfaced read-only via the
-		// `forward_auth_base_url` field on GET /api/admin/settings.
-		"google_enabled":         true,
-		"google_client_id":       true,
-		"google_client_secret":   true,
-		"discord_enabled":        true,
-		"discord_client_id":      true,
-		"discord_client_secret":  true,
-		"facebook_enabled":       true,
-		"facebook_client_id":     true,
-		"facebook_client_secret": true,
-		"twitter_enabled":        true,
-		"twitter_client_id":      true,
-		"twitter_client_secret":  true,
-		"apple_enabled":          true,
-		"apple_client_id":        true, // Apple "Services ID"
-		"apple_team_id":          true,
-		"apple_key_id":           true,
-		"apple_private_key_p8":   true, // raw .p8 PEM contents
-		// Phone / SMS login via Aliyun 号码认证服务 (PNVS). access_key_secret is
-		// sensitive but stored plain, same threat model as the social secrets
-		// above. sms_sign_name/sms_template_code come from the PNVS console;
-		// sms_template_param defaults to {"code":"##code##"} when empty. These
-		// are read (settings-first, ALIYUN_SMS_* env fallback) by the SMS
-		// endpoints via Server.smsProvider. platform_phone_login_enabled gates
-		// the platform (admin-plane) phone login form.
-		"sms_access_key_id":            true,
-		"sms_access_key_secret":        true,
-		"sms_sign_name":                true,
-		"sms_template_code":            true,
-		"sms_template_param":           true,
-		"platform_phone_login_enabled": true,
-	}
-
 	ctx := r.Context()
 	socialChanged := false
+	platformProviderChanged := false
 	for k, v := range body {
-		if !allowed[k] {
+		if !allowedSettingKeys[k] {
 			continue
 		}
 		if isSocialOAuthSettingKey(k) {
 			socialChanged = true
+		}
+		if isPlatformProviderSettingKey(k) {
+			platformProviderChanged = true
 		}
 		if k == "access_mode" {
 			switch store.AccessMode(v) {
@@ -204,6 +227,17 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 		go s.notifyAuthserviceReload()
 	}
 
+	if platformProviderChanged && s.auth != nil {
+		// In-process, so do it synchronously: the admin's next page load hits
+		// /api/auth/providers and must already see the new button. A build
+		// error (bad tenant, half-filled credentials) is logged and leaves the
+		// previous provider set in place rather than failing the save — the
+		// values are persisted either way and the admin can correct them.
+		if err := s.auth.ReloadSettingsProviders(ctx); err != nil {
+			log.Printf("handleUpdateAdminSettings: reload platform providers: %v", err)
+		}
+	}
+
 	// Return the updated public view
 	all, err := s.store.GetAllSettings(ctx)
 	if err != nil {
@@ -222,7 +256,17 @@ func isSocialOAuthSettingKey(k string) bool {
 		strings.HasPrefix(k, "discord_") ||
 		strings.HasPrefix(k, "facebook_") ||
 		strings.HasPrefix(k, "twitter_") ||
-		strings.HasPrefix(k, "apple_")
+		strings.HasPrefix(k, "apple_") ||
+		strings.HasPrefix(k, "entra_")
+}
+
+// isPlatformProviderSettingKey is the counterpart for the PLATFORM login page:
+// keys that, when changed, require auth.Service to rebuild the providers it
+// serves at /auth/{provider}/login. Only Entra is settings-driven on this side
+// today — Google / Feishu / WeCom / DingTalk / Slack are still env-configured
+// and fixed at boot.
+func isPlatformProviderSettingKey(k string) bool {
+	return strings.HasPrefix(k, "entra_") || k == "platform_entra_login_enabled"
 }
 
 // notifyAuthserviceReload POSTs to muvee-authservice's

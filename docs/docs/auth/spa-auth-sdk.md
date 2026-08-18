@@ -1,7 +1,7 @@
 ---
 id: spa-auth-sdk
 title: SPA Auth SDK
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # SPA Auth SDK (`@muvee/auth`)

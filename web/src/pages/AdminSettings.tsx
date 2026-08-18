@@ -251,6 +251,10 @@ type SocialState = {
   facebook_enabled: string; facebook_client_id: string; facebook_client_secret: string
   twitter_enabled: string; twitter_client_id: string; twitter_client_secret: string
   apple_enabled: string; apple_client_id: string; apple_team_id: string; apple_key_id: string; apple_private_key_p8: string
+  // Entra is the one provider that also serves the platform login page, so its
+  // slice carries the extra platform toggle alongside the shared credentials.
+  entra_enabled: string; entra_tenant_id: string; entra_client_id: string; entra_client_secret: string
+  platform_entra_login_enabled: string
 }
 
 const blankSocial: SocialState = {
@@ -259,15 +263,20 @@ const blankSocial: SocialState = {
   facebook_enabled: 'false', facebook_client_id: '', facebook_client_secret: '',
   twitter_enabled: 'false', twitter_client_id: '', twitter_client_secret: '',
   apple_enabled: 'false', apple_client_id: '', apple_team_id: '', apple_key_id: '', apple_private_key_p8: '',
+  entra_enabled: 'false', entra_tenant_id: '', entra_client_id: '', entra_client_secret: '',
+  platform_entra_login_enabled: 'false',
 }
 
-type ProviderID = 'google' | 'discord' | 'facebook' | 'twitter' | 'apple'
+type ProviderID = 'google' | 'discord' | 'facebook' | 'twitter' | 'apple' | 'entra'
 
 function pickProviderPatch(p: ProviderID, s: SocialState): Partial<SystemSettings> {
   const out: Record<string, string> = {}
   for (const k of Object.keys(s) as (keyof SocialState)[]) {
     if (k.startsWith(p + '_')) out[k] = s[k]
   }
+  // platform_entra_login_enabled doesn't share the `entra_` prefix but belongs
+  // to the same save.
+  if (p === 'entra') out.platform_entra_login_enabled = s.platform_entra_login_enabled
   return out as Partial<SystemSettings>
 }
 
@@ -373,6 +382,75 @@ function AppleProviderCard({
   )
 }
 
+// EntraProviderCard configures Microsoft Entra ID. Unlike the social providers
+// it spans both planes from a single Azure app registration, so it shows two
+// toggles and two callback URLs — both must be listed under the app's "Web"
+// platform redirect URIs.
+function EntraProviderCard({
+  social, setSocial, forwardAuthBaseURL, onSave, saving, saved,
+}: {
+  social: SocialState
+  setSocial: (next: SocialState) => void
+  forwardAuthBaseURL: string
+  onSave: (id: ProviderID) => void
+  saving: boolean
+  saved: boolean
+}) {
+  const projectCallback = forwardAuthBaseURL ? `${forwardAuthBaseURL}/_oauth/entra` : ''
+  // The platform callback lives on whichever base domain the panel is served
+  // from — the server rebases it per request under multi-domain, so each base
+  // domain in use needs its own redirect URI in Azure.
+  const platformCallback = `${window.location.origin}/auth/entra/callback`
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-base)', gridColumn: '1 / -1' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <span style={{ fontFamily: MONO, fontSize: '0.875rem', fontWeight: 700, color: 'var(--fg-primary)' }}>Microsoft Entra ID</span>
+      </div>
+      <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+        OpenID Connect + OAuth 2.0 authorization code flow against
+        <code style={{ margin: '0 4px' }}>login.microsoftonline.com</code>. One app registration serves both planes —
+        add BOTH redirect URIs below to it, and create a client secret under Certificates &amp; secrets.
+      </p>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', color: 'var(--fg-muted)', cursor: 'pointer', marginBottom: 6 }}>
+        <input type="checkbox" checked={social.entra_enabled === 'true'}
+          onChange={e => setSocial({ ...social, entra_enabled: e.target.checked ? 'true' : 'false' })}
+          style={{ accentColor: 'var(--accent)' }} />
+        Enable on project subdomains (downstream sign-in)
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', color: 'var(--fg-muted)', cursor: 'pointer', marginBottom: 14 }}>
+        <input type="checkbox" checked={social.platform_entra_login_enabled === 'true'}
+          onChange={e => setSocial({ ...social, platform_entra_login_enabled: e.target.checked ? 'true' : 'false' })}
+          style={{ accentColor: 'var(--accent)' }} />
+        Enable on the muvee platform login page
+      </label>
+      <div className="card-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <Field label="Directory (tenant) ID"
+          value={social.entra_tenant_id}
+          onChange={v => setSocial({ ...social, entra_tenant_id: v })}
+          placeholder="00000000-0000-0000-0000-000000000000"
+          hint="Tenant GUID (strictest — the ID token's tid must match), a verified domain, or common / organizations / consumers for multi-tenant." />
+        <Field label="Application (client) ID"
+          value={social.entra_client_id}
+          onChange={v => setSocial({ ...social, entra_client_id: v })} />
+        <Field label="Client Secret" type="password"
+          value={social.entra_client_secret}
+          onChange={v => setSocial({ ...social, entra_client_secret: v })}
+          hint="Secret VALUE, not its ID. Entra secrets expire — reconfirm before the expiry date." />
+        <div />
+        <ReadOnlyURLField label="Redirect URI — platform login" value={platformCallback}
+          hint="For signing in to muvee itself. Add one per base domain you serve the panel on." />
+        <ReadOnlyURLField label="Redirect URI — project subdomains" value={projectCallback}
+          hint="For downstream project sign-in (ForwardAuth)." />
+      </div>
+      <button className="btn-primary" onClick={() => onSave('entra')} disabled={saving}
+        style={{ background: saved ? 'var(--success)' : undefined, transition: 'background 300ms' }}>
+        {saving ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={13} />}
+        {saved ? 'Saved' : saving ? 'Saving…' : 'Save'}
+      </button>
+    </div>
+  )
+}
+
 // SMSLoginSection configures Aliyun PNVS (号码认证服务) phone/SMS login. Stored
 // in system_settings (admin-editable), read settings-first with ALIYUN_SMS_*
 // env fallback by the server. Matches SocialOAuthSection's plain-English style.
@@ -463,6 +541,11 @@ function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: st
     apple_team_id: initial.apple_team_id || '',
     apple_key_id: initial.apple_key_id || '',
     apple_private_key_p8: initial.apple_private_key_p8 || '',
+    entra_enabled: initial.entra_enabled || 'false',
+    entra_tenant_id: initial.entra_tenant_id || '',
+    entra_client_id: initial.entra_client_id || '',
+    entra_client_secret: initial.entra_client_secret || '',
+    platform_entra_login_enabled: initial.platform_entra_login_enabled || 'false',
   }))
   const [savingFor, setSavingFor] = useState<ProviderID | null>(null)
   const [savedFor, setSavedFor] = useState<ProviderID | null>(null)
@@ -485,8 +568,9 @@ function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: st
       <div className="card-header">Social Login Providers (downstream sign-in)</div>
       <div style={{ padding: 20 }}>
         <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: 16, lineHeight: 1.6 }}>
-          These providers are exposed only on project subdomains (ForwardAuth login pages), not on the muvee platform itself.
-          Changes apply live: muvee-server reloads the authservice provider set immediately after save.
+          These providers are exposed on project subdomains (ForwardAuth login pages). Changes apply live: muvee-server
+          reloads the authservice provider set immediately after save. Entra ID is the exception — it has a second toggle
+          that also puts it on the muvee platform login page.
         </p>
         <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: 16, lineHeight: 1.6 }}>
           Google is special: leaving it disabled means downstream falls back to the env-configured platform Google app
@@ -514,6 +598,9 @@ function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: st
           <AppleProviderCard social={social} setSocial={setSocial}
             forwardAuthBaseURL={forwardAuthBaseURL}
             onSave={save} saving={savingFor === 'apple'} saved={savedFor === 'apple'} />
+          <EntraProviderCard social={social} setSocial={setSocial}
+            forwardAuthBaseURL={forwardAuthBaseURL}
+            onSave={save} saving={savingFor === 'entra'} saved={savedFor === 'entra'} />
         </div>
       </div>
     </section>

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -18,6 +19,10 @@ import (
 )
 
 type Service struct {
+	// mu guards providers, which is no longer write-once: the Entra provider
+	// is (re)built from system_settings at boot and whenever an admin saves
+	// /admin/settings, while request handlers read the map concurrently.
+	mu             sync.RWMutex
 	providers      map[string]Provider
 	jwtSecret      []byte
 	allowedDomains []string
@@ -118,25 +123,150 @@ func New(st *store.Store) (*Service, error) {
 		svc.providers[slackP.Name()] = slackP
 	}
 
+	// Entra ID is configured through /admin/settings (with ENTRA_* env
+	// fallback), so it is registered from the DB rather than from env alone.
+	// A failure here must not stop the server from booting — the remaining
+	// providers still work and the admin can fix the tenant/credentials in the
+	// UI, which reloads the provider set in place.
+	if err := svc.ReloadSettingsProviders(context.Background()); err != nil {
+		log.Printf("Warning: entra provider not registered: %v", err)
+	}
+
 	if len(svc.providers) == 0 {
-		return nil, fmt.Errorf("no auth provider configured; set at least one of GOOGLE_CLIENT_ID, FEISHU_APP_ID, WECOM_CORP_ID, DINGTALK_CLIENT_ID")
+		return nil, fmt.Errorf("no auth provider configured; set at least one of GOOGLE_CLIENT_ID, FEISHU_APP_ID, WECOM_CORP_ID, DINGTALK_CLIENT_ID, or enable Entra ID in /admin/settings")
 	}
 	return svc, nil
+}
+
+// provider returns a registered provider under the read lock.
+func (s *Service) provider(name string) (Provider, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.providers[name]
+	return p, ok
+}
+
+// providerSnapshot copies the provider map so callers can iterate it without
+// holding the lock.
+func (s *Service) providerSnapshot() map[string]Provider {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]Provider, len(s.providers))
+	for k, v := range s.providers {
+		out[k] = v
+	}
+	return out
+}
+
+// setProvider registers p under name, or removes the entry when p is nil.
+func (s *Service) setProvider(name string, p Provider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p == nil {
+		delete(s.providers, name)
+		return
+	}
+	s.providers[name] = p
+}
+
+// ReloadSettingsProviders rebuilds the providers that are configured through
+// system_settings rather than env vars — today just Microsoft Entra ID, gated
+// on platform_entra_login_enabled. Called at boot and after an admin saves
+// /admin/settings so the platform login page reflects the change without a
+// restart. A build failure (malformed tenant) returns an error and leaves the
+// previously registered set untouched.
+func (s *Service) ReloadSettingsProviders(ctx context.Context) error {
+	settings := map[string]string{}
+	if s.store != nil {
+		all, err := s.store.GetAllSettings(ctx)
+		if err != nil {
+			return fmt.Errorf("read settings: %w", err)
+		}
+		settings = all
+	}
+	if !platformEntraEnabled(settings) {
+		s.setProvider("entra", nil)
+		return nil
+	}
+	p, err := newEntraProvider(EntraConfigFromSettings(settings), platformEntraRedirectURL())
+	if err != nil {
+		return fmt.Errorf("entra provider: %w", err)
+	}
+	if p == nil {
+		// Toggle on but credentials incomplete: treat as not configured so the
+		// login page doesn't offer a button that cannot work.
+		s.setProvider("entra", nil)
+		return nil
+	}
+	s.setProvider("entra", p)
+	return nil
+}
+
+// platformEntraEnabled reads the platform-side Entra toggle: the
+// platform_entra_login_enabled setting, falling back to the PLATFORM_ENTRA_LOGIN
+// env var when the setting was never written. Off by default.
+func platformEntraEnabled(settings map[string]string) bool {
+	if v := strings.TrimSpace(settings["platform_entra_login_enabled"]); v != "" {
+		return v == "true"
+	}
+	switch os.Getenv("PLATFORM_ENTRA_LOGIN") {
+	case "1", "true", "TRUE", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// EntraConfigFromSettings assembles the Entra app from a system_settings map,
+// falling back per field to the ENTRA_* env vars so an operator who wired the
+// creds into the environment does not have to re-enter them in the admin UI.
+// Both planes call this — the platform provider below and muvee-server's
+// SocialConfigs assembly for the downstream ForwardAuth path — so a single
+// credential set is resolved identically on both sides; only the redirect URI
+// differs, and Azure allows both on one app registration.
+func EntraConfigFromSettings(settings map[string]string) EntraConfig {
+	pick := func(key, env string) string {
+		if v := strings.TrimSpace(settings[key]); v != "" {
+			return v
+		}
+		return strings.TrimSpace(os.Getenv(env))
+	}
+	return EntraConfig{
+		TenantID:     pick("entra_tenant_id", "ENTRA_TENANT_ID"),
+		ClientID:     pick("entra_client_id", "ENTRA_CLIENT_ID"),
+		ClientSecret: pick("entra_client_secret", "ENTRA_CLIENT_SECRET"),
+	}
+}
+
+// platformEntraRedirectURL is the callback baked into the platform-side Entra
+// provider. ENTRA_REDIRECT_URL wins; otherwise it is derived from BASE_DOMAIN
+// using the same /auth/{provider}/callback route the other platform providers
+// use. Multi-domain deployments rebase this host per request
+// (Server.oauthRedirectFor), so only one URI has to be registered in Azure per
+// base domain.
+func platformEntraRedirectURL() string {
+	if u := strings.TrimSpace(os.Getenv("ENTRA_REDIRECT_URL")); u != "" {
+		return u
+	}
+	if base := strings.TrimSpace(os.Getenv("BASE_DOMAIN")); base != "" {
+		return "https://" + base + "/auth/entra/callback"
+	}
+	return "http://localhost:8080/auth/entra/callback"
 }
 
 // ListProviders returns the list of enabled identity providers for the frontend.
 func (s *Service) ListProviders() []ProviderInfo {
 	// Return in a stable order: google, feishu, wecom, dingtalk, slack, others
-	order := []string{"google", "feishu", "wecom", "dingtalk", "slack"}
+	order := []string{"google", "feishu", "wecom", "dingtalk", "slack", "entra"}
+	providers := s.providerSnapshot()
 	var result []ProviderInfo
 	seen := make(map[string]bool)
 	for _, name := range order {
-		if p, ok := s.providers[name]; ok {
+		if p, ok := providers[name]; ok {
 			result = append(result, ProviderInfo{ID: p.Name(), DisplayName: p.DisplayName()})
 			seen[name] = true
 		}
 	}
-	for name, p := range s.providers {
+	for name, p := range providers {
 		if !seen[name] {
 			result = append(result, ProviderInfo{ID: p.Name(), DisplayName: p.DisplayName()})
 		}
@@ -146,12 +276,13 @@ func (s *Service) ListProviders() []ProviderInfo {
 
 // DefaultProvider returns the name of the first available provider (used for CLI auth).
 func (s *Service) DefaultProvider() string {
-	for _, name := range []string{"google", "feishu", "wecom", "dingtalk"} {
-		if _, ok := s.providers[name]; ok {
+	providers := s.providerSnapshot()
+	for _, name := range []string{"google", "feishu", "wecom", "dingtalk", "entra"} {
+		if _, ok := providers[name]; ok {
 			return name
 		}
 	}
-	for name := range s.providers {
+	for name := range providers {
 		return name
 	}
 	return ""
@@ -162,7 +293,7 @@ func (s *Service) DefaultProvider() string {
 // the flow back at whichever base domain the request arrived on; "" keeps the
 // baked default. The SAME redirectURL must be handed to HandleCallback.
 func (s *Service) AuthCodeURL(providerName, state, redirectURL string) (string, error) {
-	p, ok := s.providers[providerName]
+	p, ok := s.provider(providerName)
 	if !ok {
 		return "", fmt.Errorf("unknown provider %q", providerName)
 	}
@@ -173,7 +304,7 @@ func (s *Service) AuthCodeURL(providerName, state, redirectURL string) (string, 
 // provider, from which a multi-domain caller derives the per-request redirect
 // by rebasing its host. Returns an error for an unknown provider.
 func (s *Service) CanonicalRedirectURL(providerName string) (string, error) {
-	p, ok := s.providers[providerName]
+	p, ok := s.provider(providerName)
 	if !ok {
 		return "", fmt.Errorf("unknown provider %q", providerName)
 	}
@@ -191,7 +322,7 @@ var ErrNotInvited = fmt.Errorf("not invited; please contact your administrator")
 // the authorize and token-exchange redirect_uri to be identical); "" uses the
 // provider's baked default.
 func (s *Service) HandleCallback(ctx context.Context, providerName, code, inviteToken, redirectURL string) (*store.User, string, error) {
-	p, ok := s.providers[providerName]
+	p, ok := s.provider(providerName)
 	if !ok {
 		return nil, "", fmt.Errorf("unknown provider %q", providerName)
 	}
@@ -340,7 +471,7 @@ func (s *Service) EnsurePlatformMember(ctx context.Context, providerName, email,
 		return user, nil, nil
 	}
 
-	if !isOrgScopedProvider(s.providers, providerName) {
+	if !isOrgScopedProvider(s.providerSnapshot(), providerName) {
 		if err := s.checkDomain(email); err != nil {
 			return nil, nil, err
 		}
@@ -465,6 +596,11 @@ func isOrgScopedProvider(providers map[string]Provider, name string) bool {
 	switch name {
 	case "feishu", "wecom", "dingtalk":
 		return true
+	// "entra" is deliberately absent from this fallback: whether an Entra app
+	// is org-scoped depends on its tenant (a GUID / verified-domain tenant is,
+	// the multi-tenant aliases are not), which is only knowable from the
+	// registered provider above. Unregistered, we keep the stricter behaviour
+	// and still run the domain check.
 	case "phone":
 		// A verified phone number is a self-contained identity with no email
 		// domain; the domain whitelist has nothing to match against, so phone
