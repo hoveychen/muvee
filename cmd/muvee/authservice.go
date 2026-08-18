@@ -385,11 +385,16 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 // platform_members row. Subdomain users have their own per-project access
 // control (project_access_users + projects.auth_allowed_domains) so the
 // platform's invite list and ALLOWED_DOMAINS do not apply.
-func upsertUserUpstream(ctx context.Context, providerName, email, name, avatarURL string) error {
+// providerUserID is the provider-stable subject id from a SubjectProvider; it
+// is what keys the identity when the IdP surfaced no email (see the endpoint's
+// own doc comment for which key wins).
+func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email, name, avatarURL string) error {
 	body, err := json.Marshal(map[string]string{
-		"email":      email,
-		"name":       name,
-		"avatar_url": avatarURL,
+		"email":            email,
+		"name":             name,
+		"avatar_url":       avatarURL,
+		"provider":         providerName,
+		"provider_user_id": providerUserID,
 	})
 	if err != nil {
 		return err
@@ -1378,6 +1383,26 @@ var providerIcons = map[string]template.HTML{
 	"twitter":  template.HTML(`<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`),
 }
 
+// oauthUserInfo resolves the verified identity behind an OAuth callback,
+// picking the provider's richest available path. Providers implementing
+// SubjectProvider (the social ones — Twitter/X, Discord, Apple, Facebook) go
+// through UserInfoWithSubject and hand back a provider-stable subject id
+// alongside the profile; everyone else keeps the plain email-only UserInfo and
+// gets an empty sub.
+//
+// state must be the same nonce that was passed to AuthCodeURL for this flow:
+// Twitter/X derives its PKCE code_verifier from it, so an empty or mismatched
+// state fails the token exchange. Only authservice builds the social providers
+// (BuildSocialProviders), so this dispatch belongs here rather than in
+// auth.Service.HandleCallback, which never sees a SubjectProvider.
+func oauthUserInfo(ctx context.Context, p auth.Provider, code, state, redirectURL string) (sub, email, name, avatarURL string, err error) {
+	if sp, ok := p.(auth.SubjectProvider); ok {
+		return sp.UserInfoWithSubject(ctx, code, state, redirectURL)
+	}
+	email, name, avatarURL, err = p.UserInfo(ctx, code, redirectURL)
+	return "", email, name, avatarURL, err
+}
+
 // handleOAuthCallback handles the OAuth redirect back from each provider.
 func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -1414,7 +1439,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if code == "" {
 		code = r.URL.Query().Get("authCode") // DingTalk uses authCode instead of code
 	}
-	email, name, avatarURL, err := p.UserInfo(ctx, code, oauthRedirectForHost(inboundHost(r), providerName))
+	sub, email, name, avatarURL, err := oauthUserInfo(ctx, p, code, stateCookie.Value, oauthRedirectForHost(inboundHost(r), providerName))
 	if err != nil {
 		log.Printf("authservice: UserInfo (%s): %v", providerName, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
@@ -1433,9 +1458,21 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// domain restrictions and invite-mode gating do not apply to plain
 	// subdomain logins (those are platform-side admission rules). Per-project
 	// ACL still runs in checkProjectAccess on the subsequent verify.
+	//
+	// An invite token is only actionable for a user who has an email: the
+	// upsert endpoint behind it runs EnsurePlatformMember, whose invite and
+	// grant bookkeeping is email-keyed throughout. A subject-only user
+	// therefore skips straight to identity-upsert and reaches the project the
+	// same way any other email-less user does — an explicit
+	// project_access_users grant, or a public project.
 	inviteToken := ""
 	if c, err := r.Cookie(inviteTokenCookieName); err == nil {
 		inviteToken = c.Value
+	}
+	if inviteToken != "" && email == "" {
+		clearInviteTokenCookie(w, r)
+		log.Printf("authservice: ignoring invite token for email-less %s identity; invite consumption is email-keyed", providerName)
+		inviteToken = ""
 	}
 	if inviteToken != "" {
 		clearInviteTokenCookie(w, r)
@@ -1445,13 +1482,13 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			// check on the subsequent verify will bounce them to
 			// request-access instead of breaking the OAuth round-trip.
 			log.Printf("authservice: consume invite (callback, %s, %s): %v; falling back to identity-upsert", providerName, email, err)
-			if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
+			if err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
 				log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 				http.Error(w, "authentication failed", http.StatusInternalServerError)
 				return
 			}
 		}
-	} else if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
+	} else if err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
 		log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return

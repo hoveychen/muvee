@@ -272,7 +272,10 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 	}
 
 	ctx := r.Context()
-	email, name, avatarURL, err := p.UserInfo(ctx, code, oauthRedirectForHost(inboundHost(r), providerName))
+	// The signed state in the query string is byte-for-byte the one handed to
+	// AuthCodeURL when the SDK opened this flow, which is what Twitter/X needs
+	// to recompute its PKCE verifier.
+	sub, email, name, avatarURL, err := oauthUserInfo(ctx, p, code, r.URL.Query().Get("state"), oauthRedirectForHost(inboundHost(r), providerName))
 	if err != nil {
 		log.Printf("authservice: UserInfo (login-token, %s): %v", providerName, err)
 		markLoginTokenError(loginToken, "authentication failed")
@@ -280,7 +283,7 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 		return
 	}
 
-	if err := upsertUserUpstream(ctx, providerName, email, name, avatarURL); err != nil {
+	if err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
 		log.Printf("authservice: upstream identity upsert (login-token, %s, %s): %v", providerName, email, err)
 		markLoginTokenError(loginToken, "identity sync failed")
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
