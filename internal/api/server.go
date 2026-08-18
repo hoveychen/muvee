@@ -621,6 +621,13 @@ func (s *Server) loadSocialConfigsFromSettings(ctx context.Context) (auth.Social
 			ClientSecret: settings["twitter_client_secret"],
 		}
 	}
+	if settings["entra_enabled"] == "true" {
+		cfg.Entra = &auth.EntraConfig{
+			TenantID:     settings["entra_tenant_id"],
+			ClientID:     settings["entra_client_id"],
+			ClientSecret: settings["entra_client_secret"],
+		}
+	}
 	if settings["apple_enabled"] == "true" {
 		cfg.Apple = &auth.AppleConfig{
 			ClientID:      settings["apple_client_id"],
@@ -1010,6 +1017,7 @@ func mergeDownstreamProviders(envProviders []auth.ProviderInfo, cfg auth.SocialC
 		"apple":    cfg.Apple != nil,
 		"facebook": cfg.Facebook != nil,
 		"twitter":  cfg.Twitter != nil,
+		"entra":    cfg.Entra != nil,
 	}
 	for _, m := range auth.SocialProviderMetadata() {
 		if enabled[m.ID] && !seen[m.ID] {
