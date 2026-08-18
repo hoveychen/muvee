@@ -19,6 +19,7 @@ const sidebars = {
         'auth/auth-wecom',
         'auth/auth-dingtalk',
         'auth/auth-entra',
+        'auth/auth-entra-admin-setup',
         'auth/spa-auth-sdk',
       ],
     },
