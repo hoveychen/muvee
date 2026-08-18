@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -106,23 +105,6 @@ func newEntraProvider(cfg EntraConfig, redirectURL string) (*entraProvider, erro
 	}, nil
 }
 
-// newEntraProviderFromEnv is the ENTRA_* env fallback used when no Entra app is
-// configured in system_settings. Returns (nil, nil) when ENTRA_CLIENT_ID is
-// unset. redirectURL "" falls back to ENTRA_REDIRECT_URL.
-func newEntraProviderFromEnv(redirectURL string) (*entraProvider, error) {
-	if strings.TrimSpace(os.Getenv("ENTRA_CLIENT_ID")) == "" {
-		return nil, nil
-	}
-	if redirectURL == "" {
-		redirectURL = os.Getenv("ENTRA_REDIRECT_URL")
-	}
-	return newEntraProvider(EntraConfig{
-		TenantID:     os.Getenv("ENTRA_TENANT_ID"),
-		ClientID:     os.Getenv("ENTRA_CLIENT_ID"),
-		ClientSecret: os.Getenv("ENTRA_CLIENT_SECRET"),
-	}, redirectURL)
-}
-
 func (p *entraProvider) Name() string                 { return "entra" }
 func (p *entraProvider) DisplayName() string          { return "Microsoft" }
 func (p *entraProvider) CanonicalRedirectURL() string { return p.config.RedirectURL }
@@ -154,9 +136,11 @@ func (p *entraProvider) UserInfo(ctx context.Context, code, redirectURL string) 
 	return
 }
 
-// UserInfoWithSubject is the downstream (ForwardAuth) path: it also returns a
-// stable subject so a project user whose Entra account exposes no email still
-// resolves to a users row via oauth_accounts.
+// UserInfoWithSubject additionally returns a stable subject, so identity can be
+// keyed on (provider, sub) via oauth_accounts for an account that exposes no
+// email claim. Note that authservice's callback currently only calls UserInfo —
+// the SubjectProvider path is not wired into it for any provider yet — so this
+// exists for parity with the social providers rather than as a live code path.
 func (p *entraProvider) UserInfoWithSubject(ctx context.Context, code, _, redirectURL string) (sub, email, name, avatarURL string, err error) {
 	token, err := p.cfgFor(redirectURL).Exchange(ctx, code)
 	if err != nil {

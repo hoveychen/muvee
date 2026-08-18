@@ -131,7 +131,7 @@ func TestEntraConfigFromSettings(t *testing.T) {
 	t.Setenv("ENTRA_CLIENT_ID", "env-cid")
 	t.Setenv("ENTRA_CLIENT_SECRET", "env-sec")
 
-	got := entraConfigFromSettings(map[string]string{
+	got := EntraConfigFromSettings(map[string]string{
 		"entra_tenant_id": "db-tenant",
 		"entra_client_id": " db-cid ",
 	})

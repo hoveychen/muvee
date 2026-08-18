@@ -18,6 +18,7 @@ const sidebars = {
         'auth/auth-feishu',
         'auth/auth-wecom',
         'auth/auth-dingtalk',
+        'auth/auth-entra',
         'auth/spa-auth-sdk',
       ],
     },

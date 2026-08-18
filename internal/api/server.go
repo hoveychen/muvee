@@ -622,11 +622,10 @@ func (s *Server) loadSocialConfigsFromSettings(ctx context.Context) (auth.Social
 		}
 	}
 	if settings["entra_enabled"] == "true" {
-		cfg.Entra = &auth.EntraConfig{
-			TenantID:     settings["entra_tenant_id"],
-			ClientID:     settings["entra_client_id"],
-			ClientSecret: settings["entra_client_secret"],
-		}
+		// Same resolver the platform-side provider uses, so one credential set
+		// (settings first, ENTRA_* env fallback) drives both planes.
+		ec := auth.EntraConfigFromSettings(settings)
+		cfg.Entra = &ec
 	}
 	if settings["apple_enabled"] == "true" {
 		cfg.Apple = &auth.AppleConfig{

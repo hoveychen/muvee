@@ -188,7 +188,7 @@ func (s *Service) ReloadSettingsProviders(ctx context.Context) error {
 		s.setProvider("entra", nil)
 		return nil
 	}
-	p, err := newEntraProvider(entraConfigFromSettings(settings), platformEntraRedirectURL())
+	p, err := newEntraProvider(EntraConfigFromSettings(settings), platformEntraRedirectURL())
 	if err != nil {
 		return fmt.Errorf("entra provider: %w", err)
 	}
@@ -216,12 +216,14 @@ func platformEntraEnabled(settings map[string]string) bool {
 	return false
 }
 
-// entraConfigFromSettings assembles the Entra app from system_settings, falling
-// back per field to the ENTRA_* env vars so an operator who wired the creds
-// into the environment does not have to re-enter them in the admin UI. The same
-// credentials serve the downstream ForwardAuth path (see SocialConfigs.Entra);
-// only the redirect URI differs, and Azure allows both on one app registration.
-func entraConfigFromSettings(settings map[string]string) EntraConfig {
+// EntraConfigFromSettings assembles the Entra app from a system_settings map,
+// falling back per field to the ENTRA_* env vars so an operator who wired the
+// creds into the environment does not have to re-enter them in the admin UI.
+// Both planes call this — the platform provider below and muvee-server's
+// SocialConfigs assembly for the downstream ForwardAuth path — so a single
+// credential set is resolved identically on both sides; only the redirect URI
+// differs, and Azure allows both on one app registration.
+func EntraConfigFromSettings(settings map[string]string) EntraConfig {
 	pick := func(key, env string) string {
 		if v := strings.TrimSpace(settings[key]); v != "" {
 			return v
