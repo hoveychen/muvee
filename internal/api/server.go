@@ -632,6 +632,55 @@ func (s *Server) handleInternalAuthIdentityUpsert(w http.ResponseWriter, r *http
 	})
 }
 
+// handleInternalAuthProjectInvite consumes a project-scoped invitation link on
+// behalf of a user identified by id. It exists because the email-keyed
+// /api/internal/auth/upsert cannot serve an identity that has no email: the
+// link would be dropped and the invitee would land on request-access despite
+// holding a valid invitation.
+//
+// Authenticated via X-Muvee-Internal-Key. Errors map: 401 (key), 400 (payload,
+// or a platform-scoped link, which grants membership this path cannot),
+// 500 otherwise. A token matching no valid link answers 200 with
+// {"granted":false} — expired and revoked links must not break a login that is
+// otherwise fine.
+func (s *Server) handleInternalAuthProjectInvite(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		UserID      string `json:"user_id"`
+		InviteToken string `json:"invite_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, fmt.Errorf("invalid json: %w", err), http.StatusBadRequest)
+		return
+	}
+	body.UserID = strings.TrimSpace(body.UserID)
+	body.InviteToken = strings.TrimSpace(body.InviteToken)
+	if body.UserID == "" || body.InviteToken == "" {
+		jsonErr(w, fmt.Errorf("user_id and invite_token are required"), http.StatusBadRequest)
+		return
+	}
+	userID, err := uuid.Parse(body.UserID)
+	if err != nil {
+		jsonErr(w, fmt.Errorf("invalid user_id"), http.StatusBadRequest)
+		return
+	}
+	granted, err := s.auth.ConsumeProjectInviteForUserID(r.Context(), userID, body.InviteToken)
+	if err != nil {
+		if errors.Is(err, auth.ErrInviteNotProjectScoped) {
+			jsonErr(w, err, http.StatusBadRequest)
+			return
+		}
+		jsonErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]interface{}{"granted": granted})
+}
+
 // loadSocialConfigsFromSettings reads system_settings and assembles the set
 // of social-OAuth providers admins have enabled via /admin/settings. Returns
 // a zero-value SocialConfigs (all nil pointers) when nothing is enabled.
@@ -825,6 +874,7 @@ func (s *Server) Router() http.Handler {
 	// means no domain check, no invite gate, no platform_members row — those
 	// are platform-side concerns that subdomain users should not inherit.
 	r.Post("/api/internal/auth/identity-upsert", s.handleInternalAuthIdentityUpsert)
+	r.Post("/api/internal/auth/project-invite", s.handleInternalAuthProjectInvite)
 	// Internal credential check for the downstream password ("demo account")
 	// login form rendered by muvee-authservice. Verifies the bcrypt hash and
 	// upserts the identity via oauth_accounts (provider='password').

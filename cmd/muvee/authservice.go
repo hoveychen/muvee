@@ -344,9 +344,18 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	// so the access check below admits them on this same request. Best-effort:
 	// log + ignore errors so a stale / invalid token never blocks a valid
 	// session.
-	if inviteToken != "" && claims.Email != "" {
-		if _, err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
-			log.Printf("authservice: consume invite (authed, email=%s): %v", claims.Email, err)
+	if inviteToken != "" {
+		switch {
+		case claims.Email != "":
+			if _, err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
+				log.Printf("authservice: consume invite (authed, email=%s): %v", claims.Email, err)
+			}
+		case claims.UserID != "":
+			// Email-less session: the user row already exists, so the link is
+			// consumed against its id. Project-scoped links only.
+			if err := consumeProjectInviteUpstream(r.Context(), claims.UserID, inviteToken); err != nil {
+				log.Printf("authservice: consume project invite (authed, user_id=%s): %v", claims.UserID, err)
+			}
 		}
 		clearInviteTokenCookie(w, r)
 	}
@@ -532,6 +541,38 @@ func consumeInviteUpstream(ctx context.Context, providerName, email, name, avata
 		return "", fmt.Errorf("decode auth/upsert response: %w", err)
 	}
 	return out.UserID, nil
+}
+
+// consumeProjectInviteUpstream is the email-less counterpart of
+// consumeInviteUpstream: the user is already in the users table (the identity
+// upsert just put them there), so the link is consumed against their id. Only
+// project-scoped links work this way — a platform-scoped one answers 400,
+// since platform membership is email-keyed.
+func consumeProjectInviteUpstream(ctx context.Context, userID, inviteToken string) error {
+	body, err := json.Marshal(map[string]string{
+		"user_id":      userID,
+		"invite_token": inviteToken,
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		muveeServerURL+"/api/internal/auth/project-invite",
+		strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("upstream project-invite returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // accessCheckResult is the structured result from muvee-server's
@@ -1538,23 +1579,17 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// subdomain logins (those are platform-side admission rules). Per-project
 	// ACL still runs in checkProjectAccess on the subsequent verify.
 	//
-	// An invite token is only actionable for a user who has an email: the
-	// upsert endpoint behind it runs EnsurePlatformMember, whose invite and
-	// grant bookkeeping is email-keyed throughout. A subject-only user
-	// therefore skips straight to identity-upsert and reaches the project the
-	// same way any other email-less user does — an explicit
-	// project_access_users grant, or a public project.
+	// An email-less identity cannot go through auth/upsert at all (that whole
+	// path is email-keyed), so it takes identity-upsert first and consumes the
+	// link afterwards against the user id it just got back — see
+	// consumeProjectInviteUpstream.
 	inviteToken := ""
 	if c, err := r.Cookie(inviteTokenCookieName); err == nil {
 		inviteToken = c.Value
 	}
-	if inviteToken != "" && email == "" {
-		clearInviteTokenCookie(w, r)
-		log.Printf("authservice: ignoring invite token for email-less %s identity; invite consumption is email-keyed", providerName)
-		inviteToken = ""
-	}
 	var userID string
-	if inviteToken != "" {
+	switch {
+	case inviteToken != "" && email != "":
 		clearInviteTokenCookie(w, r)
 		var err error
 		if userID, err = consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
@@ -1569,12 +1604,21 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	} else {
+	default:
 		var err error
 		if userID, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
 			log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 			http.Error(w, "authentication failed", http.StatusInternalServerError)
 			return
+		}
+		if inviteToken != "" {
+			clearInviteTokenCookie(w, r)
+			// Best-effort, exactly like the email path: a stale link must not
+			// break an otherwise valid login — the access check on the next
+			// verify decides where the user ends up.
+			if err := consumeProjectInviteUpstream(ctx, userID, inviteToken); err != nil {
+				log.Printf("authservice: consume project invite (callback, %s, user_id=%s): %v", providerName, userID, err)
+			}
 		}
 	}
 

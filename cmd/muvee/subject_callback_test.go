@@ -164,3 +164,104 @@ func (p *fakePlainProvider) UserInfo(ctx context.Context, code, redirectURL stri
 	p.calls++
 	return p.email, p.name, "", nil
 }
+
+// recordingUpstream stands in for muvee-server, recording the bodies posted to
+// each internal auth endpoint so a test can assert which one the callback
+// chose.
+type recordingUpstream struct {
+	hits map[string]map[string]string
+}
+
+func newRecordingUpstream(t *testing.T) *recordingUpstream {
+	t.Helper()
+	u := &recordingUpstream{hits: map[string]map[string]string{}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body := map[string]string{}
+		_ = json.Unmarshal(raw, &body)
+		u.hits[r.URL.Path] = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"user_id":"22222222-2222-2222-2222-222222222222","granted":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	prevBase, prevCookie, prevServer, prevSecret := forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret
+	forwardAuthBase = "https://example.com"
+	cookieDomain = "example.com"
+	muveeServerURL = srv.URL
+	jwtSecret = []byte("test-secret")
+	t.Cleanup(func() {
+		forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret = prevBase, prevCookie, prevServer, prevSecret
+	})
+	return u
+}
+
+// callbackWithInvite drives handleOAuthCallback for the given provider with an
+// invite-token cookie attached, the way a verify hop would have left one.
+func callbackWithInvite(t *testing.T, p auth.Provider, inviteToken string) *httptest.ResponseRecorder {
+	t.Helper()
+	installFakeProvider(t, p)
+	const state = "state-nonce-for-pkce"
+	r := httptest.NewRequest(http.MethodGet, "/_oauth/"+p.Name()+"?code=authcode&state="+state, nil)
+	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
+	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
+	r.AddCookie(&http.Cookie{Name: inviteTokenCookieName, Value: inviteToken})
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("provider", p.Name())
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	handleOAuthCallback(w, r)
+	return w
+}
+
+// TestHandleOAuthCallback_EmailLessIdentityConsumesProjectInvite covers the
+// invitation link for an identity with no email. The email-keyed auth/upsert
+// cannot serve it — the invitee would silently lose the grant and land on
+// request-access — so the callback consumes the link against the user id the
+// identity upsert just returned.
+func TestHandleOAuthCallback_EmailLessIdentityConsumesProjectInvite(t *testing.T) {
+	upstream := newRecordingUpstream(t)
+	w := callbackWithInvite(t, &fakeSubjectProvider{}, "INVITE-TOK")
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, want 302 (body=%s)", w.Code, w.Body.String())
+	}
+	if _, ok := upstream.hits["/api/internal/auth/identity-upsert"]; !ok {
+		t.Fatalf("expected the identity to be upserted first; hits=%v", upstream.hits)
+	}
+	invite, ok := upstream.hits["/api/internal/auth/project-invite"]
+	if !ok {
+		t.Fatalf("invite token was dropped: nothing posted to /api/internal/auth/project-invite; hits=%v", upstream.hits)
+	}
+	if invite["invite_token"] != "INVITE-TOK" {
+		t.Errorf("project-invite invite_token = %q, want INVITE-TOK", invite["invite_token"])
+	}
+	if invite["user_id"] != testUserID {
+		t.Errorf("project-invite user_id = %q, want %q", invite["user_id"], testUserID)
+	}
+	if _, ok := upstream.hits["/api/internal/auth/upsert"]; ok {
+		t.Error("email-keyed auth/upsert must not be called for an email-less identity")
+	}
+}
+
+// TestHandleOAuthCallback_EmailIdentityKeepsInviteUpsert guards the untouched
+// path: an identity with an email still consumes its link through auth/upsert,
+// which additionally applies the platform-side invite bookkeeping.
+func TestHandleOAuthCallback_EmailIdentityKeepsInviteUpsert(t *testing.T) {
+	upstream := newRecordingUpstream(t)
+	w := callbackWithInvite(t, &fakePlainProvider{email: "alice@corp.example", name: "Alice"}, "INVITE-TOK")
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, want 302 (body=%s)", w.Code, w.Body.String())
+	}
+	upsert, ok := upstream.hits["/api/internal/auth/upsert"]
+	if !ok {
+		t.Fatalf("expected the email path to consume the link via auth/upsert; hits=%v", upstream.hits)
+	}
+	if upsert["invite_token"] != "INVITE-TOK" || upsert["email"] != "alice@corp.example" {
+		t.Errorf("auth/upsert body = %v, want the email and the token", upsert)
+	}
+	if _, ok := upstream.hits["/api/internal/auth/project-invite"]; ok {
+		t.Error("the email path must not also hit the user-id project-invite endpoint")
+	}
+}

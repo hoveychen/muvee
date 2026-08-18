@@ -306,3 +306,63 @@ func TestHandleInternalAuthIdentityUpsert_RejectsBadPayload(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleInternalAuthProjectInvite_RejectsMissingOrWrongKey(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	s := &Server{}
+
+	cases := []struct {
+		name       string
+		key        string
+		wantStatus int
+	}{
+		{"missing key", "", http.StatusUnauthorized},
+		{"wrong key", "deadbeef", http.StatusUnauthorized},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/internal/auth/project-invite",
+				strings.NewReader(`{"user_id":"22222222-2222-2222-2222-222222222222","invite_token":"TOK"}`))
+			if c.key != "" {
+				r.Header.Set("X-Muvee-Internal-Key", c.key)
+			}
+			w := httptest.NewRecorder()
+			s.handleInternalAuthProjectInvite(w, r)
+			if w.Code != c.wantStatus {
+				t.Errorf("got status %d, want %d", w.Code, c.wantStatus)
+			}
+		})
+	}
+}
+
+// The user id is the whole point of this endpoint (it serves identities that
+// have no email), so neither half of the pair may be inferred or defaulted.
+func TestHandleInternalAuthProjectInvite_RejectsBadPayload(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	key := internalAPIKey()
+	s := &Server{}
+
+	cases := []struct {
+		name, body string
+		wantStatus int
+	}{
+		{"invalid json", `{not json`, http.StatusBadRequest},
+		{"missing both", `{}`, http.StatusBadRequest},
+		{"missing invite_token", `{"user_id":"22222222-2222-2222-2222-222222222222"}`, http.StatusBadRequest},
+		{"missing user_id", `{"invite_token":"TOK"}`, http.StatusBadRequest},
+		{"whitespace invite_token", `{"user_id":"22222222-2222-2222-2222-222222222222","invite_token":"   "}`, http.StatusBadRequest},
+		{"invalid user_id uuid", `{"user_id":"not-a-uuid","invite_token":"TOK"}`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/internal/auth/project-invite",
+				strings.NewReader(c.body))
+			r.Header.Set("X-Muvee-Internal-Key", key)
+			w := httptest.NewRecorder()
+			s.handleInternalAuthProjectInvite(w, r)
+			if w.Code != c.wantStatus {
+				t.Errorf("got status %d, want %d (body=%s)", w.Code, c.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
