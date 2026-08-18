@@ -2,7 +2,11 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -29,6 +33,14 @@ type EntraConfig struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
+	// FetchAvatar adds the Microsoft Graph `User.Read` scope to the flow and
+	// pulls the signed-in user's profile photo after the token exchange. Entra
+	// v2.0 ID tokens carry no `picture` claim and Graph photos have no publicly
+	// fetchable URL, so this is the only way to get an avatar — see
+	// entraProvider.fetchAvatar. Off means avatars stay empty and the login asks
+	// for OIDC scopes only, which is the escape hatch for a tenant where the
+	// Graph scope needs admin consent that has not been granted.
+	FetchAvatar bool
 }
 
 // entraMultiTenantAliases are the Microsoft-reserved tenant values that let
@@ -51,7 +63,24 @@ type entraProvider struct {
 	config   *oauth2.Config
 	tenant   string
 	verifier *gooidc.IDTokenVerifier
+	// graphBaseURL is the Microsoft Graph root, overridden by tests.
+	graphBaseURL string
 }
+
+// entraGraphBaseURL is the Microsoft Graph v1.0 root used for the profile-photo
+// read. Only the global cloud is supported; sovereign clouds (US Gov, 21Vianet)
+// use different Graph hosts.
+const entraGraphBaseURL = "https://graph.microsoft.com/v1.0"
+
+// entraAvatarScope is the delegated Graph permission needed to read the
+// signed-in user's own photo. It is included on every new Azure app
+// registration by default and only needs user (not admin) consent.
+const entraAvatarScope = "User.Read"
+
+// entraAvatarSize is the photo size requested from Graph. Entra stores photos
+// at fixed sizes; 96x96 keeps the base64 data URI small (single-digit KB) while
+// staying sharp on a retina avatar chip.
+const entraAvatarSize = "96x96"
 
 // entraAuthority returns the tenant-scoped v2.0 authority base. Endpoints under
 // it are deterministic, so the provider is constructed without an OIDC
@@ -64,6 +93,19 @@ func entraAuthority(tenant string) string {
 
 func entraIssuer(tenant string) string {
 	return entraAuthority(tenant) + "/v2.0"
+}
+
+// entraScopes returns the scopes requested at authorize time. `profile` is what
+// makes Entra emit `name`, `oid` and `preferred_username`; `email` asks for the
+// email claim for managed users (guests get it by default). The Graph scope is
+// added only when avatar fetching is on, so a tenant that withholds consent for
+// it can still sign users in.
+func entraScopes(fetchAvatar bool) []string {
+	scopes := []string{gooidc.ScopeOpenID, "profile", "email"}
+	if fetchAvatar {
+		scopes = append(scopes, entraAvatarScope)
+	}
+	return scopes
 }
 
 // newEntraProvider builds the provider from an explicit config. Returns
@@ -81,7 +123,8 @@ func newEntraProvider(cfg EntraConfig, redirectURL string) (*entraProvider, erro
 	}
 	keySet := gooidc.NewRemoteKeySet(context.Background(), entraAuthority(tenant)+"/discovery/v2.0/keys")
 	return &entraProvider{
-		tenant: tenant,
+		tenant:       tenant,
+		graphBaseURL: entraGraphBaseURL,
 		config: &oauth2.Config{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
@@ -90,7 +133,7 @@ func newEntraProvider(cfg EntraConfig, redirectURL string) (*entraProvider, erro
 				AuthURL:  entraAuthority(tenant) + "/oauth2/v2.0/authorize",
 				TokenURL: entraAuthority(tenant) + "/oauth2/v2.0/token",
 			},
-			Scopes: []string{gooidc.ScopeOpenID, "profile", "email"},
+			Scopes: entraScopes(cfg.FetchAvatar),
 		},
 		// SkipIssuerCheck because the issuer is only known per token: for a
 		// GUID tenant it is entraIssuer(tenant), but for a domain tenant or a
@@ -165,12 +208,86 @@ func (p *entraProvider) UserInfoWithSubject(ctx context.Context, code, _, redire
 	if sub == "" {
 		return "", "", "", "", fmt.Errorf("id_token has neither oid nor sub")
 	}
-	return sub, entraEmail(claims), claims.Name, "", nil
+	// Best-effort: a missing photo (404), a withheld Graph scope or a slow Graph
+	// must not fail an otherwise-valid login, so avatar errors are logged and
+	// dropped.
+	if p.avatarEnabled() {
+		if url, err := p.fetchAvatar(ctx, token.AccessToken); err != nil {
+			log.Printf("entra: fetch avatar for %s: %v", sub, err)
+		} else {
+			avatarURL = url
+		}
+	}
+	return sub, entraEmail(claims), claims.Name, avatarURL, nil
 }
 
-// entraClaims are the ID-token claims muvee reads. Entra v2.0 has no `picture`
-// claim — a profile photo would need a separate Microsoft Graph call — so the
-// avatar stays empty.
+// avatarEnabled reports whether the Graph scope was requested for this provider;
+// without it the access token cannot read the photo, so we skip the call.
+func (p *entraProvider) avatarEnabled() bool {
+	for _, s := range p.config.Scopes {
+		if s == entraAvatarScope {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchAvatar reads the signed-in user's profile photo from Microsoft Graph and
+// returns it as a data URI, which is what muvee stores in users.avatar_url.
+//
+// Why a data URI: Entra v2.0 ID tokens have no `picture` claim, and the Graph
+// photo endpoint serves binary data behind a bearer token — there is no URL a
+// browser could load directly — so the bytes have to be inlined (a few KB at
+// 96x96) rather than referenced.
+//
+// Returns ("", nil) when the user simply has no photo (Graph answers 404), so
+// callers can distinguish "nothing to show" from a real failure.
+func (p *entraProvider) fetchAvatar(ctx context.Context, accessToken string) (string, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return "", fmt.Errorf("no access token in the token response")
+	}
+	url := fmt.Sprintf("%s/me/photos/%s/$value", strings.TrimRight(p.graphBaseURL, "/"), entraAvatarSize)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil // user has no photo set
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("graph %s returned %d", url, resp.StatusCode)
+	}
+	// Cap the read so a surprise payload can't be inlined into every session
+	// cookie-adjacent user row. 96x96 JPEGs are ~2-8 KB; 256 KB is generous.
+	const maxAvatarBytes = 256 << 10
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAvatarBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", nil
+	}
+	if len(data) > maxAvatarBytes {
+		return "", fmt.Errorf("photo larger than %d bytes", maxAvatarBytes)
+	}
+	mime := resp.Header.Get("Content-Type")
+	if mime == "" {
+		mime = "image/jpeg"
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// entraClaims are the ID-token claims muvee reads. Entra v2.0 emits no `picture`
+// claim, which is why the avatar comes from Microsoft Graph instead
+// (fetchAvatar). `given_name` / `family_name` are optional claims that a tenant
+// must add to the app registration's token configuration; muvee has no separate
+// first/last-name fields, so it reads the composed `name` claim only.
 type entraClaims struct {
 	TenantID          string `json:"tid"`
 	ObjectID          string `json:"oid"`

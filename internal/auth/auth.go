@@ -234,7 +234,21 @@ func EntraConfigFromSettings(settings map[string]string) EntraConfig {
 		TenantID:     pick("entra_tenant_id", "ENTRA_TENANT_ID"),
 		ClientID:     pick("entra_client_id", "ENTRA_CLIENT_ID"),
 		ClientSecret: pick("entra_client_secret", "ENTRA_CLIENT_SECRET"),
+		FetchAvatar:  entraAvatarSetting(pick("entra_avatar_enabled", "ENTRA_FETCH_AVATAR")),
 	}
+}
+
+// entraAvatarSetting parses the avatar toggle, defaulting to ON when unset:
+// Entra's `User.Read` scope ships enabled on every new app registration and
+// needs no admin consent, so fetching the photo is the useful default. An admin
+// whose tenant withholds that consent sets entra_avatar_enabled = "false", which
+// drops the Graph scope from the authorize request entirely.
+func entraAvatarSetting(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "false", "0", "no", "off":
+		return false
+	}
+	return true
 }
 
 // platformEntraRedirectURL is the callback baked into the platform-side Entra
