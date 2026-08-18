@@ -58,7 +58,7 @@ func TestEntraSettingKeys(t *testing.T) {
 	if !isPlatformProviderSettingKey("platform_entra_login_enabled") {
 		t.Error("platform_entra_login_enabled should trigger a platform provider reload")
 	}
-	for _, k := range []string{"entra_tenant_id", "entra_client_id", "entra_client_secret"} {
+	for _, k := range []string{"entra_tenant_id", "entra_client_id", "entra_client_secret", "entra_avatar_enabled"} {
 		if !isPlatformProviderSettingKey(k) {
 			t.Errorf("%s should trigger a platform provider reload", k)
 		}
@@ -73,7 +73,7 @@ func TestEntraSettingKeys(t *testing.T) {
 func TestEntraKeysAreAllowedSettings(t *testing.T) {
 	for _, k := range []string{
 		"entra_enabled", "entra_tenant_id", "entra_client_id", "entra_client_secret",
-		"platform_entra_login_enabled",
+		"entra_avatar_enabled", "platform_entra_login_enabled",
 	} {
 		if !allowedSettingKey(k) {
 			t.Errorf("%s missing from the admin settings allowlist", k)

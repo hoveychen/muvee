@@ -19,6 +19,12 @@ Unlike Google / Feishu / WeCom / DingTalk, Entra is **not** configured with envi
 everything lives in **Admin → Settings** (stored in `system_settings`), so no redeploy is needed.
 `ENTRA_*` env vars are only a fallback for values left blank in the UI.
 
+:::tip Just want the click-by-click version?
+See [Entra ID — admin setup walkthrough](auth-entra-admin-setup), which walks an administrator
+through the Azure app registration and the muvee settings card with screenshots. The page you are
+reading is the reference behind it.
+:::
+
 ## Setup
 
 ### 1. Register the application in Azure
@@ -89,11 +95,25 @@ flow, so `ALLOWED_DOMAINS` (and `access_mode`) remain your only gate — set the
 | Claim | Used for |
 |---|---|
 | `email`, falling back to `preferred_username` (the UPN) | the platform / project identity |
-| `name` | display name |
+| `name` | display name (the composed one — `given_name` / `family_name` are [optional claims](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims) muvee has no separate fields for) |
 | `oid` + `tid` | stable subject key |
 | `tid`, `iss`, `aud` | validation (see above) |
 
-Entra v2.0 ID tokens carry no `picture` claim, so muvee users signed in this way have no avatar.
+`name` and `oid` need the `openid profile` scopes and `email` needs the `email` scope; muvee requests
+all of them. The `email` claim is present by default only for guest accounts — for members of the
+tenant it is the `email` scope that produces it, and if the directory has no mail attribute for the
+user, muvee falls back to the UPN in `preferred_username`.
+
+### Profile photos
+
+Entra v2.0 ID tokens carry no `picture` claim, and Graph profile photos sit behind a bearer token
+rather than a public URL. So when **Fetch profile photos** is on (the default), muvee adds the
+delegated Graph scope `User.Read` to the login request and, right after the token exchange, reads
+`GET /me/photos/96x96/$value` and stores the image inline as a `data:` URI on the user record.
+
+It is best-effort: a user with no photo (Graph answers `404`), a slow Graph, or a missing consent all
+degrade to an empty avatar and never fail the login. Turning the option off drops `User.Read` from the
+authorize request entirely, which is what you want in a tenant that withholds consent for it.
 
 Guest accounts that expose neither `email` nor a UPN-shaped `preferred_username` cannot be admitted
 to the platform plane — there is no address to match against `ADMIN_EMAILS`, the invite white-list,
@@ -108,10 +128,11 @@ or `ALLOWED_DOMAINS`.
 | `entra_tenant_id` | GUID / domain / `common` / `organizations` / `consumers` | Azure directory |
 | `entra_client_id` | — | Application (client) ID |
 | `entra_client_secret` | — | Client secret **value** |
+| `entra_avatar_enabled` | `true` / `false` (default `true`) | Read the profile photo from Microsoft Graph; adds the `User.Read` scope |
 
 Env fallbacks, used per-field only when the setting is blank: `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`,
-`ENTRA_CLIENT_SECRET`, plus `ENTRA_REDIRECT_URL` (overrides the derived platform callback) and
-`PLATFORM_ENTRA_LOGIN` (fallback for the platform toggle).
+`ENTRA_CLIENT_SECRET`, `ENTRA_FETCH_AVATAR`, plus `ENTRA_REDIRECT_URL` (overrides the derived platform
+callback) and `PLATFORM_ENTRA_LOGIN` (fallback for the platform toggle).
 
 Secrets are stored unencrypted in `system_settings`, the same threat model as the other provider
 credentials — the admin-only settings API is the protection boundary.
@@ -131,3 +152,7 @@ while `entra_tenant_id` pins a single GUID. Either point the tenant at the direc
 tokens, or switch it to `organizations`.
 
 **Sign-in worked and then stopped** — check whether the client secret expired in Azure.
+
+**Nobody gets an avatar** — the tenant most likely never granted `User.Read`; the server logs
+`entra: fetch avatar`. Untick **Fetch profile photos** to stop asking for the scope. A single user
+without a photo is just an empty avatar and needs no action.

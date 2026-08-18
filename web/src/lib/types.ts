@@ -364,6 +364,10 @@ export interface SystemSettings {
   entra_tenant_id?: string
   entra_client_id?: string
   entra_client_secret?: string
+  // Avatars need a Microsoft Graph call (Entra ID tokens have no picture
+  // claim), which adds the delegated User.Read scope. 'true' unless explicitly
+  // set to 'false'.
+  entra_avatar_enabled?: string
   platform_entra_login_enabled?: string
   // ─── Phone / SMS login (Aliyun PNVS 号码认证服务) ─────────────────────
   // Configured via /admin/settings, read settings-first with ALIYUN_SMS_*

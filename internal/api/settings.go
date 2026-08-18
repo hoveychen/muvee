@@ -138,8 +138,12 @@ var allowedSettingKeys = map[string]bool{
 	// login page. entra_tenant_id is a directory GUID (strictest: the ID
 	// token's tid must match), a verified domain, or one of
 	// common/organizations/consumers for multi-tenant.
-	"entra_enabled":                true,
-	"entra_tenant_id":              true,
+	"entra_enabled":   true,
+	"entra_tenant_id": true,
+	// Avatars come from a Microsoft Graph call (no `picture` claim exists in
+	// Entra ID tokens), which needs the delegated User.Read scope. Defaults to
+	// on; set "false" in a tenant that withholds consent for that scope.
+	"entra_avatar_enabled":         true,
 	"entra_client_id":              true,
 	"entra_client_secret":          true,
 	"platform_entra_login_enabled": true,
