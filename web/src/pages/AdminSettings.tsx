@@ -254,7 +254,7 @@ type SocialState = {
   // Entra is the one provider that also serves the platform login page, so its
   // slice carries the extra platform toggle alongside the shared credentials.
   entra_enabled: string; entra_tenant_id: string; entra_client_id: string; entra_client_secret: string
-  platform_entra_login_enabled: string
+  entra_avatar_enabled: string; platform_entra_login_enabled: string
 }
 
 const blankSocial: SocialState = {
@@ -264,7 +264,7 @@ const blankSocial: SocialState = {
   twitter_enabled: 'false', twitter_client_id: '', twitter_client_secret: '',
   apple_enabled: 'false', apple_client_id: '', apple_team_id: '', apple_key_id: '', apple_private_key_p8: '',
   entra_enabled: 'false', entra_tenant_id: '', entra_client_id: '', entra_client_secret: '',
-  platform_entra_login_enabled: 'false',
+  entra_avatar_enabled: 'true', platform_entra_login_enabled: 'false',
 }
 
 type ProviderID = 'google' | 'discord' | 'facebook' | 'twitter' | 'apple' | 'entra'
@@ -411,6 +411,11 @@ function EntraProviderCard({
         <code style={{ margin: '0 4px' }}>login.microsoftonline.com</code>. One app registration serves both planes —
         add BOTH redirect URIs below to it, and create a client secret under Certificates &amp; secrets.
       </p>
+      <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+        Profile fields muvee reads: display name (<code>name</code>) and email (<code>email</code>, falling back to the
+        UPN in <code>preferred_username</code>). Entra ID tokens have no photo claim, so avatars come from a Graph call —
+        untick below if your tenant withholds consent for <code>User.Read</code>.
+      </p>
       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', color: 'var(--fg-muted)', cursor: 'pointer', marginBottom: 6 }}>
         <input type="checkbox" checked={social.entra_enabled === 'true'}
           onChange={e => setSocial({ ...social, entra_enabled: e.target.checked ? 'true' : 'false' })}
@@ -422,6 +427,12 @@ function EntraProviderCard({
           onChange={e => setSocial({ ...social, platform_entra_login_enabled: e.target.checked ? 'true' : 'false' })}
           style={{ accentColor: 'var(--accent)' }} />
         Enable on the muvee platform login page
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', color: 'var(--fg-muted)', cursor: 'pointer', marginBottom: 14 }}>
+        <input type="checkbox" checked={social.entra_avatar_enabled !== 'false'}
+          onChange={e => setSocial({ ...social, entra_avatar_enabled: e.target.checked ? 'true' : 'false' })}
+          style={{ accentColor: 'var(--accent)' }} />
+        Fetch profile photos from Microsoft Graph (adds the User.Read scope)
       </label>
       <div className="card-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <Field label="Directory (tenant) ID"
@@ -545,6 +556,8 @@ function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: st
     entra_tenant_id: initial.entra_tenant_id || '',
     entra_client_id: initial.entra_client_id || '',
     entra_client_secret: initial.entra_client_secret || '',
+    // Defaults to on server-side, so an unwritten setting shows as ticked.
+    entra_avatar_enabled: initial.entra_avatar_enabled || 'true',
     platform_entra_login_enabled: initial.platform_entra_login_enabled || 'false',
   }))
   const [savingFor, setSavingFor] = useState<ProviderID | null>(null)
