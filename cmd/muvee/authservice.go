@@ -29,7 +29,13 @@ import (
 )
 
 type authClaims struct {
-	Email     string `json:"email"`
+	Email string `json:"email"`
+	// UserID is muvee-server's users.id for this identity, returned by the
+	// identity upsert at login. It is the only key an email-less identity has
+	// (Twitter/X and friends bind on (provider, sub) instead), so the access
+	// check falls back to it. Sessions signed before this claim existed simply
+	// carry an empty string and keep going through the email path.
+	UserID    string `json:"user_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	AvatarURL string `json:"avatar_url,omitempty"`
 	Provider  string `json:"provider,omitempty"`
@@ -338,23 +344,35 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	// so the access check below admits them on this same request. Best-effort:
 	// log + ignore errors so a stale / invalid token never blocks a valid
 	// session.
-	if inviteToken != "" {
-		if err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
+	if inviteToken != "" && claims.Email != "" {
+		if _, err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
 			log.Printf("authservice: consume invite (authed, email=%s): %v", claims.Email, err)
 		}
 		clearInviteTokenCookie(w, r)
 	}
 
-	if allowedDomains := r.URL.Query().Get("domains"); allowedDomains != "" {
+	// An identity with neither key cannot be checked against anything — fail
+	// closed rather than let it through the checks below on empty strings.
+	if claims.Email == "" && claims.UserID == "" {
+		redirectToLogin(w, r)
+		return
+	}
+
+	// A project's auth_allowed_domains whitelist only applies to identities
+	// that have an address to match. An email-less one is not admitted by
+	// default for lack of a domain — it still has to pass the ACL below, where
+	// only a public project or an explicit project_access_users grant lets it
+	// through.
+	if allowedDomains := r.URL.Query().Get("domains"); allowedDomains != "" && claims.Email != "" {
 		if !emailMatchesDomains(claims.Email, allowedDomains) {
 			http.Error(w, "access denied: email domain not permitted", http.StatusForbidden)
 			return
 		}
 	}
 	if projectID := r.URL.Query().Get("project_id"); projectID != "" {
-		check, err := checkProjectAccess(r.Context(), projectID, claims.Email)
+		check, err := checkProjectAccess(r.Context(), projectID, claims.Email, claims.UserID)
 		if err != nil {
-			log.Printf("authservice: access check (project=%s email=%s): %v", projectID, claims.Email, err)
+			log.Printf("authservice: access check (project=%s user=%s): %v", projectID, claimsSubjectForLog(claims), err)
 			http.Error(w, "access check failed", http.StatusBadGateway)
 			return
 		}
@@ -388,7 +406,11 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 // providerUserID is the provider-stable subject id from a SubjectProvider; it
 // is what keys the identity when the IdP surfaced no email (see the endpoint's
 // own doc comment for which key wins).
-func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email, name, avatarURL string) error {
+//
+// Returns the users.id the server resolved the identity to, which the caller
+// bakes into the session so later access checks have a key even when there is
+// no email.
+func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email, name, avatarURL string) (string, error) {
 	body, err := json.Marshal(map[string]string{
 		"email":            email,
 		"name":             name,
@@ -397,25 +419,31 @@ func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email
 		"provider_user_id": providerUserID,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		muveeServerURL+"/api/internal/auth/identity-upsert",
 		strings.NewReader(string(body)))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Muvee-Internal-Key", internalKey)
 	resp, err := internalClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		return nil
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("upstream identity upsert returned %d", resp.StatusCode)
 	}
-	return fmt.Errorf("upstream identity upsert returned %d", resp.StatusCode)
+	var out struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode identity upsert response: %w", err)
+	}
+	return out.UserID, nil
 }
 
 // inviteTokenCookieName is the short-lived cookie that carries the value of
@@ -467,7 +495,10 @@ func clearInviteTokenCookie(w http.ResponseWriter, r *http.Request) {
 // link use and add the user to project_access_users (see auth.go). Used in
 // two contexts: the authed-already path in handleVerify, and the post-OAuth
 // callback path when the cookie was set by an earlier verify hop.
-func consumeInviteUpstream(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) error {
+// Like upsertUserUpstream it returns the resolved users.id, so a session
+// created through the invite path carries the same key as one created through
+// the plain identity path.
+func consumeInviteUpstream(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (string, error) {
 	body, err := json.Marshal(map[string]string{
 		"email":        email,
 		"name":         name,
@@ -476,25 +507,31 @@ func consumeInviteUpstream(ctx context.Context, providerName, email, name, avata
 		"invite_token": inviteToken,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		muveeServerURL+"/api/internal/auth/upsert",
 		strings.NewReader(string(body)))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Muvee-Internal-Key", internalKey)
 	resp, err := internalClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		return nil
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("upstream auth/upsert returned %d", resp.StatusCode)
 	}
-	return fmt.Errorf("upstream auth/upsert returned %d", resp.StatusCode)
+	var out struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode auth/upsert response: %w", err)
+	}
+	return out.UserID, nil
 }
 
 // accessCheckResult is the structured result from muvee-server's
@@ -528,10 +565,17 @@ func requestAccessRedirectURL(r *http.Request, projectID string) string {
 // reach the project's downstream service. Public projects always return true;
 // private projects consult the per-project allow-list. Errors are propagated to
 // the caller so the proxy can fail closed (502) rather than silently allow.
-func checkProjectAccess(ctx context.Context, projectID, email string) (accessCheckResult, error) {
+// email and userID are alternatives: an email-less identity (Twitter/X and
+// other subject-keyed IdPs) sends only the user id, which the server resolves
+// through the same allow rules.
+func checkProjectAccess(ctx context.Context, projectID, email, userID string) (accessCheckResult, error) {
 	q := url.Values{}
 	q.Set("project_id", projectID)
-	q.Set("email", email)
+	if email != "" {
+		q.Set("email", email)
+	} else {
+		q.Set("user_id", userID)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		muveeServerURL+"/api/internal/access/check?"+q.Encode(), nil)
 	if err != nil {
@@ -569,8 +613,29 @@ func handleVerifyAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 // setUserHeaders writes user identity headers for Traefik to forward downstream.
+// claimsSubjectForLog returns whichever key identifies the session, for log
+// lines that used to print the email unconditionally.
+func claimsSubjectForLog(claims *authClaims) string {
+	if claims.Email != "" {
+		return "email=" + claims.Email
+	}
+	return "user_id=" + claims.UserID
+}
+
 func setUserHeaders(w http.ResponseWriter, claims *authClaims) {
-	w.Header().Set("X-Forwarded-User", claims.Email)
+	// X-Forwarded-User stays the email wherever there is one — downstream apps
+	// have been reading it as an address since long before subject-keyed
+	// identities existed. Only an email-less identity falls back to the user
+	// id, which X-Forwarded-User-Id carries unconditionally for apps that want
+	// the stable key rather than the address.
+	if claims.Email != "" {
+		w.Header().Set("X-Forwarded-User", claims.Email)
+	} else {
+		w.Header().Set("X-Forwarded-User", claims.UserID)
+	}
+	if claims.UserID != "" {
+		w.Header().Set("X-Forwarded-User-Id", claims.UserID)
+	}
 	if claims.Name != "" {
 		w.Header().Set("X-Forwarded-User-Name", claims.Name)
 	}
@@ -1474,24 +1539,29 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("authservice: ignoring invite token for email-less %s identity; invite consumption is email-keyed", providerName)
 		inviteToken = ""
 	}
+	var userID string
 	if inviteToken != "" {
 		clearInviteTokenCookie(w, r)
-		if err := consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
+		var err error
+		if userID, err = consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
 			// Token may be expired / exhausted / revoked. Fall back to
 			// identity-upsert so the user still completes login; the access
 			// check on the subsequent verify will bounce them to
 			// request-access instead of breaking the OAuth round-trip.
 			log.Printf("authservice: consume invite (callback, %s, %s): %v; falling back to identity-upsert", providerName, email, err)
-			if err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
+			if userID, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
 				log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 				http.Error(w, "authentication failed", http.StatusInternalServerError)
 				return
 			}
 		}
-	} else if err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
-		log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
-		http.Error(w, "authentication failed", http.StatusInternalServerError)
-		return
+	} else {
+		var err error
+		if userID, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
+			log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
+			http.Error(w, "authentication failed", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Check if this OAuth callback was initiated by the device flow.
@@ -1501,6 +1571,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			if val, ok := deviceFlows.Load(dc); ok {
 				entry := val.(*deviceFlowEntry)
 				entry.Email = email
+				entry.UserID = userID
 				entry.Name = name
 				entry.AvatarURL = avatarURL
 				entry.Provider = providerName
@@ -1517,7 +1588,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signed, err := signForwardJWT(email, name, avatarURL, providerName)
+	signed, err := signForwardJWT(userID, email, name, avatarURL, providerName)
 	if err != nil {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
@@ -1547,7 +1618,8 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 // deviceFlowEntry holds the state of a pending device authorization request.
 type deviceFlowEntry struct {
 	UserCode  string
-	Email     string // populated after OAuth completes
+	Email     string // populated after OAuth completes; empty when the IdP has none
+	UserID    string // muvee-server users.id — the key for an email-less identity
 	Name      string
 	AvatarURL string
 	Provider  string
@@ -1795,7 +1867,7 @@ func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Success — issue a long-lived JWT for CLI use.
-	token, err := signForwardJWTWithExpiry(entry.Email, entry.Name, entry.AvatarURL, entry.Provider, cliTokenExpiry)
+	token, err := signForwardJWTWithExpiry(entry.UserID, entry.Email, entry.Name, entry.AvatarURL, entry.Provider, cliTokenExpiry)
 	if err != nil {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
@@ -2284,8 +2356,8 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func signForwardJWT(email, name, avatarURL, provider string) (string, error) {
-	return signForwardJWTWithExpiry(email, name, avatarURL, provider, 7*24*time.Hour)
+func signForwardJWT(userID, email, name, avatarURL, provider string) (string, error) {
+	return signForwardJWTWithExpiry(userID, email, name, avatarURL, provider, 7*24*time.Hour)
 }
 
 // signForwardPasswordJWT signs a project-scoped session for a demo account.
@@ -2315,9 +2387,10 @@ func signForwardProjectJWT(email, name, avatarURL, provider, projectID string) (
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
 }
 
-func signForwardJWTWithExpiry(email, name, avatarURL, provider string, expiry time.Duration) (string, error) {
+func signForwardJWTWithExpiry(userID, email, name, avatarURL, provider string, expiry time.Duration) (string, error) {
 	claims := authClaims{
 		Email:     email,
+		UserID:    userID,
 		Name:      name,
 		AvatarURL: avatarURL,
 		Provider:  provider,

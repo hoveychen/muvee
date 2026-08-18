@@ -25,6 +25,7 @@ type loginTokenEntry struct {
 	Status       string // "pending" | "success" | "expired" | "error"
 	Error        string // populated when Status == "error"
 	Email        string
+	UserID       string // muvee-server users.id — the key for an email-less identity
 	Name         string
 	AvatarURL    string
 	ProviderName string
@@ -283,7 +284,8 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 		return
 	}
 
-	if err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
+	userID, err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL)
+	if err != nil {
 		log.Printf("authservice: upstream identity upsert (login-token, %s, %s): %v", providerName, email, err)
 		markLoginTokenError(loginToken, "identity sync failed")
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
@@ -291,6 +293,7 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 	}
 
 	entry.Email = email
+	entry.UserID = userID
 	entry.Name = name
 	entry.AvatarURL = avatarURL
 	entry.ProviderName = providerName
@@ -300,7 +303,7 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 	// trip happened in the same browser as the SDK (the common web case), the
 	// SPA gets the cookie automatically and onAuthChange listeners on other
 	// tabs of the same project subdomain will fire too.
-	if signed, err := signForwardJWT(email, name, avatarURL, providerName); err == nil {
+	if signed, err := signForwardJWT(userID, email, name, avatarURL, providerName); err == nil {
 		http.SetCookie(w, &http.Cookie{
 			Name:     "muvee_fwd_session",
 			Value:    signed,
