@@ -66,8 +66,9 @@ func TestHandleInternalAccessCheck_RejectsBadParams(t *testing.T) {
 		wantStatus  int
 	}{
 		{"missing project_id", "?email=u@x.com", http.StatusBadRequest},
-		{"missing email", "?project_id=11111111-1111-1111-1111-111111111111", http.StatusBadRequest},
+		{"missing both email and user_id", "?project_id=11111111-1111-1111-1111-111111111111", http.StatusBadRequest},
 		{"invalid project_id", "?project_id=not-a-uuid&email=u@x.com", http.StatusBadRequest},
+		{"invalid user_id", "?project_id=11111111-1111-1111-1111-111111111111&user_id=not-a-uuid", http.StatusBadRequest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -276,8 +277,10 @@ func TestHandleInternalAuthIdentityUpsert_RejectsBadPayload(t *testing.T) {
 	key := internalAPIKey()
 	s := &Server{}
 
-	// Note: identity-upsert does NOT require a `provider` field (unlike upsert)
-	// because there is no domain check or invite gate to apply.
+	// Note: identity-upsert does NOT require a `provider` field the way upsert
+	// does (there is no domain check or invite gate to apply) — but an
+	// email-less body must carry BOTH provider and provider_user_id, since
+	// that pair is the only other key an identity can be resolved by.
 	cases := []struct {
 		name, body string
 		wantStatus int
@@ -285,6 +288,9 @@ func TestHandleInternalAuthIdentityUpsert_RejectsBadPayload(t *testing.T) {
 		{"invalid json", `{not json`, http.StatusBadRequest},
 		{"missing email", `{}`, http.StatusBadRequest},
 		{"whitespace email", `{"email":"   "}`, http.StatusBadRequest},
+		{"provider without subject", `{"provider":"twitter"}`, http.StatusBadRequest},
+		{"subject without provider", `{"provider_user_id":"12345"}`, http.StatusBadRequest},
+		{"whitespace subject", `{"provider":"twitter","provider_user_id":"  "}`, http.StatusBadRequest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

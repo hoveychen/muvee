@@ -260,8 +260,12 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 	}
 	projectIDStr := r.URL.Query().Get("project_id")
 	email := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("email")))
-	if projectIDStr == "" || email == "" {
-		jsonErr(w, fmt.Errorf("project_id and email are required"), 400)
+	userIDStr := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	// email stays the primary key; user_id is the fallback for downstream
+	// users whose IdP surfaced no address (identity bound on (provider, sub)
+	// in oauth_accounts), so a session must carry at least one of them.
+	if projectIDStr == "" || (email == "" && userIDStr == "") {
+		jsonErr(w, fmt.Errorf("project_id and one of email or user_id are required"), 400)
 		return
 	}
 	projectID, err := uuid.Parse(projectIDStr)
@@ -269,7 +273,17 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, fmt.Errorf("invalid project_id"), 400)
 		return
 	}
-	res, err := s.store.IsProjectAccessAllowedByEmail(r.Context(), email, projectID)
+	var res store.AccessCheckResult
+	if email != "" {
+		res, err = s.store.IsProjectAccessAllowedByEmail(r.Context(), email, projectID)
+	} else {
+		userID, perr := uuid.Parse(userIDStr)
+		if perr != nil {
+			jsonErr(w, fmt.Errorf("invalid user_id"), 400)
+			return
+		}
+		res, err = s.store.IsProjectAccessAllowedByUserID(r.Context(), userID, projectID)
+	}
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
@@ -551,6 +565,14 @@ func (s *Server) handleInternalAuthUpsert(w http.ResponseWriter, r *http.Request
 // projects have their own AuthAllowedDomains and ACL list and should not be
 // blocked by either.
 //
+// The identity may be keyed either way: `email` takes precedence when the IdP
+// surfaced one (so the user keeps matching a project's auth_allowed_domains
+// whitelist and any pre-existing email-keyed row), and (`provider`,
+// `provider_user_id`) is the fallback for IdPs that surface no address —
+// Twitter/X, Discord without the email scope, Apple Hide-My-Email. The latter
+// lands in oauth_accounts with users.email left NULL, so such a user can only
+// reach a private project through an explicit project_access_users grant.
+//
 // Authenticated via X-Muvee-Internal-Key. Errors map: 401 (key), 400
 // (payload), 500 otherwise. Unlike upsert, this endpoint never returns 403 /
 // not_invited because the invite gate does not apply.
@@ -562,20 +584,31 @@ func (s *Server) handleInternalAuthIdentityUpsert(w http.ResponseWriter, r *http
 		return
 	}
 	var body struct {
-		Email     string `json:"email"`
-		Name      string `json:"name"`
-		AvatarURL string `json:"avatar_url"`
+		Email          string `json:"email"`
+		Name           string `json:"name"`
+		AvatarURL      string `json:"avatar_url"`
+		Provider       string `json:"provider"`
+		ProviderUserID string `json:"provider_user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, fmt.Errorf("invalid json: %w", err), http.StatusBadRequest)
 		return
 	}
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
-	if body.Email == "" {
-		jsonErr(w, fmt.Errorf("email is required"), http.StatusBadRequest)
+	body.Provider = strings.TrimSpace(body.Provider)
+	body.ProviderUserID = strings.TrimSpace(body.ProviderUserID)
+	subjectKeyed := body.Provider != "" && body.ProviderUserID != ""
+	if body.Email == "" && !subjectKeyed {
+		jsonErr(w, fmt.Errorf("email, or both provider and provider_user_id, are required"), http.StatusBadRequest)
 		return
 	}
-	user, err := s.auth.EnsureIdentity(r.Context(), body.Email, body.Name, body.AvatarURL)
+	var user *store.User
+	var err error
+	if body.Email != "" {
+		user, err = s.auth.EnsureIdentity(r.Context(), body.Email, body.Name, body.AvatarURL)
+	} else {
+		user, err = s.auth.EnsureIdentityFromOAuth(r.Context(), body.Provider, body.ProviderUserID, body.Name, body.AvatarURL)
+	}
 	if err != nil {
 		jsonErr(w, err, http.StatusInternalServerError)
 		return
