@@ -353,6 +353,18 @@ export interface SystemSettings {
   apple_team_id?: string
   apple_key_id?: string
   apple_private_key_p8?: string
+  // ─── Microsoft Entra ID (OIDC + OAuth2 authorization code flow) ───────
+  // The only provider wired into BOTH planes from one credential set:
+  // entra_enabled exposes it on project subdomains, and
+  // platform_entra_login_enabled on the muvee platform login page. Register
+  // both redirect URIs on the same Azure app registration. entra_tenant_id is
+  // a directory GUID (strictest), a verified domain, or
+  // common/organizations/consumers.
+  entra_enabled?: string
+  entra_tenant_id?: string
+  entra_client_id?: string
+  entra_client_secret?: string
+  platform_entra_login_enabled?: string
   // ─── Phone / SMS login (Aliyun PNVS 号码认证服务) ─────────────────────
   // Configured via /admin/settings, read settings-first with ALIYUN_SMS_*
   // env fallback by the server. platform_phone_login_enabled is 'true'|'false'.
