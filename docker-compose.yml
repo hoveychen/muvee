@@ -22,6 +22,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: muvee
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-muvee}
@@ -38,6 +39,7 @@ services:
 
   registry:
     image: registry:2
+    restart: unless-stopped
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
       REGISTRY_AUTH: htpasswd
@@ -151,6 +153,7 @@ services:
   muvee-authservice:
     image: ghcr.io/hoveychen/muvee:latest
     command: ["authservice"]
+    restart: unless-stopped
     env_file:
       - .proxy.env
     environment:
@@ -198,6 +201,7 @@ services:
     command:
       - "--configFile=/etc/traefik/traefik.yml"
       - "--certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+    restart: unless-stopped
     depends_on:
       muvee-server:
         condition: service_healthy
