@@ -564,7 +564,13 @@ func (s *Server) handleInternalAuthUpsert(w http.ResponseWriter, r *http.Request
 		return
 	}
 	jsonOK(w, map[string]interface{}{
-		"user_id":    user.ID.String(),
+		"user_id": user.ID.String(),
+		// The stored avatar, which is not necessarily the one the caller sent:
+		// an inlined data URI has been materialised into a URL, and an admin
+		// override (users.avatar_overridden) wins over the provider's value
+		// entirely. authservice signs its session with this, so the two planes
+		// agree on what the user's avatar is.
+		"avatar_url": user.AvatarURL,
 		"role":       string(user.Role),
 		"authorized": user.Authorized,
 	})
@@ -629,6 +635,10 @@ func (s *Server) handleInternalAuthIdentityUpsert(w http.ResponseWriter, r *http
 	}
 	jsonOK(w, map[string]interface{}{
 		"user_id": user.ID.String(),
+		// See handleInternalAuthUpsert: the stored avatar, post-materialisation
+		// and post-admin-override, which is what authservice puts in the
+		// session rather than the value it sent up.
+		"avatar_url": user.AvatarURL,
 	})
 }
 
