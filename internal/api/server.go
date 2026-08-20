@@ -898,6 +898,9 @@ func (s *Server) Router() http.Handler {
 
 	// Public branding assets (uploaded logo/favicon) – no auth required
 	r.Get("/api/public/branding/{filename}", s.handleServeBranding)
+	// Public avatar files (materialised from providers that inline the image,
+	// i.e. Entra) – no auth required, loaded by <img> on project subdomains
+	r.Get("/api/public/avatars/{filename}", s.handleServeAvatar)
 
 	// Git Smart HTTP protocol – uses its own Basic Auth (API tokens)
 	if s.gitRepoBasePath != "" {
