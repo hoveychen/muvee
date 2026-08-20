@@ -2417,6 +2417,38 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxCookieAvatarBytes caps the avatar string that may ride inside a session
+// JWT. Ordinary provider avatars are https URLs of a few hundred bytes and fit
+// with room to spare; the case this exists for is Microsoft Entra, whose ID
+// tokens carry no `picture` claim — internal/auth/entra.go therefore inlines
+// the Microsoft Graph profile photo as a base64 data URI (2-8 KB at the 96x96
+// size it requests, up to a 256 KB ceiling).
+//
+// Such a value cannot survive the trip into a cookie: base64 has already
+// inflated the photo by 4/3, the JWT payload encoding inflates it by 4/3
+// again, and every major browser drops a Set-Cookie whose name=value exceeds
+// 4096 bytes *silently*. The login then "succeeds" while no session sticks,
+// and the project subdomain bounces the user back to the login page forever.
+// Measured with avatar_cookie_size_test.go: a 4 KB photo yields a 7.6 KB
+// cookie, an 8 KB photo 14.9 KB.
+//
+// 2048 bytes keeps ~1 KB of headroom under the limit for a long email, display
+// name, user id and the JWT envelope, while admitting every URL-shaped avatar
+// untouched.
+const maxCookieAvatarBytes = 2048
+
+// cookieSafeAvatar returns avatarURL unchanged when it fits the session-cookie
+// budget, or "" when it does not. Dropping the avatar degrades the profile chip
+// to initials; keeping it would drop the entire session.
+func cookieSafeAvatar(avatarURL string) string {
+	if len(avatarURL) <= maxCookieAvatarBytes {
+		return avatarURL
+	}
+	log.Printf("authservice: avatar of %d bytes exceeds the %d byte session-cookie budget; signing the session without it",
+		len(avatarURL), maxCookieAvatarBytes)
+	return ""
+}
+
 func signForwardJWT(userID, email, name, avatarURL, provider string) (string, error) {
 	return signForwardJWTWithExpiry(userID, email, name, avatarURL, provider, 7*24*time.Hour)
 }
@@ -2438,7 +2470,7 @@ func signForwardProjectJWT(email, name, avatarURL, provider, projectID string) (
 	claims := authClaims{
 		Email:     email,
 		Name:      name,
-		AvatarURL: avatarURL,
+		AvatarURL: cookieSafeAvatar(avatarURL),
 		Provider:  provider,
 		ProjectID: projectID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -2453,7 +2485,7 @@ func signForwardJWTWithExpiry(userID, email, name, avatarURL, provider string, e
 		Email:     email,
 		UserID:    userID,
 		Name:      name,
-		AvatarURL: avatarURL,
+		AvatarURL: cookieSafeAvatar(avatarURL),
 		Provider:  provider,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
