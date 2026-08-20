@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.7.0">
 <title data-rh="true">Microsoft Entra ID | muvee</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://hoveychen.github.io/muvee/docs/auth/auth-entra"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" property="og:locale:alternate" content="zh"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Microsoft Entra ID | muvee"><meta data-rh="true" name="description" content="muvee supports Microsoft Entra ID (formerly Azure AD) via OpenID Connect on top of the"><meta data-rh="true" property="og:description" content="muvee supports Microsoft Entra ID (formerly Azure AD) via OpenID Connect on top of the"><link data-rh="true" rel="icon" href="/muvee/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://hoveychen.github.io/muvee/docs/auth/auth-entra"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/auth/auth-entra" hreflang="en"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/zh/docs/auth/auth-entra" hreflang="zh"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/auth/auth-entra" hreflang="x-default"><link rel="stylesheet" href="/muvee/assets/css/styles.57b27fd8.css">
-<script src="/muvee/assets/js/runtime~main.5203b7c9.js" defer="defer"></script>
+<script src="/muvee/assets/js/runtime~main.6d950c8e.js" defer="defer"></script>
 <script src="/muvee/assets/js/main.c3e80161.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
@@ -76,7 +76,20 @@ user, muvee falls back to the UPN in <code>preferred_username</code>.</p>
 <p>Entra v2.0 ID tokens carry no <code>picture</code> claim, and Graph profile photos sit behind a bearer token
 rather than a public URL. So when <strong>Fetch profile photos</strong> is on (the default), muvee adds the
 delegated Graph scope <code>User.Read</code> to the login request and, right after the token exchange, reads
-<code>GET /me/photos/96x96/$value</code> and stores the image inline as a <code>data:</code> URI on the user record.</p>
+<code>GET /me/photos/96x96/$value</code>.</p>
+<p>Those bytes then get written to disk and the user record stores an ordinary URL
+(<code>https://&lt;base-domain&gt;/api/public/avatars/avatar-&lt;hash&gt;.jpg</code>), so an Entra avatar behaves exactly
+like Google&#x27;s <code>picture</code> or Lark&#x27;s <code>avatar_url</code> everywhere downstream. The file lives in the branding
+asset volume (<code>BRANDING_DIR</code>, default <code>/data/branding</code>) under <code>avatars/</code>, is named by content hash —
+so repeat logins reuse one file — and is served publicly and cached immutably, because the <code>&lt;img&gt;</code>
+tags loading it sit on project subdomains and carry no credentials.</p>
+<div class="theme-admonition theme-admonition-note admonition_zXND alert alert--secondary"><div class="admonitionHeading_u97s"><span class="admonitionIcon_sztC"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Why not keep the image inline</div><div class="admonitionContent_UCFT"><p>An earlier build stored the photo as a <code>data:</code> URI on the user record. That value also travelled into
+the forward-auth session JWT, and a 2-8 KB photo becomes a 4-15 KB cookie once base64 and the JWT
+envelope have each inflated it by 4/3 — past the 4096-byte limit every browser enforces. Browsers drop
+an oversized cookie <em>silently</em>, so the login appeared to succeed while no session stuck and the project
+subdomain bounced the user back to the login page indefinitely.</p><p>Existing users still holding an inline <code>data:</code> URI are migrated lazily — the next sign-in replaces it.
+A session is never signed with an avatar over 2048 bytes regardless, which is the backstop for a
+deployment with no asset storage configured.</p></div></div>
 <p>It is best-effort: a user with no photo (Graph answers <code>404</code>), a slow Graph, or a missing consent all
 degrade to an empty avatar and never fail the login. Turning the option off drops <code>User.Read</code> from the
 authorize request entirely, which is what you want in a tenant that withholds consent for it.</p>
