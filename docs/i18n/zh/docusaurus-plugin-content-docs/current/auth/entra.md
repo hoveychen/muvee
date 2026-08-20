@@ -99,7 +99,23 @@ muvee 支持通过 **OpenID Connect** + **OAuth 2.0 授权码流**接入 Microso
 
 Entra v2.0 的 ID token **没有** `picture` claim，而 Graph 的头像接口需要 bearer token、没有公开 URL。
 所以当 **Fetch profile photos** 开启时（默认开），muvee 会在登录请求里追加 Graph 的委派权限
-`User.Read`，并在换取 token 之后立刻读 `GET /me/photos/96x96/$value`，把图片以 `data:` URI 内联存到用户记录上。
+`User.Read`，并在换取 token 之后立刻读 `GET /me/photos/96x96/$value`。
+
+拿到的字节会落盘，用户记录里存的是一个普通 URL
+（`https://<base-domain>/api/public/avatars/avatar-<hash>.jpg`），所以 Entra 头像在下游各处的行为
+与 Google 的 `picture`、Lark 的 `avatar_url` 完全一致。文件存在 branding 资产卷
+（`BRANDING_DIR`，默认 `/data/branding`）的 `avatars/` 子目录下，按内容哈希命名（重复登录复用同一个
+文件），公开可访问且长期缓存——因为加载它的 `<img>` 位于项目子域、不带任何凭据。
+
+:::note 为什么不再内联存图
+早先的版本把照片以 `data:` URI 存在用户记录上。这个值同时会进 forward-auth 的 session JWT，而
+2–8KB 的照片经 base64 和 JWT 信封各放大 4/3 之后会变成 4–15KB 的 cookie，超过浏览器统一的 4096 字节
+上限。浏览器丢弃超大 cookie 是**静默**的，于是登录看起来成功、实际没有任何会话保留下来，项目子域会
+无限把用户弹回登录页。
+
+存量的内联 `data:` URI 走**懒迁移**——用户下次登录时自动替换。另外无论如何，超过 2048 字节的头像都不会
+被签进会话，这是没有配置资产存储时的兜底。
+:::
 
 这是 best-effort：用户没设过头像（Graph 返回 `404`）、Graph 慢、或者缺少授权，都只会让头像为空，
 **绝不会导致登录失败**。关掉这个开关会把 `User.Read` 从授权请求里彻底去掉——租户不给该 scope 授权时就该这么做。

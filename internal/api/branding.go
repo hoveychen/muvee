@@ -104,7 +104,7 @@ func (s *Server) handleServeBranding(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
 
 	// Sanitize: only allow simple filenames, no path traversal
-	if filename == "" || strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+	if !safeAssetFilename(filename) {
 		http.NotFound(w, r)
 		return
 	}

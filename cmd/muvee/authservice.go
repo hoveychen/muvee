@@ -347,7 +347,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	if inviteToken != "" {
 		switch {
 		case claims.Email != "":
-			if _, err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
+			if _, _, err := consumeInviteUpstream(r.Context(), claims.Provider, claims.Email, claims.Name, claims.AvatarURL, inviteToken); err != nil {
 				log.Printf("authservice: consume invite (authed, email=%s): %v", claims.Email, err)
 			}
 		case claims.UserID != "":
@@ -418,8 +418,12 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 //
 // Returns the users.id the server resolved the identity to, which the caller
 // bakes into the session so later access checks have a key even when there is
-// no email.
-func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email, name, avatarURL string) (string, error) {
+// no email, plus the avatar the server actually stored. The stored avatar can
+// differ from the one sent up: a provider that inlines its image (Entra) has
+// its data URI materialised into a URL server-side, and an admin override wins
+// over the provider's value. Signing the session with the returned value is
+// what keeps a multi-kilobyte data URI out of the session cookie.
+func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email, name, avatarURL string) (string, string, error) {
 	body, err := json.Marshal(map[string]string{
 		"email":            email,
 		"name":             name,
@@ -428,31 +432,32 @@ func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email
 		"provider_user_id": providerUserID,
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		muveeServerURL+"/api/internal/auth/identity-upsert",
 		strings.NewReader(string(body)))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Muvee-Internal-Key", internalKey)
 	resp, err := internalClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("upstream identity upsert returned %d", resp.StatusCode)
+		return "", "", fmt.Errorf("upstream identity upsert returned %d", resp.StatusCode)
 	}
 	var out struct {
-		UserID string `json:"user_id"`
+		UserID    string `json:"user_id"`
+		AvatarURL string `json:"avatar_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode identity upsert response: %w", err)
+		return "", "", fmt.Errorf("decode identity upsert response: %w", err)
 	}
-	return out.UserID, nil
+	return out.UserID, out.AvatarURL, nil
 }
 
 // inviteTokenCookieName is the short-lived cookie that carries the value of
@@ -504,10 +509,11 @@ func clearInviteTokenCookie(w http.ResponseWriter, r *http.Request) {
 // link use and add the user to project_access_users (see auth.go). Used in
 // two contexts: the authed-already path in handleVerify, and the post-OAuth
 // callback path when the cookie was set by an earlier verify hop.
-// Like upsertUserUpstream it returns the resolved users.id, so a session
-// created through the invite path carries the same key as one created through
-// the plain identity path.
-func consumeInviteUpstream(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (string, error) {
+// Like upsertUserUpstream it returns the resolved users.id and the avatar the
+// server actually stored, so a session created through the invite path carries
+// the same key and the same avatar as one created through the plain identity
+// path.
+func consumeInviteUpstream(ctx context.Context, providerName, email, name, avatarURL, inviteToken string) (string, string, error) {
 	body, err := json.Marshal(map[string]string{
 		"email":        email,
 		"name":         name,
@@ -516,31 +522,32 @@ func consumeInviteUpstream(ctx context.Context, providerName, email, name, avata
 		"invite_token": inviteToken,
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		muveeServerURL+"/api/internal/auth/upsert",
 		strings.NewReader(string(body)))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Muvee-Internal-Key", internalKey)
 	resp, err := internalClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("upstream auth/upsert returned %d", resp.StatusCode)
+		return "", "", fmt.Errorf("upstream auth/upsert returned %d", resp.StatusCode)
 	}
 	var out struct {
-		UserID string `json:"user_id"`
+		UserID    string `json:"user_id"`
+		AvatarURL string `json:"avatar_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode auth/upsert response: %w", err)
+		return "", "", fmt.Errorf("decode auth/upsert response: %w", err)
 	}
-	return out.UserID, nil
+	return out.UserID, out.AvatarURL, nil
 }
 
 // consumeProjectInviteUpstream is the email-less counterpart of
@@ -1587,18 +1594,23 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(inviteTokenCookieName); err == nil {
 		inviteToken = c.Value
 	}
-	var userID string
+	// storedAvatar is what muvee-server persisted, which is what the session is
+	// signed with: an Entra data URI has been materialised into a short URL
+	// there, and signing with the raw inlined image would blow past the cookie
+	// size limit. Empty (an upsert that answered without one) leaves the
+	// provider's own value in place.
+	var userID, storedAvatar string
 	switch {
 	case inviteToken != "" && email != "":
 		clearInviteTokenCookie(w, r)
 		var err error
-		if userID, err = consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
+		if userID, storedAvatar, err = consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
 			// Token may be expired / exhausted / revoked. Fall back to
 			// identity-upsert so the user still completes login; the access
 			// check on the subsequent verify will bounce them to
 			// request-access instead of breaking the OAuth round-trip.
 			log.Printf("authservice: consume invite (callback, %s, %s): %v; falling back to identity-upsert", providerName, email, err)
-			if userID, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
+			if userID, storedAvatar, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
 				log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 				http.Error(w, "authentication failed", http.StatusInternalServerError)
 				return
@@ -1606,7 +1618,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	default:
 		var err error
-		if userID, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
+		if userID, storedAvatar, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
 			log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
 			http.Error(w, "authentication failed", http.StatusInternalServerError)
 			return
@@ -1620,6 +1632,10 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 				log.Printf("authservice: consume project invite (callback, %s, user_id=%s): %v", providerName, userID, err)
 			}
 		}
+	}
+
+	if storedAvatar != "" {
+		avatarURL = storedAvatar
 	}
 
 	// Check if this OAuth callback was initiated by the device flow.

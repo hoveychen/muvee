@@ -285,12 +285,18 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 		return
 	}
 
-	userID, err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL)
+	userID, storedAvatar, err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL)
 	if err != nil {
 		log.Printf("authservice: upstream identity upsert (login-token, %s, %s): %v", providerName, email, err)
 		markLoginTokenError(loginToken, "identity sync failed")
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return
+	}
+	// Prefer the avatar muvee-server stored: for a provider that inlines its
+	// image (Entra) that is a short URL rather than the multi-kilobyte data URI
+	// we sent up, which is what keeps it inside the session cookie.
+	if storedAvatar != "" {
+		avatarURL = storedAvatar
 	}
 
 	entry.Email = email

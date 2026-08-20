@@ -109,7 +109,26 @@ user, muvee falls back to the UPN in `preferred_username`.
 Entra v2.0 ID tokens carry no `picture` claim, and Graph profile photos sit behind a bearer token
 rather than a public URL. So when **Fetch profile photos** is on (the default), muvee adds the
 delegated Graph scope `User.Read` to the login request and, right after the token exchange, reads
-`GET /me/photos/96x96/$value` and stores the image inline as a `data:` URI on the user record.
+`GET /me/photos/96x96/$value`.
+
+Those bytes then get written to disk and the user record stores an ordinary URL
+(`https://<base-domain>/api/public/avatars/avatar-<hash>.jpg`), so an Entra avatar behaves exactly
+like Google's `picture` or Lark's `avatar_url` everywhere downstream. The file lives in the branding
+asset volume (`BRANDING_DIR`, default `/data/branding`) under `avatars/`, is named by content hash —
+so repeat logins reuse one file — and is served publicly and cached immutably, because the `<img>`
+tags loading it sit on project subdomains and carry no credentials.
+
+:::note Why not keep the image inline
+An earlier build stored the photo as a `data:` URI on the user record. That value also travelled into
+the forward-auth session JWT, and a 2-8 KB photo becomes a 4-15 KB cookie once base64 and the JWT
+envelope have each inflated it by 4/3 — past the 4096-byte limit every browser enforces. Browsers drop
+an oversized cookie *silently*, so the login appeared to succeed while no session stuck and the project
+subdomain bounced the user back to the login page indefinitely.
+
+Existing users still holding an inline `data:` URI are migrated lazily — the next sign-in replaces it.
+A session is never signed with an avatar over 2048 bytes regardless, which is the backstop for a
+deployment with no asset storage configured.
+:::
 
 It is best-effort: a user with no photo (Graph answers `404`), a slow Graph, or a missing consent all
 degrade to an empty avatar and never fail the login. Turning the option off drops `User.Read` from the
