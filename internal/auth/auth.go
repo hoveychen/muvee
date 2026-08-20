@@ -28,6 +28,32 @@ type Service struct {
 	allowedDomains []string
 	adminEmails    map[string]struct{}
 	store          *store.Store
+
+	// avatarMaterializer converts an avatar that arrived as an inlined image
+	// (an Entra Graph photo, base64 in a data URI) into a stored file plus an
+	// ordinary URL. Installed once at boot by cmd/muvee — the implementation
+	// lives in internal/api because it needs the asset directory and the base
+	// domain — and read-only afterwards, so it needs no locking. nil means
+	// "leave avatars exactly as the provider returned them", which is what the
+	// authservice process does: it has no asset storage of its own and gets the
+	// materialised URL back from muvee-server instead.
+	avatarMaterializer func(string) string
+}
+
+// SetAvatarMaterializer installs the avatar materialisation hook. Call it
+// before serving traffic; it is not safe to change concurrently with logins.
+func (s *Service) SetAvatarMaterializer(fn func(string) string) {
+	s.avatarMaterializer = fn
+}
+
+// materializeAvatar routes an avatar through the materialiser when one is
+// installed. Every identity write goes through here, so a provider that inlines
+// its avatar never reaches the database — or a session cookie — as raw bytes.
+func (s *Service) materializeAvatar(avatarURL string) string {
+	if s.avatarMaterializer == nil || avatarURL == "" {
+		return avatarURL
+	}
+	return s.avatarMaterializer(avatarURL)
 }
 
 type Claims struct {
@@ -401,7 +427,7 @@ func (s *Service) EnsureIdentity(ctx context.Context, email, name, avatarURL str
 	// real authorization signal lives in platform_members and is set by
 	// EnsurePlatformMember. Pass TRUE so existing UpsertUser SQL keeps
 	// satisfying the NOT NULL constraint without flagging anything new.
-	user, _, err := s.store.UpsertUser(ctx, email, name, avatarURL, true)
+	user, _, err := s.store.UpsertUser(ctx, email, name, s.materializeAvatar(avatarURL), true)
 	if err != nil {
 		return nil, fmt.Errorf("upsert user: %w", err)
 	}
@@ -421,7 +447,7 @@ func (s *Service) EnsureIdentity(ctx context.Context, email, name, avatarURL str
 // ForwardAuth handler when the provider is one of the configured social
 // providers.
 func (s *Service) EnsureIdentityFromOAuth(ctx context.Context, providerName, providerUserID, name, avatarURL string) (*store.User, error) {
-	user, _, err := s.store.EnsureUserByOAuth(ctx, providerName, providerUserID, name, avatarURL)
+	user, _, err := s.store.EnsureUserByOAuth(ctx, providerName, providerUserID, name, s.materializeAvatar(avatarURL))
 	if err != nil {
 		return nil, fmt.Errorf("ensure user by oauth: %w", err)
 	}

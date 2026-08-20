@@ -135,6 +135,14 @@ func runServer() {
 		ACMEStoragePath:    os.Getenv("ACME_STORAGE_PATH"),
 		ServerVersion:      version,
 	})
+	// Providers that inline their avatar instead of returning a URL (Entra,
+	// whose ID tokens have no `picture` claim) hand over a base64 data URI.
+	// Route every identity write through the server's materialiser so what
+	// lands in the database — and in the forward-auth session cookie — is an
+	// ordinary URL. Installed here because the implementation needs the asset
+	// directory and base domain that only the API server knows.
+	authSvc.SetAvatarMaterializer(srv.MaterializeAvatar)
+
 	handler := srv.TunnelAwareHandler(mountFrontend(srv.Router()))
 	srv.StartBackgroundWorkers(ctx)
 
