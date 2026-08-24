@@ -18,8 +18,10 @@
 package embed_bridge
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -80,9 +82,17 @@ func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	// 2. All other requests: capture downstream response and, if HTML,
-	//    splice in the script tag.
+	//    splice in the script tag. The recorder only buffers once it has seen
+	//    a text/html Content-Type; anything else streams straight through (see
+	//    responseRecorder.WriteHeader).
 	rec := newResponseRecorder(rw)
 	e.next.ServeHTTP(rec, req)
+
+	// The response was streamed to the client as it arrived — nothing left
+	// to splice or flush.
+	if rec.passthrough {
+		return
+	}
 
 	contentType := rec.Header().Get("Content-Type")
 	if !strings.Contains(strings.ToLower(contentType), "text/html") {
@@ -137,14 +147,27 @@ func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 // responseRecorder buffers the downstream response so the middleware can
-// decide post-hoc whether to splice. We don't stream — splicing requires
-// finding `</head>` which may straddle chunk boundaries — but HTML pages
-// being iframed are typically <100 KB so memorising in full is fine.
+// decide post-hoc whether to splice. Splicing requires finding `</head>`,
+// which may straddle chunk boundaries, so an HTML body has to be held in full
+// — iframed pages are typically <100 KB, which is fine to memorise.
+//
+// Everything else must NOT be held. The Content-Type is known as soon as the
+// handler calls WriteHeader, so at that point a non-HTML response switches to
+// passthrough: headers go out immediately and every subsequent Write lands on
+// the real ResponseWriter. Without this, a long-lived stream (SSE, chunked
+// NDJSON) is buffered until the handler returns — which for an endless stream
+// never happens, so the client receives nothing at all. It also kept every
+// large download in memory for the duration of the response.
 type responseRecorder struct {
 	wrapped    http.ResponseWriter
 	headers    http.Header
 	body       *bytes.Buffer
 	statusCode int
+	// passthrough is set once we know the response is not text/html; from
+	// then on the recorder is a thin forwarder to wrapped.
+	passthrough bool
+	// wroteHeader guards the one-shot decision in WriteHeader.
+	wroteHeader bool
 }
 
 func newResponseRecorder(wrapped http.ResponseWriter) *responseRecorder {
@@ -158,11 +181,78 @@ func newResponseRecorder(wrapped http.ResponseWriter) *responseRecorder {
 func (r *responseRecorder) Header() http.Header { return r.headers }
 
 func (r *responseRecorder) WriteHeader(statusCode int) {
+	if r.wroteHeader {
+		return
+	}
+	r.wroteHeader = true
 	r.statusCode = statusCode
+
+	// Only a text/html body can be spliced, so only that one needs buffering.
+	// Note an absent Content-Type also lands here and streams through — which
+	// matches the pre-existing behaviour, since the splice below likewise only
+	// fired on an explicit text/html.
+	if strings.Contains(strings.ToLower(r.headers.Get("Content-Type")), "text/html") {
+		return
+	}
+
+	r.passthrough = true
+	for k, vs := range r.headers {
+		for _, v := range vs {
+			r.wrapped.Header().Add(k, v)
+		}
+	}
+	r.wrapped.WriteHeader(statusCode)
+	// Commit the header line immediately — an SSE client waits on the response
+	// headers before it will report the stream as open.
+	r.flushWrapped()
 }
 
 func (r *responseRecorder) Write(b []byte) (int, error) {
+	// net/http semantics: the first Write implies WriteHeader(200). Run the
+	// same decision so a handler that never calls WriteHeader still streams.
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	if r.passthrough {
+		n, err := r.wrapped.Write(b)
+		// Push the chunk out now instead of waiting to be asked. Traefik's
+		// reverse proxy drives streaming by type-asserting http.Flusher on the
+		// ResponseWriter it was handed — but this plugin is interpreted by
+		// yaegi, whose shim around the recorder exposes only Header/Write/
+		// WriteHeader. Our Flush method is invisible from there, so nothing
+		// downstream will ever flush and the chunk would sit in net/http's
+		// 4 KB buffer until the handler returns. For SSE that is never.
+		r.flushWrapped()
+		return n, err
+	}
 	return r.body.Write(b)
+}
+
+// flushWrapped flushes the real ResponseWriter when it supports it.
+func (r *responseRecorder) flushWrapped() {
+	if f, ok := r.wrapped.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Flush forwards to the real ResponseWriter once streaming, so an SSE handler
+// can push each event as it is produced. While buffering an HTML body there is
+// nothing to flush yet.
+func (r *responseRecorder) Flush() {
+	if !r.passthrough {
+		return
+	}
+	r.flushWrapped()
+}
+
+// Hijack forwards to the real ResponseWriter. A handler may take over the
+// connection before writing anything (h2c, a nested proxy), at which point the
+// recorder is still in the chain and must not swallow the capability.
+func (r *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := r.wrapped.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
 
 // flush copies the captured response unchanged to the real ResponseWriter.

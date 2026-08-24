@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // hijackableRecorder is a minimal ResponseWriter that ALSO implements
@@ -254,6 +256,202 @@ func TestPOSTToScriptPathFallsThrough(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/_embed-bridge.js", nil))
 	if !called {
 		t.Errorf("POST to script path must reach downstream")
+	}
+}
+
+// streamProbe is a ResponseWriter that reports the moment the first body byte
+// reaches it, so a test can distinguish "streamed" from "buffered until the
+// downstream handler returns" without racing on an httptest.ResponseRecorder.
+type streamProbe struct {
+	hdr     http.Header
+	mu      sync.Mutex
+	body    strings.Builder
+	status  int
+	flushes int
+	written chan struct{}
+	once    sync.Once
+}
+
+func newStreamProbe() *streamProbe {
+	return &streamProbe{hdr: make(http.Header), written: make(chan struct{})}
+}
+
+func (s *streamProbe) Header() http.Header { return s.hdr }
+
+func (s *streamProbe) WriteHeader(code int) {
+	s.mu.Lock()
+	s.status = code
+	s.mu.Unlock()
+}
+
+func (s *streamProbe) Write(b []byte) (int, error) {
+	s.mu.Lock()
+	n, err := s.body.Write(b)
+	s.mu.Unlock()
+	s.once.Do(func() { close(s.written) })
+	return n, err
+}
+
+func (s *streamProbe) Flush() {
+	s.mu.Lock()
+	s.flushes++
+	s.mu.Unlock()
+}
+
+func (s *streamProbe) flushCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushes
+}
+
+func (s *streamProbe) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.body.String()
+}
+
+func (s *streamProbe) statusCode() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.status
+}
+
+// TestStreamingResponseIsNotBuffered is the regression for the fleet-cloud
+// "SSE returns 0 bytes through the muvee edge" symptom. The plugin only
+// bypassed its buffering responseRecorder when the *request* carried an
+// Upgrade header. SSE (and any other long-lived stream) carries no such
+// header, so the recorder soaked up the whole response and only flushed once
+// next.ServeHTTP returned — which for an endless stream is never. Verified
+// against fleet-cloud.muveeai.com/events: 0 bytes in 8s through the edge,
+// immediate ": connected" from inside the container.
+//
+// A non-HTML response must therefore reach the client while the downstream
+// handler is still running, and must keep its http.Flusher.
+func TestStreamingResponseIsNotBuffered(t *testing.T) {
+	release := make(chan struct{})
+	sawFlusher := make(chan bool, 1)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, ": connected\n\n")
+		f, ok := w.(http.Flusher)
+		sawFlusher <- ok
+		if ok {
+			f.Flush()
+		}
+		<-release // long-lived stream: the handler has NOT returned yet
+	})
+
+	h := newPlugin(t, next)
+	probe := newStreamProbe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/events", nil))
+	}()
+
+	select {
+	case <-probe.written:
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-done
+		t.Fatal("no body byte reached the client while the stream was open: " +
+			"the response is being buffered, which breaks SSE")
+	}
+
+	if !<-sawFlusher {
+		t.Error("downstream lost http.Flusher; a streaming handler cannot push")
+	}
+	if got := probe.statusCode(); got != http.StatusOK {
+		t.Errorf("status: got %d want 200", got)
+	}
+	if got := probe.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Errorf("Content-Type not forwarded to client: got %q", got)
+	}
+	if got := probe.String(); !strings.Contains(got, ": connected") {
+		t.Errorf("streamed body missing: %q", got)
+	}
+
+	close(release)
+	<-done
+}
+
+// TestStreamingFlushesWithoutDownstreamFlush is the second half of the SSE
+// regression, and the one a compiled-Go unit test alone would have missed.
+//
+// This plugin is interpreted by yaegi inside Traefik. When the recorder is
+// handed to the compiled downstream handler, yaegi wraps it in a shim that
+// exposes only Header/Write/WriteHeader — the plugin's own Flush method is NOT
+// visible across that boundary. So Traefik's reverse proxy, which drives
+// streaming by type-asserting http.Flusher on the ResponseWriter it was given,
+// never finds one and never flushes. The bytes then sit in net/http's 4 KB
+// response buffer and an SSE client sees nothing.
+//
+// Verified against a real traefik:v3.6.1 + yaegi harness: forwarding writes
+// without self-flushing still produced 0 bytes for /events.
+//
+// The middleware must therefore flush the real ResponseWriter itself on every
+// passthrough write, rather than waiting to be asked.
+func TestStreamingFlushesWithoutDownstreamFlush(t *testing.T) {
+	release := make(chan struct{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// Deliberately never calls Flush — mirrors the yaegi boundary where
+		// the downstream cannot see the plugin's Flusher.
+		io.WriteString(w, ": connected\n\n")
+		<-release
+	})
+
+	h := newPlugin(t, next)
+	probe := newStreamProbe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/events", nil))
+	}()
+
+	select {
+	case <-probe.written:
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-done
+		t.Fatal("nothing reached the client while the stream was open")
+	}
+
+	// Give the middleware a moment to have issued its flush alongside the write.
+	deadline := time.Now().Add(2 * time.Second)
+	for probe.flushCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if probe.flushCount() == 0 {
+		close(release)
+		<-done
+		t.Fatal("middleware forwarded the write but never flushed the real " +
+			"ResponseWriter; under yaegi the chunk stalls in net/http's buffer")
+	}
+
+	close(release)
+	<-done
+}
+
+// TestBufferingRecorderPreservesHijacker covers a handler that hijacks before
+// writing anything: the recorder is still in place at that point (the
+// content-type is unknown until WriteHeader), so it must forward Hijack to
+// the real ResponseWriter rather than swallow the capability.
+func TestBufferingRecorderPreservesHijacker(t *testing.T) {
+	var gotHijacker bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, gotHijacker = w.(http.Hijacker)
+	})
+	h := newPlugin(t, next)
+
+	rw := &hijackableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	h.ServeHTTP(rw, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if !gotHijacker {
+		t.Error("downstream lost http.Hijacker on a non-Upgrade request")
 	}
 }
 
