@@ -1,6 +1,10 @@
+# The dashboard is reached through the authenticated `traefik-dashboard`
+# router in docker-compose.server.yml, which points at the `api@internal`
+# service behind muvee-forward-auth-admin. Do NOT add `insecure: true` here —
+# that serves the same API unauthenticated on :8080 inside muvee-net, where
+# every deployed project container could read the full routing table.
 api:
   dashboard: true
-  insecure: true  # Temporarily enabled for debugging — revert after diagnosis
 
 entryPoints:
   web:
@@ -59,7 +63,7 @@ experimental:
       moduleName: github.com/hoveychen/embed-bridge
 
 log:
-  level: DEBUG
+  level: INFO
 
 accessLog:
   filePath: /var/log/traefik/access.log
