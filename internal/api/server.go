@@ -4860,9 +4860,12 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 // X-Forwarded-User) so a caller cannot smuggle a spoofed name/avatar/provider
 // through `projects curl -H`.
 func applyForwardedUserHeaders(h http.Header, user *store.User) {
-	h.Set("X-Forwarded-User", user.Email)
-	h.Set("X-Forwarded-User-Name", user.Name)
-	h.Set("X-Forwarded-User-Avatar", user.AvatarURL)
+	// auth.ASCIIHeaderValue, not the raw value: a non-ASCII display name is
+	// deprecated obs-text that a strict upstream rejects at the parser, killing
+	// the whole request. Same guard as the forward-auth path.
+	h.Set("X-Forwarded-User", auth.ASCIIHeaderValue(user.Email))
+	h.Set("X-Forwarded-User-Name", auth.ASCIIHeaderValue(user.Name))
+	h.Set("X-Forwarded-User-Avatar", auth.ASCIIHeaderValue(user.AvatarURL))
 	// The CLI proxy authenticates by API token, not an OAuth provider, so there
 	// is no provider to forward — delete any client-supplied value.
 	h.Del("X-Forwarded-User-Provider")

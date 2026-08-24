@@ -683,49 +683,6 @@ func claimsAccountLabel(claims *authClaims) string {
 	return claims.UserID
 }
 
-// asciiHeaderValue makes a value safe to put in an HTTP header without
-// killing the upstream.
-//
-// RFC 9110 field values are ASCII; a non-ASCII byte is deprecated obs-text that
-// a server is free to reject — and strict ones do, at the parser, before any
-// application code runs. Observed 2026-08-24: fleet-cloud 502'd on every
-// request *after* a successful Feishu login, because the display name in
-// `X-Forwarded-User-Name` is Chinese and its upstream (`tiny_http`) requires
-// ASCII header values (`AsciiString::from_ascii`). The container was healthy
-// throughout; the request simply never arrived. Isolated on the same backend:
-// no header → 200, ASCII value → 200, any byte > 0x7F → connection dropped with
-// no response.
-//
-// A value that is already ASCII is returned byte-identical, so every downstream
-// that works today keeps seeing exactly what it saw. Only a value that would
-// otherwise break the request gets percent-encoded — and then `%` is escaped
-// too, so the result decodes unambiguously (`url.QueryUnescape` /
-// `decodeURIComponent` round-trips it). A downstream that does not decode shows
-// `%E9%99%88` instead of the name: degraded, but the page loads.
-func asciiHeaderValue(v string) string {
-	needsEncoding := false
-	for i := 0; i < len(v); i++ {
-		if v[i] > 0x7f {
-			needsEncoding = true
-			break
-		}
-	}
-	if !needsEncoding {
-		return v
-	}
-	var b strings.Builder
-	b.Grow(len(v) + 8)
-	for i := 0; i < len(v); i++ {
-		c := v[i]
-		if c > 0x7f || c == '%' {
-			fmt.Fprintf(&b, "%%%02X", c)
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
-}
-
 func setUserHeaders(w http.ResponseWriter, claims *authClaims) {
 	// X-Forwarded-User stays the email wherever there is one — downstream apps
 	// have been reading it as an address since long before subject-keyed
@@ -736,21 +693,21 @@ func setUserHeaders(w http.ResponseWriter, claims *authClaims) {
 	// one that bit us, but an avatar URL with a non-ASCII path or a localised
 	// provider label would break the upstream in exactly the same way.
 	if claims.Email != "" {
-		w.Header().Set("X-Forwarded-User", asciiHeaderValue(claims.Email))
+		w.Header().Set("X-Forwarded-User", auth.ASCIIHeaderValue(claims.Email))
 	} else {
-		w.Header().Set("X-Forwarded-User", asciiHeaderValue(claims.UserID))
+		w.Header().Set("X-Forwarded-User", auth.ASCIIHeaderValue(claims.UserID))
 	}
 	if claims.UserID != "" {
-		w.Header().Set("X-Forwarded-User-Id", asciiHeaderValue(claims.UserID))
+		w.Header().Set("X-Forwarded-User-Id", auth.ASCIIHeaderValue(claims.UserID))
 	}
 	if claims.Name != "" {
-		w.Header().Set("X-Forwarded-User-Name", asciiHeaderValue(claims.Name))
+		w.Header().Set("X-Forwarded-User-Name", auth.ASCIIHeaderValue(claims.Name))
 	}
 	if claims.AvatarURL != "" {
-		w.Header().Set("X-Forwarded-User-Avatar", asciiHeaderValue(claims.AvatarURL))
+		w.Header().Set("X-Forwarded-User-Avatar", auth.ASCIIHeaderValue(claims.AvatarURL))
 	}
 	if claims.Provider != "" {
-		w.Header().Set("X-Forwarded-User-Provider", asciiHeaderValue(claims.Provider))
+		w.Header().Set("X-Forwarded-User-Provider", auth.ASCIIHeaderValue(claims.Provider))
 	}
 }
 
