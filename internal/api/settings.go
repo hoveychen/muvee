@@ -98,6 +98,11 @@ var allowedSettingKeys = map[string]bool{
 	"auto_deploy_master_enabled":        true,
 	"auto_deploy_poll_interval_seconds": true,
 	"auto_deploy_image_watch_interval_seconds": true,
+	// Comma-separated whitelist of project types users may create on this
+	// platform (see settingEnabledProjectTypes). Empty = every type allowed.
+	// Lets an operator on a memory-tight box turn off the builder-backed
+	// types ("deployment", "build") without touching the deploy nodes.
+	"enabled_project_types": true,
 	// Social OAuth providers (downstream / ForwardAuth only). All
 	// values stored as plain strings; "true"/"false" for the
 	// *_enabled toggles. ClientSecret + apple_private_key_p8 are
@@ -212,6 +217,14 @@ func (s *Server) handleUpdateAdminSettings(w http.ResponseWriter, r *http.Reques
 				jsonErr(w, fmt.Errorf("auto_deploy_image_watch_interval_seconds must be an integer >= 60"), http.StatusBadRequest)
 				return
 			}
+		}
+		if k == settingEnabledProjectTypes {
+			normalised, err := normaliseEnabledProjectTypes(v)
+			if err != nil {
+				jsonErr(w, err, http.StatusBadRequest)
+				return
+			}
+			v = normalised
 		}
 		if err := s.store.SetSetting(ctx, k, v); err != nil {
 			jsonErr(w, err, http.StatusInternalServerError)

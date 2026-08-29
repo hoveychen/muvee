@@ -120,6 +120,25 @@ restart.
 | `auto_deploy_master_enabled` | `true` | Global kill switch for both auto-deploy triggers. |
 | `auto_deploy_poll_interval_seconds` | `60` | Git poll cadence for external repos (min `10`). |
 | `auto_deploy_image_watch_interval_seconds` | `600` | Image-digest poll cadence for compose projects (min `60`). |
+| `enabled_project_types` | *(empty)* | Comma-separated whitelist of project types users may create. Empty = no restriction. |
 
 See [Auto Deploy](./auto-deploy) for the full behaviour and the per-project
 toggle.
+
+### Restricting project types
+
+`enabled_project_types` narrows which project types can be created on this
+platform — edited under **Admin → Settings → Project types users may create**.
+Valid values are `deployment`, `compose`, `image`, `build` and `domain_only`;
+leaving it empty allows all of them (including types added in later releases).
+
+The typical use is a control plane with little memory: `deployment` and
+`build` both run `docker build` on a builder node, so setting the whitelist to
+`compose,image,domain_only` keeps the platform to project types that only pull
+pre-built images.
+
+The check applies on **creation only**, to everyone including admins. A
+project's type is immutable after creation, so projects of a since-disabled
+type keep deploying as before — narrowing the list stops new load from being
+added, it does not break what is already running. An admin who needs a
+disabled type re-enables it in the settings page first.

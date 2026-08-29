@@ -1197,6 +1197,11 @@ func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 		"public_ips":            s.baseIPCache.get(s.baseDomain),
 		"secrets_enabled":       s.store.SecretsEnabled(),
 		"server_version":        s.serverVersion,
+		// Project types this platform currently accepts. Always the resolved
+		// set (never the raw setting), so a client can render the create form
+		// straight from it without knowing that "" means "all". The server
+		// re-checks on create — this is only there to keep the UI honest.
+		"enabled_project_types": projectTypeNames(s.enabledProjectTypes(r.Context())),
 	})
 }
 
@@ -2214,6 +2219,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateProject(&p); err != nil {
 		jsonErr(w, err, 400)
+		return
+	}
+	// Platform-wide project-type whitelist. Checked only on create: the type
+	// is immutable afterwards (see updateProject), so an existing project of a
+	// since-disabled type keeps deploying as before — narrowing the list stops
+	// new load from arriving, it does not break what is already running.
+	if err := s.checkProjectTypeEnabled(r.Context(), p.ProjectType); err != nil {
+		jsonErr(w, err, 403)
 		return
 	}
 	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs(r.Context())); err != nil {

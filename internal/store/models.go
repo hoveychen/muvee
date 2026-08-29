@@ -85,6 +85,28 @@ const (
 	ProjectTypeBuild ProjectType = "build"
 )
 
+// AllProjectTypes enumerates every project type this platform knows how to
+// run. Ordered cheapest-to-heaviest so UIs listing them read sensibly. Used
+// by the platform-wide `enabled_project_types` whitelist (system_settings) to
+// validate admin input and to tell clients which types they may create.
+var AllProjectTypes = []ProjectType{
+	ProjectTypeDeployment,
+	ProjectTypeCompose,
+	ProjectTypeImage,
+	ProjectTypeBuild,
+	ProjectTypeDomainOnly,
+}
+
+// IsKnownProjectType reports whether t is one of AllProjectTypes.
+func IsKnownProjectType(t ProjectType) bool {
+	for _, known := range AllProjectTypes {
+		if t == known {
+			return true
+		}
+	}
+	return false
+}
+
 type Project struct {
 	ID                 uuid.UUID   `db:"id"                   json:"id"`
 	Name               string      `db:"name"                 json:"name"`
