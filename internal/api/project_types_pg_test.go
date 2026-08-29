@@ -27,6 +27,11 @@ func TestCreateProjectTypeWhitelist_PG(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL not set; skipping Postgres integration test")
 	}
 	t.Setenv("JWT_SECRET", "test-secret-at-least-32-bytes-long!!")
+	// auth.New refuses to start with zero providers, and createProject reaches
+	// through s.auth for the enabled_providers whitelist. A dummy Google app is
+	// enough — no OAuth round-trip happens in this test.
+	t.Setenv("GOOGLE_CLIENT_ID", "test-client-id")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
