@@ -2216,6 +2216,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
+	// Platform-wide project-type whitelist. Checked only on create: the type
+	// is immutable afterwards (see updateProject), so an existing project of a
+	// since-disabled type keeps deploying as before — narrowing the list stops
+	// new load from arriving, it does not break what is already running.
+	if err := s.checkProjectTypeEnabled(r.Context(), p.ProjectType); err != nil {
+		jsonErr(w, err, 403)
+		return
+	}
 	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs(r.Context())); err != nil {
 		jsonErr(w, err, 400)
 		return
