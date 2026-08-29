@@ -10,10 +10,20 @@ export interface User {
   avatar_overridden: boolean
 }
 
+// ProjectTypeId mirrors store.AllProjectTypes on the server. Kept in one
+// place so the create form, the admin whitelist and RuntimeConfig can't drift
+// apart when a new type is added.
+export type ProjectTypeId = 'deployment' | 'compose' | 'image' | 'build' | 'domain_only'
+
+// ALL_PROJECT_TYPES is ordered like store.AllProjectTypes (cheapest first,
+// tunnel last) so the admin whitelist reads in the same order as the server's
+// error messages.
+export const ALL_PROJECT_TYPES: ProjectTypeId[] = ['deployment', 'compose', 'image', 'build', 'domain_only']
+
 export interface Project {
   id: string
   name: string
-  project_type: 'deployment' | 'domain_only' | 'compose' | 'image' | 'build'
+  project_type: ProjectTypeId
   git_url: string
   git_branch: string
   git_source: 'external' | 'hosted'
@@ -191,6 +201,11 @@ export interface RuntimeConfig {
   public_ips?: string[]
   secrets_enabled: boolean
   server_version: string
+  // Project types this platform currently accepts, narrowed by the admin
+  // `enabled_project_types` setting. Always the resolved set (never empty),
+  // so the create form can render straight from it. The server re-checks on
+  // create; this only keeps the UI from offering a type that would 403.
+  enabled_project_types?: ProjectTypeId[]
 }
 
 export interface ProjectDataset {
@@ -327,6 +342,10 @@ export interface SystemSettings {
   favicon_url: string
   // 'open' (anyone in the org), 'invite' (white-list), 'request' (request-access flow).
   access_mode: AccessMode | ''
+  // Comma-separated whitelist of project types users may create. Empty string
+  // (or absent) means every type is allowed — the pre-feature behaviour. The
+  // resolved list is served to clients on /api/runtime/config.
+  enabled_project_types?: string
   // ─── Social OAuth providers (downstream ForwardAuth only) ────────────
   // Configured at runtime via /admin/settings. Empty string = not set;
   // *_enabled is the string 'true' | 'false' to mirror the kv store wire

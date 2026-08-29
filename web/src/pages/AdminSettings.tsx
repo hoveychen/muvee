@@ -3,7 +3,8 @@ import { CheckCircle, XCircle, AlertCircle, RefreshCw, Loader, Save, Upload, Cop
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useSettings } from '../lib/settings'
-import type { SystemSettings, HealthReport, CertReport, CertStatus, AccessMode, RuntimeConfig } from '../lib/types'
+import type { SystemSettings, HealthReport, CertReport, CertStatus, AccessMode, RuntimeConfig, ProjectTypeId } from '../lib/types'
+import { ALL_PROJECT_TYPES } from '../lib/types'
 
 const MONO = 'var(--font-mono)'
 
@@ -530,6 +531,112 @@ function SMSLoginSection({ initial }: { initial: SystemSettings }) {
   )
 }
 
+// ─── Project types section ────────────────────────────────────────────────────
+
+// PROJECT_TYPE_ROWS pairs each type with the i18n key its display name already
+// lives under (the create form's labels) and whether it invokes the builder —
+// the latter is the reason this whitelist exists, so it's called out inline.
+const PROJECT_TYPE_ROWS: { id: ProjectTypeId; labelKey: string; buildsImage: boolean }[] = [
+  { id: 'deployment', labelKey: 'newProject.projectType.deployment', buildsImage: true },
+  { id: 'compose', labelKey: 'newProject.projectType.compose', buildsImage: false },
+  { id: 'image', labelKey: 'newProject.projectType.image', buildsImage: false },
+  { id: 'build', labelKey: 'newProject.projectType.build', buildsImage: true },
+  { id: 'domain_only', labelKey: 'newProject.projectType.tunnel', buildsImage: false },
+]
+
+// ProjectTypesSection edits the platform-wide `enabled_project_types`
+// whitelist. Everything ticked is stored as "" (no restriction) rather than
+// the full list, so a type added in a later release is allowed by default on
+// a platform that never intended to restrict anything.
+function ProjectTypesSection({ initial, t }: { initial: SystemSettings; t: (k: string) => string }) {
+  const [selected, setSelected] = useState<ProjectTypeId[]>(() => {
+    const raw = (initial.enabled_project_types || '').split(',').map(s => s.trim()).filter(Boolean)
+    const known = raw.filter((s): s is ProjectTypeId => (ALL_PROJECT_TYPES as string[]).includes(s))
+    return known.length ? known : ALL_PROJECT_TYPES
+  })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const toggle = (id: ProjectTypeId) =>
+    setSelected(cur => (cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]))
+
+  const allSelected = selected.length === ALL_PROJECT_TYPES.length
+  const save = async () => {
+    setSaving(true)
+    try {
+      const ordered = ALL_PROJECT_TYPES.filter(id => selected.includes(id))
+      await api.admin.updateSettings({ enabled_project_types: allSelected ? '' : ordered.join(',') })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch {
+      // error surfaced by api layer
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="card">
+      <div className="card-header">{t('adminSettings.projectTypes.title')}</div>
+      <div style={{ padding: '20px' }}>
+        <p style={{ fontFamily: MONO, fontSize: '0.72rem', color: 'var(--fg-muted)', marginBottom: '16px', lineHeight: 1.6 }}>
+          {t('adminSettings.projectTypes.description')}
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+          {PROJECT_TYPE_ROWS.map(row => {
+            const on = selected.includes(row.id)
+            return (
+              <label
+                key={row.id}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
+                  padding: '10px 12px', borderRadius: '6px',
+                  background: on ? 'var(--bg-base)' : 'transparent',
+                  border: on ? '1px solid var(--accent)' : '1px solid var(--border)',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggle(row.id)}
+                  style={{ marginTop: '3px', accentColor: 'var(--accent)' }}
+                />
+                <div>
+                  <div style={{ fontFamily: MONO, fontSize: '0.8rem', color: 'var(--fg-primary)', fontWeight: 600 }}>
+                    {t(row.labelKey)}
+                    <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}> · {row.id}</span>
+                  </div>
+                  {row.buildsImage && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '2px', lineHeight: 1.5 }}>
+                      {t('adminSettings.projectTypes.buildsImage')}
+                    </div>
+                  )}
+                </div>
+              </label>
+            )
+          })}
+        </div>
+        <p style={{ fontSize: '0.75rem', color: selected.length ? 'var(--fg-muted)' : 'var(--danger)', marginBottom: '12px', lineHeight: 1.5 }}>
+          {selected.length === 0
+            ? t('adminSettings.projectTypes.noneSelected')
+            : allSelected
+              ? t('adminSettings.projectTypes.allSelected')
+              : t('adminSettings.projectTypes.existingUnaffected')}
+        </p>
+        <button
+          className="btn-primary"
+          onClick={save}
+          disabled={saving || selected.length === 0}
+          style={{ background: saved ? 'var(--success)' : undefined, transition: 'background 300ms' }}
+        >
+          {saving ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={13} />}
+          {saved ? t('adminSettings.branding.saved') : saving ? t('adminSettings.branding.saving') : t('adminSettings.branding.save')}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function SocialOAuthSection({ initial, t }: { initial: SystemSettings; t: (k: string) => string }) {
   void t // reserved for future i18n keys
   const forwardAuthBaseURL = initial.forward_auth_base_url || ''
@@ -827,6 +934,9 @@ export default function AdminSettingsPage() {
             </button>
           </div>
         </section>
+
+        {/* ── Project types users may create ────────────────────────────────── */}
+        {initialSettings && <ProjectTypesSection initial={initialSettings} t={t} />}
 
         {/* ── Social Login Providers (downstream only) ─────────────────────── */}
         {initialSettings && <SocialOAuthSection initial={initialSettings} t={t} />}

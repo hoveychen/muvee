@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Lock, ChevronDown, ChevronUp, Eye, EyeOff, GitBranch, Globe, Copy, Check, Radio, Key, Layers, Package, Wrench } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Node as DeployNode, Project, Secret } from '../lib/types'
+import type { Node as DeployNode, Project, ProjectTypeId, Secret } from '../lib/types'
+import { ALL_PROJECT_TYPES } from '../lib/types'
 import { isValidDomainPrefix } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
@@ -284,7 +285,10 @@ function PrivateRepoSection({
 // ─── Main NewProject component ────────────────────────────────────────────────
 
 export default function NewProject() {
-  const [projectType, setProjectType] = useState<'deployment' | 'domain_only' | 'compose' | 'image' | 'build'>('deployment')
+  const [projectType, setProjectType] = useState<ProjectTypeId>('deployment')
+  // null = platform whitelist not fetched yet; every type stays selectable
+  // until we know better, so the form doesn't flash a shrinking list.
+  const [allowedTypes, setAllowedTypes] = useState<ProjectTypeId[] | null>(null)
   const [triggersRedeployOf, setTriggersRedeployOf] = useState('')
   const [form, setForm] = useState<Partial<Project>>({
     git_source: 'external',
@@ -323,6 +327,21 @@ export default function NewProject() {
     if (!isAdmin) return
     api.nodes.list().then(ns => setNodes(ns.filter(n => n.role === 'deploy'))).catch(() => setNodes([]))
   }, [isAdmin])
+
+  // Platform-wide project-type whitelist. On failure we leave allowedTypes
+  // null (everything selectable) and let the server's 403 be the source of
+  // truth — better than blocking creation because one request failed.
+  useEffect(() => {
+    api.runtime.config()
+      .then(cfg => {
+        const allowed = cfg.enabled_project_types
+        if (!allowed || allowed.length === 0) return
+        setAllowedTypes(allowed)
+        // The default selection may have just been disabled platform-wide.
+        setProjectType(cur => (allowed.includes(cur) ? cur : allowed[0]))
+      })
+      .catch(() => {})
+  }, [])
 
   const fixedPortPayload = (): Partial<Project> => {
     if (!isAdmin) return {}
@@ -667,7 +686,7 @@ export default function NewProject() {
                 { id: 'image' as const, icon: Package, label: t('newProject.projectType.image') },
                 { id: 'build' as const, icon: Wrench, label: t('newProject.projectType.build') },
                 { id: 'domain_only' as const, icon: Radio, label: t('newProject.projectType.tunnel') },
-              ]).map(opt => (
+              ]).filter(opt => !allowedTypes || allowedTypes.includes(opt.id)).map(opt => (
                 <button
                   key={opt.id}
                   type="button"
@@ -687,6 +706,11 @@ export default function NewProject() {
                 </button>
               ))}
             </div>
+            {allowedTypes && allowedTypes.length < ALL_PROJECT_TYPES.length && (
+              <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+                {t('newProject.projectType.restrictedHint')}
+              </p>
+            )}
             {projectType === 'domain_only' && (
               <p style={{ fontSize: '0.75rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
                 {t('newProject.projectType.tunnelHint')}

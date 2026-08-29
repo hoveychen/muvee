@@ -421,7 +421,8 @@
       "tunnel": "Tunnel (Domain Only)",
       "tunnelHint": "Reserve a domain prefix for tunnel access. No git repo or container — traffic is forwarded from your local machine via muveectl tunnel.",
       "build": "Build Image Only",
-      "buildHint": "Only build and push a Dockerfile to muvee's internal registry. No container, no host port, no route. Downstream compose / image projects reference the result via last_image_tag."
+      "buildHint": "Only build and push a Dockerfile to muvee's internal registry. No container, no host port, no route. Downstream compose / image projects reference the result via last_image_tag.",
+      "restrictedHint": "Some project types are disabled by the platform administrator."
     },
     "gitSource": {
       "external": "External Repo",
@@ -729,6 +730,14 @@
           "desc": "Anyone with an allowed domain can sign in and browse, but must wait for admin approval before publishing services."
         }
       }
+    },
+    "projectTypes": {
+      "title": "Project types users may create",
+      "description": "Restrict which project types can be created on this platform. All ticked = no restriction (types added in future releases are allowed too).",
+      "buildsImage": "Runs docker build on a builder node — turn this off on a memory-tight box.",
+      "allSelected": "No restriction: all five types can be created.",
+      "existingUnaffected": "Existing projects are unaffected and keep deploying; the restriction only applies to creating new ones.",
+      "noneSelected": "At least one type must stay enabled."
     },
     "health": {
       "title": "System Health",

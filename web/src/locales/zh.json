@@ -421,7 +421,8 @@
       "tunnel": "隧道（仅域名）",
       "tunnelHint": "预留一个域名前缀用于隧道访问。无需 Git 仓库或容器，流量通过 muveectl tunnel 从本地转发。",
       "build": "仅构建镜像",
-      "buildHint": "只把 Dockerfile 构建并推送到 muvee 内置 registry，不启动容器、不分配端口、不接路由。下游 compose / 镜像项目通过 last_image_tag 引用这个镜像。"
+      "buildHint": "只把 Dockerfile 构建并推送到 muvee 内置 registry，不启动容器、不分配端口、不接路由。下游 compose / 镜像项目通过 last_image_tag 引用这个镜像。",
+      "restrictedHint": "部分项目类型已被平台管理员禁用。"
     },
     "gitSource": {
       "external": "外部仓库",
@@ -729,6 +730,14 @@
           "desc": "拥有许可域名的用户可以登录并浏览，但需等待管理员批准后才能发布服务。"
         }
       }
+    },
+    "projectTypes": {
+      "title": "可创建的项目类型",
+      "description": "限制这台平台允许新建哪些类型的项目。全选 = 不作限制（今后新增的类型也自动放行）。",
+      "buildsImage": "需要在构建节点上跑 docker build——内存吃紧的机器建议关掉。",
+      "allSelected": "当前不作限制：五种类型都可以创建。",
+      "existingUnaffected": "已存在的项目不受影响，照常部署；限制只对新建生效。",
+      "noneSelected": "至少要保留一种类型。"
     },
     "health": {
       "title": "系统健康",
