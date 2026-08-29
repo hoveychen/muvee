@@ -1197,6 +1197,11 @@ func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 		"public_ips":            s.baseIPCache.get(s.baseDomain),
 		"secrets_enabled":       s.store.SecretsEnabled(),
 		"server_version":        s.serverVersion,
+		// Project types this platform currently accepts. Always the resolved
+		// set (never the raw setting), so a client can render the create form
+		// straight from it without knowing that "" means "all". The server
+		// re-checks on create — this is only there to keep the UI honest.
+		"enabled_project_types": projectTypeNames(s.enabledProjectTypes(r.Context())),
 	})
 }
 
