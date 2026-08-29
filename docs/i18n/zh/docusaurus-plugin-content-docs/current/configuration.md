@@ -101,5 +101,20 @@ BASE_DOMAINS=muveeai.com,muvee.ai
 | `auto_deploy_master_enabled` | `true` | 两条自动部署触发路径的全局开关。 |
 | `auto_deploy_poll_interval_seconds` | `60` | 外部仓库的 git 轮询间隔（最小 `10`）。 |
 | `auto_deploy_image_watch_interval_seconds` | `600` | compose 项目的 image-digest 轮询间隔（最小 `60`）。 |
+| `enabled_project_types` | *(空)* | 允许创建的项目类型白名单，逗号分隔。留空 = 不作限制。 |
 
 完整行为与项目级开关，详见 [自动部署](./auto-deploy)。
+
+### 限制可创建的项目类型
+
+`enabled_project_types` 用来收窄这台平台允许新建哪些项目类型，在
+**管理员 → 设置 → 可创建的项目类型** 里编辑。合法取值为 `deployment`、
+`compose`、`image`、`build`、`domain_only`；留空表示全部允许（包括未来版本新增的类型）。
+
+典型场景是控制面机器内存吃紧：`deployment` 和 `build` 都会在构建节点上跑
+`docker build`，把白名单设成 `compose,image,domain_only` 就只保留那些直接拉
+现成镜像的类型。
+
+这个检查**只在创建时**生效，且对所有人一视同仁，管理员也不例外。项目类型创建后
+不可更改，所以已经存在的、类型后来被禁用的项目照常部署——收窄白名单是拦住新增负载，
+不会弄坏已经在跑的东西。管理员如果需要某个被禁类型，先去设置页把它打开。
