@@ -136,6 +136,11 @@ muveectl projects create --name NAME --image-ref REF \
 #   --compose-file PATH (default docker-compose.yml) is the path *inside the repo*.
 #   --expose-service / --expose-port pick which container port the muvee router publishes.
 #   Compose projects are pinned to one deploy node so named volumes survive redeploys.
+#   A compose project's own `ports:` entries pass through untouched — muvee's
+#   deploy override is merged on top, it does not replace them. So a compose
+#   project can publish arbitrary host ports itself, including `/udp`, which the
+#   muvee router cannot carry. muvee neither manages nor collision-checks those
+#   ports; that is on you.
 # --image-ref REF: deploys a single pre-built OCI image directly — no git repo, no build.
 #   Examples: `ghcr.io/owner/repo:latest`, `docker.io/redis:7-alpine`, `myreg.example.com/svc:v1.2`.
 #   Presence of --image-ref implicitly sets the project type to "image".
@@ -143,6 +148,29 @@ muveectl projects create --name NAME --image-ref REF \
 #   --volume-mount-path mounts a docker named volume at the given container path (persists across redeploys).
 #   Auto-deploy watches the image digest and triggers a redeploy whenever the upstream tag is repushed.
 #   Mutually exclusive with --git-url, --git-source, --compose, --domain-only.
+# TCP route (admin only) — for a TLS-wrapped protocol that is NOT HTTP and has
+# to live on 443. Traefik terminates TLS on the shared :443 entrypoint, matches
+# by SNI, and hands the plaintext stream to a host port on the deploy node:
+#
+#   muveectl projects update ID --tcp-domain lkturn --tcp-port 5349
+#   muveectl projects update ID --clear-tcp-route
+#
+#   The motivating case is a self-hosted LiveKit TURN server: locked-down
+#   corporate networks allow only 443, but Traefik already owns 443 on the node.
+#   The backend holds no certificate (LiveKit calls this `turn.external_tls`).
+#
+#   **muvee does not publish --tcp-port** — declare it in your own compose
+#   `ports:` (see above). muvee only routes.
+#
+#   --tcp-domain must be a hostname prefix that no other project uses, and must
+#   differ from this project's own --domain. Traefik gives TCP routers
+#   precedence over HTTP routers on a shared entrypoint, so a colliding
+#   hostname would silently swallow that project's HTTPS. The API rejects both
+#   cases (409 / 400), but the reason it must is worth knowing.
+#
+#   UDP is deliberately NOT routed: it has no SNI to multiplex on, and relaying
+#   datagrams through the control plane adds a hop and loses the source IP.
+#   Publish UDP directly from your compose file instead.
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
   [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2] \
