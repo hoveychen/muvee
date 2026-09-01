@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -2442,10 +2443,37 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 // payloads (e.g. saving from a single tab) from zeroing out unrelated fields.
 func mergeProjectUpdate(existing *store.Project, body io.Reader) (*store.Project, error) {
 	p := *existing
+	// `p := *existing` 是浅拷贝：指针字段与 existing 指向同一个对象。而
+	// encoding/json 对**非 nil 指针字段**是「写穿」的——它不新分配，直接把新值
+	// 写进原对象。于是 existing 会被一起改掉，随后每一个
+	// `xxxChanged(existing, p)` 都变成自己跟自己比，永远报「没变」。
+	//
+	// 后果不是脏数据，是**闸门整个失灵**：admin 闸、TCP 域名撞名检查、固定端口
+	// 占用检查全被跳过。2026-09-01 在线上实测到过：把一个项目的 tcp 域名改成
+	// 另一个项目的 domain_prefix，PUT 返回 200 且真的存进去了，而同样的值走
+	// create 路径会被正确地 409 拒掉。
+	detachPointerFields(&p)
 	if err := json.NewDecoder(body).Decode(&p); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// detachPointerFields 让每个非 nil 指针字段指向自己的副本，断开与来源结构体的
+// 共享。用反射而不是逐个字段手写，是因为这个 bug 的失败方式是**静默的**——
+// 漏掉一个字段不会报错，只会让那个字段的校验闸悄悄不生效；而 Project 上的指针
+// 字段还会继续增加。
+func detachPointerFields(p *store.Project) {
+	v := reflect.ValueOf(p).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.Ptr || f.IsNil() || !f.CanSet() {
+			continue
+		}
+		dup := reflect.New(f.Type().Elem())
+		dup.Elem().Set(f.Elem())
+		f.Set(dup)
+	}
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
