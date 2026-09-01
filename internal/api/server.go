@@ -27,7 +27,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
-	"github.com/hoveychen/muvee/internal/skill"
 	"github.com/hoveychen/muvee/internal/auth"
 	"github.com/hoveychen/muvee/internal/domains"
 	"github.com/hoveychen/muvee/internal/gitrepo"
@@ -35,6 +34,7 @@ import (
 	"github.com/hoveychen/muvee/internal/muveectlbin"
 	"github.com/hoveychen/muvee/internal/projectevents"
 	"github.com/hoveychen/muvee/internal/scheduler"
+	"github.com/hoveychen/muvee/internal/skill"
 	"github.com/hoveychen/muvee/internal/sms"
 	"github.com/hoveychen/muvee/internal/store"
 )
@@ -1559,7 +1559,6 @@ echo "  muveectl login --server $SERVER_URL"
 echo ""
 `
 
-
 // ─── API Tokens ──────────────────────────────────────────────────────────────
 
 // safeUserToken is the client-safe representation of a Personal Access Token.
@@ -1850,6 +1849,77 @@ func (s *Server) checkFixedNodeAndPortFree(ctx context.Context, nodeID uuid.UUID
 	return 0, nil
 }
 
+// tcpRouteChanged reports whether either TCP-route field differs, so an
+// unrelated PATCH doesn't get bounced by the admin gate.
+func tcpRouteChanged(existing, updated *store.Project) bool {
+	sameStr := func(a, b *string) bool {
+		if a == nil || b == nil {
+			return a == nil && b == nil
+		}
+		return *a == *b
+	}
+	sameInt := func(a, b *int) bool {
+		if a == nil || b == nil {
+			return a == nil && b == nil
+		}
+		return *a == *b
+	}
+	return !sameStr(existing.TCPDomainPrefix, updated.TCPDomainPrefix) ||
+		!sameInt(existing.TCPHostPort, updated.TCPHostPort)
+}
+
+// validateTCPRoute enforces the both-or-neither rule between TCPDomainPrefix
+// and TCPHostPort plus the port range and prefix shape. Cross-project
+// uniqueness needs DB access and lives in checkTCPPrefixFree.
+func validateTCPRoute(p *store.Project) error {
+	prefix := ""
+	if p.TCPDomainPrefix != nil {
+		prefix = strings.TrimSpace(*p.TCPDomainPrefix)
+	}
+	port := 0
+	if p.TCPHostPort != nil {
+		port = *p.TCPHostPort
+	}
+	if prefix == "" && port == 0 {
+		// Normalise "half-empty" into "unset" so a cleared field doesn't leave
+		// a dangling route behind.
+		p.TCPDomainPrefix, p.TCPHostPort = nil, nil
+		return nil
+	}
+	if prefix == "" || port == 0 {
+		return fmt.Errorf("tcp_domain_prefix and tcp_host_port must be set together (a route with only one half would never work)")
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("tcp_host_port must be between 1 and 65535")
+	}
+	if err := validateDomainPrefix(prefix); err != nil {
+		return fmt.Errorf("tcp_domain_prefix: %w", err)
+	}
+	if p.DomainPrefix != "" && prefix == p.DomainPrefix {
+		// Self-collision. Traefik would prefer the TCP router for this SNI and
+		// the project's own HTTPS would stop working — including its sign-in
+		// gateway, which is how you would go look at why it broke.
+		return fmt.Errorf("tcp_domain_prefix %q must differ from the project's own domain_prefix — a TCP router takes precedence over the HTTP router on the same hostname and would disable this project's HTTPS", prefix)
+	}
+	p.TCPDomainPrefix, p.TCPHostPort = &prefix, &port
+	return nil
+}
+
+// checkTCPPrefixFree returns (httpStatus, error); 0 means free.
+func (s *Server) checkTCPPrefixFree(ctx context.Context, p *store.Project, excludeID uuid.UUID) (int, error) {
+	if p.TCPDomainPrefix == nil || *p.TCPDomainPrefix == "" {
+		return 0, nil
+	}
+	taken, err := s.store.IsTCPDomainPrefixTaken(ctx, *p.TCPDomainPrefix, excludeID)
+	if err != nil {
+		return 500, err
+	}
+	if taken {
+		return 409, fmt.Errorf("hostname %q is already used by another project (as its subdomain or its TCP route) — routing a TCP router there would take that project's HTTPS away", *p.TCPDomainPrefix)
+	}
+	return 0, nil
+}
+
 // knownProviderIDs returns the set of provider IDs that may appear in a
 // project's enabled_providers whitelist. This must match what the project
 // Auth tab actually offers — i.e. env-registered providers ∪ social
@@ -1945,6 +2015,9 @@ func validateProject(p *store.Project) error {
 		return fmt.Errorf("access_mode must be 'public' or 'private'")
 	}
 	if err := validateFixedPort(p); err != nil {
+		return err
+	}
+	if err := validateTCPRoute(p); err != nil {
 		return err
 	}
 	switch p.ProjectType {
@@ -2271,6 +2344,18 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A TCP route publishes a raw port and can shadow another project's HTTPS,
+	// so it carries the same admin gate as fixed ports.
+	if p.TCPDomainPrefix != nil {
+		if user.Role != store.UserRoleAdmin {
+			jsonErr(w, fmt.Errorf("only admins can set tcp_domain_prefix / tcp_host_port"), 403)
+			return
+		}
+		if status, err := s.checkTCPPrefixFree(r.Context(), &p, uuid.Nil); err != nil {
+			jsonErr(w, err, status)
+			return
+		}
+	}
 
 	// For hosted repos: initialize a bare git repo and set the sentinel git_url.
 	if (p.ProjectType == store.ProjectTypeDeployment || p.ProjectType == store.ProjectTypeCompose || p.ProjectType == store.ProjectTypeBuild) && p.GitSource == store.GitSourceHosted {
@@ -2450,6 +2535,16 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, err, status)
 				return
 			}
+		}
+	}
+	if tcpRouteChanged(existing, p) {
+		if user.Role != store.UserRoleAdmin {
+			jsonErr(w, fmt.Errorf("only admins can change tcp_domain_prefix / tcp_host_port"), 403)
+			return
+		}
+		if status, err := s.checkTCPPrefixFree(r.Context(), p, id); err != nil {
+			jsonErr(w, err, status)
+			return
 		}
 	}
 	p.ID = id
@@ -3275,8 +3370,10 @@ func (s *Server) triggerEnvInspect(w http.ResponseWriter, r *http.Request) {
 
 // getProjectEvents returns the ring-buffered platform events for a project.
 // Query params:
-//   since: only return events with id > since (use for follow-style polling)
-//   limit: cap on the number of events returned (default 200, max 200)
+//
+//	since: only return events with id > since (use for follow-style polling)
+//	limit: cap on the number of events returned (default 200, max 200)
+//
 // Lost on server restart by design — see internal/projectevents docs.
 func (s *Server) getProjectEvents(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
@@ -4427,12 +4524,52 @@ func (s *Server) appendDeploymentLog(w http.ResponseWriter, r *http.Request) {
 
 // traefikDynamicConfig is the shape Traefik expects from an HTTP provider endpoint.
 type traefikDynamicConfig struct {
-	HTTP traefikHTTP `json:"http"`
+	// Pointer + omitempty so an empty section is **omitted entirely** rather
+	// than serialised as `"http":{}`. Traefik's HTTP provider rejects the whole
+	// document on an empty map or an empty section — see pruneEmpty.
+	HTTP *traefikHTTP `json:"http,omitempty"`
+	// TCP is omitted entirely when no project declares a TCP route, so the
+	// config Traefik sees is byte-identical to before this feature existed.
+	TCP *traefikTCP `json:"tcp,omitempty"`
+}
+
+// TCP routers share the `websecure` entrypoint with the HTTP routers. Traefik
+// evaluates TCP routers first and falls through to the HTTP routers when no
+// TCP rule matches, so a TCP router only ever captures the exact SNI named in
+// its HostSNI rule — which is why that SNI must not collide with any project's
+// HTTP host (enforced in validateProject).
+type traefikTCP struct {
+	Routers  map[string]traefikTCPRouter  `json:"routers,omitempty"`
+	Services map[string]traefikTCPService `json:"services,omitempty"`
+}
+
+type traefikTCPRouter struct {
+	Rule        string   `json:"rule"`
+	EntryPoints []string `json:"entryPoints"`
+	Service     string   `json:"service"`
+	// A TCP router carrying a TLS block **terminates** TLS (rather than
+	// passing it through) and hands plaintext to the backend. That is exactly
+	// what we want: the backend speaks a TLS-wrapped non-HTTP protocol but
+	// should not have to hold the cert (LiveKit calls this external_tls).
+	TLS *traefikTLS `json:"tls,omitempty"`
+}
+
+type traefikTCPService struct {
+	LoadBalancer traefikTCPLB `json:"loadBalancer"`
+}
+
+type traefikTCPLB struct {
+	Servers []traefikTCPServer `json:"servers"`
+}
+
+// Note `address` (host:port), not `url` — TCP services have no scheme.
+type traefikTCPServer struct {
+	Address string `json:"address"`
 }
 
 type traefikHTTP struct {
-	Routers     map[string]traefikRouter     `json:"routers"`
-	Services    map[string]traefikService    `json:"services"`
+	Routers     map[string]traefikRouter     `json:"routers,omitempty"`
+	Services    map[string]traefikService    `json:"services,omitempty"`
 	Middlewares map[string]traefikMiddleware `json:"middlewares,omitempty"`
 }
 
@@ -4581,6 +4718,83 @@ func hostMatchRule(hosts []string) string {
 	return "(" + strings.Join(parts, " || ") + ")"
 }
 
+// pruneEmpty drops sections and maps that are empty.
+//
+// This is not cosmetic. Traefik's HTTP provider refuses to decode a document
+// containing an empty map — `{"http":{"routers":{},"services":{}}}` fails with
+// "routers cannot be a standalone element", and it rejects the **whole**
+// configuration, not just that section. So one empty map takes every project's
+// routing down with it.
+//
+// Verified against traefik:v3.6.1 on 2026-09-01 by feeding a live instance each
+// shape over the HTTP provider: `{}`, an omitted section, and a section with
+// only non-empty maps are all accepted; `"http":{}`, `"routers":{}` and
+// `"services":{}` are each rejected.
+//
+// muvee has always emitted both `routers` and `services` unconditionally; the
+// bug never fired in practice only because a server with at least one running
+// deployment never has empty maps. A brand-new install does.
+func (c *traefikDynamicConfig) pruneEmpty() {
+	if c.HTTP != nil && len(c.HTTP.Routers) == 0 && len(c.HTTP.Services) == 0 && len(c.HTTP.Middlewares) == 0 {
+		c.HTTP = nil
+	}
+	if c.TCP != nil && len(c.TCP.Routers) == 0 && len(c.TCP.Services) == 0 {
+		c.TCP = nil
+	}
+}
+
+// sniMatchRule is hostMatchRule's TCP counterpart. TCP routers match on the
+// TLS SNI rather than the HTTP Host header, so the matcher name differs even
+// though the shape is identical.
+func sniMatchRule(hosts []string) string {
+	parts := make([]string, len(hosts))
+	for i, h := range hosts {
+		parts[i] = fmt.Sprintf("HostSNI(`%s`)", h)
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, " || ") + ")"
+}
+
+// addTCPRoute registers the SNI-matched, TLS-terminating TCP router for one
+// deployment. Returns false when the project has no TCP route configured.
+//
+// The backend port is **not** managed by muvee: the project publishes it in
+// its own compose file. So this only fires for a deployment that is already
+// running; if the container never published that port the route simply fails
+// to connect, which is a far louder failure than silently mis-routing.
+func (s *Server) addTCPRoute(cfg *traefikDynamicConfig, dep *store.RunningDeploymentInfo) bool {
+	if dep.TCPDomainPrefix == "" || dep.TCPHostPort == nil || *dep.TCPHostPort <= 0 {
+		return false
+	}
+	if cfg.TCP == nil {
+		cfg.TCP = &traefikTCP{
+			Routers:  make(map[string]traefikTCPRouter),
+			Services: make(map[string]traefikTCPService),
+		}
+	}
+	hosts := s.hostsForPrefix(dep.TCPDomainPrefix)
+	name := dep.TCPDomainPrefix + "-tcp"
+	cfg.TCP.Routers[name] = traefikTCPRouter{
+		Rule:        sniMatchRule(hosts),
+		EntryPoints: []string{"websecure"},
+		Service:     name,
+		TLS: &traefikTLS{
+			CertResolver: "letsencrypt",
+			Domains:      tlsDomainsFor(hosts),
+		},
+	}
+	cfg.TCP.Services[name] = traefikTCPService{
+		LoadBalancer: traefikTCPLB{
+			Servers: []traefikTCPServer{{
+				Address: fmt.Sprintf("%s:%d", dep.HostIP, *dep.TCPHostPort),
+			}},
+		},
+	}
+	return true
+}
+
 // tlsDomainsFor lists one cert entry per host. There is no wildcard for the
 // extra base domains, so every project subdomain gets its own HTTP-01 cert.
 func tlsDomainsFor(hosts []string) []traefikTLSDomain {
@@ -4603,7 +4817,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := traefikDynamicConfig{
-		HTTP: traefikHTTP{
+		HTTP: &traefikHTTP{
 			Routers:  make(map[string]traefikRouter),
 			Services: make(map[string]traefikService),
 		},
@@ -4633,6 +4847,11 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		name := dep.DomainPrefix
 		hosts := s.hostsForPrefix(dep.DomainPrefix)
 		backendURL := fmt.Sprintf("http://%s:%d", dep.HostIP, dep.HostPort)
+
+		// Optional TCP route on its own hostname (migration 051). Independent
+		// of everything below — a project can have both, and the TCP one does
+		// not touch the HTTP routers.
+		s.addTCPRoute(&cfg, dep)
 
 		// HTTPS router. The web (port 80) entrypoint in traefik.yml already has a
 		// global HTTP→HTTPS redirect, so we only need the HTTPS router here.
@@ -4860,6 +5079,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Empty maps make Traefik reject the entire document — see pruneEmpty.
+	cfg.pruneEmpty()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)

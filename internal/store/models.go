@@ -180,6 +180,16 @@ type Project struct {
 	// Both nil = dynamic allocation (legacy behaviour). Admin-only writable.
 	FixedHostPort *int       `db:"fixed_host_port"      json:"fixed_host_port,omitempty"`
 	FixedNodeID   *uuid.UUID `db:"fixed_node_id"        json:"fixed_node_id,omitempty"`
+	// TCPDomainPrefix + TCPHostPort add a Traefik **TCP** router: TLS is
+	// terminated by Traefik on the shared `websecure` entrypoint, matched by
+	// SNI, and the plaintext stream is handed to <node host ip>:<tcp_host_port>.
+	// For protocols that are TLS-wrapped but not HTTP and must live on 443
+	// (the motivating case is a self-hosted LiveKit TURN server).
+	//
+	// muvee does **not** publish tcp_host_port — the project publishes it in
+	// its own compose file; muvee only routes. Admin-only writable.
+	TCPDomainPrefix *string `db:"tcp_domain_prefix"    json:"tcp_domain_prefix,omitempty"`
+	TCPHostPort     *int    `db:"tcp_host_port"        json:"tcp_host_port,omitempty"`
 	CreatedAt     time.Time  `db:"created_at"           json:"created_at"`
 	UpdatedAt     time.Time  `db:"updated_at"           json:"updated_at"`
 	// EnabledProviders is a comma-separated whitelist of OAuth provider names
@@ -370,6 +380,10 @@ type RunningDeploymentInfo struct {
 	AuthRequired       bool       `db:"auth_required"`
 	AuthAllowedDomains string     `db:"auth_allowed_domains"`
 	AuthBypassPaths    string     `db:"auth_bypass_paths"`
+	// TCP route (migration 051). Empty prefix / nil port = this project has no
+	// TCP router; the Traefik config generator skips it.
+	TCPDomainPrefix string `db:"tcp_domain_prefix"`
+	TCPHostPort     *int   `db:"tcp_host_port"`
 	AccessMode         string     `db:"access_mode"`
 	HostIP             string     `db:"host_ip"`
 	HostPort           int        `db:"host_port"`
