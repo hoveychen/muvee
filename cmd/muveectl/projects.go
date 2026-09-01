@@ -161,6 +161,11 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().Int("fixed-port", 0, "Admin only: fix the published host port (1024-65535); requires --fixed-node")
 	cmd.Flags().String("fixed-node", "", "Admin only: pin the project to a deployer node UUID; requires --fixed-port")
 	cmd.Flags().Bool("clear-fixed-port", false, "Admin only: remove the fixed-port binding (clears both fixed_host_port and fixed_node_id)")
+	// TCP route: Traefik terminates TLS on 443 and hands the plaintext stream to
+	// a port the project publishes itself. For TLS-wrapped non-HTTP protocols.
+	cmd.Flags().String("tcp-domain", "", "Admin only: hostname prefix whose TLS (SNI) traffic on 443 is routed to --tcp-port; requires --tcp-port")
+	cmd.Flags().Int("tcp-port", 0, "Admin only: host port on the deploy node to receive the TLS-terminated stream; requires --tcp-domain")
+	cmd.Flags().Bool("clear-tcp-route", false, "Admin only: remove the TCP route (clears both tcp_domain_prefix and tcp_host_port)")
 	// Sign-in page branding (rendered on the forward-auth login page when the project is private).
 	cmd.Flags().String("branding-site-name", "", "Branding: headline shown on the sidebar and browser tab")
 	cmd.Flags().String("branding-logo-url", "", "Branding: HTTPS logo URL (replaces site name on sidebar/header)")
@@ -303,6 +308,19 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 		if cmd.Flags().Changed("fixed-node") {
 			v, _ := cmd.Flags().GetString("fixed-node")
 			p["fixed_node_id"] = v
+		}
+	}
+	if v, _ := cmd.Flags().GetBool("clear-tcp-route"); v {
+		p["tcp_domain_prefix"] = nil
+		p["tcp_host_port"] = nil
+	} else {
+		if cmd.Flags().Changed("tcp-domain") {
+			v, _ := cmd.Flags().GetString("tcp-domain")
+			p["tcp_domain_prefix"] = v
+		}
+		if cmd.Flags().Changed("tcp-port") {
+			v, _ := cmd.Flags().GetInt("tcp-port")
+			p["tcp_host_port"] = v
 		}
 	}
 	for _, m := range []struct{ flag, field string }{
@@ -1050,4 +1068,3 @@ func (c *client) sendProxyRequest(method, targetURL string, headers []string, bo
 	}
 	return resp, nil
 }
-

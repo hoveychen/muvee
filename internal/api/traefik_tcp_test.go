@@ -137,3 +137,80 @@ func TestSNIMatchRule(t *testing.T) {
 		t.Errorf("multi host = %q", got)
 	}
 }
+
+// ── 校验 ────────────────────────────────────────────────────────────────
+
+func strp(v string) *string { return &v }
+
+func TestValidateTCPRouteRejectsSelfCollision(t *testing.T) {
+	// 最危险的一种配错：把 TCP 路由指到项目自己的域名上。Traefik 会让
+	// TCP router 赢，于是这个项目的 HTTPS（连同登录网关）整个消失——而你
+	// 正要用那个页面去查为什么坏了。
+	p := &store.Project{DomainPrefix: "app", TCPDomainPrefix: strp("app"), TCPHostPort: intp(5349)}
+	err := validateTCPRoute(p)
+	if err == nil {
+		t.Fatal("自己撞自己的域名居然通过了")
+	}
+	if !strings.Contains(err.Error(), "must differ") {
+		t.Errorf("错误信息没解释清楚: %v", err)
+	}
+}
+
+func TestValidateTCPRouteBothOrNeither(t *testing.T) {
+	// 只有一半的路由永远不可能工作，与其留着不如当场拒绝。
+	for _, p := range []*store.Project{
+		{DomainPrefix: "app", TCPDomainPrefix: strp("lkturn")},
+		{DomainPrefix: "app", TCPHostPort: intp(5349)},
+	} {
+		if err := validateTCPRoute(p); err == nil {
+			t.Errorf("半配的路由通过了: %+v", p)
+		}
+	}
+	// 两个都空 = 没配，要归一成 nil，免得留下半截路由
+	p := &store.Project{DomainPrefix: "app", TCPDomainPrefix: strp("  "), TCPHostPort: intp(0)}
+	if err := validateTCPRoute(p); err != nil {
+		t.Fatalf("两个都空应当算「没配」: %v", err)
+	}
+	if p.TCPDomainPrefix != nil || p.TCPHostPort != nil {
+		t.Errorf("没归一成 nil: %v %v", p.TCPDomainPrefix, p.TCPHostPort)
+	}
+}
+
+func TestValidateTCPRouteChecksPortAndPrefix(t *testing.T) {
+	if err := validateTCPRoute(&store.Project{
+		DomainPrefix: "app", TCPDomainPrefix: strp("lkturn"), TCPHostPort: intp(70000),
+	}); err == nil {
+		t.Error("端口越界没拦")
+	}
+	if err := validateTCPRoute(&store.Project{
+		DomainPrefix: "app", TCPDomainPrefix: strp("Bad_Prefix!"), TCPHostPort: intp(5349),
+	}); err == nil {
+		t.Error("非法域名前缀没拦")
+	}
+	// 正常配置要能过，并且前后空白被清掉
+	p := &store.Project{DomainPrefix: "app", TCPDomainPrefix: strp(" lkturn "), TCPHostPort: intp(5349)}
+	if err := validateTCPRoute(p); err != nil {
+		t.Fatalf("正常配置被拒: %v", err)
+	}
+	if *p.TCPDomainPrefix != "lkturn" {
+		t.Errorf("空白没清: %q", *p.TCPDomainPrefix)
+	}
+}
+
+func TestTCPRouteChangedDetectsBothFields(t *testing.T) {
+	// 不变时必须报 false，否则任何一次无关的 PATCH 都会被 admin 闸挡下来。
+	base := &store.Project{TCPDomainPrefix: strp("lkturn"), TCPHostPort: intp(5349)}
+	same := &store.Project{TCPDomainPrefix: strp("lkturn"), TCPHostPort: intp(5349)}
+	if tcpRouteChanged(base, same) {
+		t.Error("没变却报变了")
+	}
+	for _, other := range []*store.Project{
+		{TCPDomainPrefix: strp("other"), TCPHostPort: intp(5349)},
+		{TCPDomainPrefix: strp("lkturn"), TCPHostPort: intp(443)},
+		{}, // 清空也是一种变更
+	} {
+		if !tcpRouteChanged(base, other) {
+			t.Errorf("变了却报没变: %+v", other)
+		}
+	}
+}

@@ -600,6 +600,27 @@ func (s *Store) IsFixedPortInUse(ctx context.Context, nodeID uuid.UUID, port int
 	return n > 0, nil
 }
 
+// IsTCPDomainPrefixTaken reports whether some *other* project already answers
+// on this hostname — either as its normal HTTP subdomain (domain_prefix) or as
+// another TCP route (tcp_domain_prefix).
+//
+// Both halves matter, and the HTTP half is the dangerous one: Traefik gives TCP
+// routers precedence over HTTP routers on a shared entrypoint, so pointing a
+// TCP route at a hostname that an HTTP project already owns would silently
+// swallow that project's HTTPS traffic — the victim project would just go dark
+// with nothing in its own logs to explain it.
+func (s *Store) IsTCPDomainPrefixTaken(ctx context.Context, prefix string, excludeID uuid.UUID) (bool, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM projects
+		WHERE id <> $2 AND (domain_prefix = $1 OR tcp_domain_prefix = $1)
+	`, prefix, excludeID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func (s *Store) DeleteProject(ctx context.Context, id uuid.UUID) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
 	return err

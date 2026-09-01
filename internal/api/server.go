@@ -1849,6 +1849,77 @@ func (s *Server) checkFixedNodeAndPortFree(ctx context.Context, nodeID uuid.UUID
 	return 0, nil
 }
 
+// tcpRouteChanged reports whether either TCP-route field differs, so an
+// unrelated PATCH doesn't get bounced by the admin gate.
+func tcpRouteChanged(existing, updated *store.Project) bool {
+	sameStr := func(a, b *string) bool {
+		if a == nil || b == nil {
+			return a == nil && b == nil
+		}
+		return *a == *b
+	}
+	sameInt := func(a, b *int) bool {
+		if a == nil || b == nil {
+			return a == nil && b == nil
+		}
+		return *a == *b
+	}
+	return !sameStr(existing.TCPDomainPrefix, updated.TCPDomainPrefix) ||
+		!sameInt(existing.TCPHostPort, updated.TCPHostPort)
+}
+
+// validateTCPRoute enforces the both-or-neither rule between TCPDomainPrefix
+// and TCPHostPort plus the port range and prefix shape. Cross-project
+// uniqueness needs DB access and lives in checkTCPPrefixFree.
+func validateTCPRoute(p *store.Project) error {
+	prefix := ""
+	if p.TCPDomainPrefix != nil {
+		prefix = strings.TrimSpace(*p.TCPDomainPrefix)
+	}
+	port := 0
+	if p.TCPHostPort != nil {
+		port = *p.TCPHostPort
+	}
+	if prefix == "" && port == 0 {
+		// Normalise "half-empty" into "unset" so a cleared field doesn't leave
+		// a dangling route behind.
+		p.TCPDomainPrefix, p.TCPHostPort = nil, nil
+		return nil
+	}
+	if prefix == "" || port == 0 {
+		return fmt.Errorf("tcp_domain_prefix and tcp_host_port must be set together (a route with only one half would never work)")
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("tcp_host_port must be between 1 and 65535")
+	}
+	if err := validateDomainPrefix(prefix); err != nil {
+		return fmt.Errorf("tcp_domain_prefix: %w", err)
+	}
+	if p.DomainPrefix != "" && prefix == p.DomainPrefix {
+		// Self-collision. Traefik would prefer the TCP router for this SNI and
+		// the project's own HTTPS would stop working — including its sign-in
+		// gateway, which is how you would go look at why it broke.
+		return fmt.Errorf("tcp_domain_prefix %q must differ from the project's own domain_prefix — a TCP router takes precedence over the HTTP router on the same hostname and would disable this project's HTTPS", prefix)
+	}
+	p.TCPDomainPrefix, p.TCPHostPort = &prefix, &port
+	return nil
+}
+
+// checkTCPPrefixFree returns (httpStatus, error); 0 means free.
+func (s *Server) checkTCPPrefixFree(ctx context.Context, p *store.Project, excludeID uuid.UUID) (int, error) {
+	if p.TCPDomainPrefix == nil || *p.TCPDomainPrefix == "" {
+		return 0, nil
+	}
+	taken, err := s.store.IsTCPDomainPrefixTaken(ctx, *p.TCPDomainPrefix, excludeID)
+	if err != nil {
+		return 500, err
+	}
+	if taken {
+		return 409, fmt.Errorf("hostname %q is already used by another project (as its subdomain or its TCP route) — routing a TCP router there would take that project's HTTPS away", *p.TCPDomainPrefix)
+	}
+	return 0, nil
+}
+
 // knownProviderIDs returns the set of provider IDs that may appear in a
 // project's enabled_providers whitelist. This must match what the project
 // Auth tab actually offers — i.e. env-registered providers ∪ social
@@ -1944,6 +2015,9 @@ func validateProject(p *store.Project) error {
 		return fmt.Errorf("access_mode must be 'public' or 'private'")
 	}
 	if err := validateFixedPort(p); err != nil {
+		return err
+	}
+	if err := validateTCPRoute(p); err != nil {
 		return err
 	}
 	switch p.ProjectType {
@@ -2270,6 +2344,18 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A TCP route publishes a raw port and can shadow another project's HTTPS,
+	// so it carries the same admin gate as fixed ports.
+	if p.TCPDomainPrefix != nil {
+		if user.Role != store.UserRoleAdmin {
+			jsonErr(w, fmt.Errorf("only admins can set tcp_domain_prefix / tcp_host_port"), 403)
+			return
+		}
+		if status, err := s.checkTCPPrefixFree(r.Context(), &p, uuid.Nil); err != nil {
+			jsonErr(w, err, status)
+			return
+		}
+	}
 
 	// For hosted repos: initialize a bare git repo and set the sentinel git_url.
 	if (p.ProjectType == store.ProjectTypeDeployment || p.ProjectType == store.ProjectTypeCompose || p.ProjectType == store.ProjectTypeBuild) && p.GitSource == store.GitSourceHosted {
@@ -2449,6 +2535,16 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, err, status)
 				return
 			}
+		}
+	}
+	if tcpRouteChanged(existing, p) {
+		if user.Role != store.UserRoleAdmin {
+			jsonErr(w, fmt.Errorf("only admins can change tcp_domain_prefix / tcp_host_port"), 403)
+			return
+		}
+		if status, err := s.checkTCPPrefixFree(r.Context(), p, id); err != nil {
+			jsonErr(w, err, status)
+			return
 		}
 	}
 	p.ID = id
