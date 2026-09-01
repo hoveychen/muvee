@@ -413,7 +413,7 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	}
 
 	cfg := traefikDynamicConfig{
-		HTTP: traefikHTTP{
+		HTTP: &traefikHTTP{
 			Routers:  make(map[string]traefikRouter),
 			Services: make(map[string]traefikService),
 		},
@@ -552,7 +552,7 @@ func TestTraefikConfig_DeviceFlowRouter_PublicProject(t *testing.T) {
 	}
 
 	cfg := traefikDynamicConfig{
-		HTTP: traefikHTTP{
+		HTTP: &traefikHTTP{
 			Routers:  make(map[string]traefikRouter),
 			Services: make(map[string]traefikService),
 		},

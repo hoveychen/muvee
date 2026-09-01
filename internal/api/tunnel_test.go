@@ -25,15 +25,15 @@ func TestIsValidTunnelDomain(t *testing.T) {
 		{"t-bold-fox", true},
 		{"t-calm-owl", true},
 		{"t-a-b", true},
-		{"t-abc-def-ghi", true},   // more than 2 words is ok
-		{"t-abc123-def", true},    // alphanumeric ok
-		{"t-", false},             // no words after prefix
-		{"t-a", false},            // only one word
-		{"bold-fox", false},       // missing t- prefix
-		{"t-Bold-fox", false},     // uppercase
-		{"t--fox", false},         // empty word
-		{"t-bold-", false},        // trailing empty word
-		{"", false},               // empty
+		{"t-abc-def-ghi", true},    // more than 2 words is ok
+		{"t-abc123-def", true},     // alphanumeric ok
+		{"t-", false},              // no words after prefix
+		{"t-a", false},             // only one word
+		{"bold-fox", false},        // missing t- prefix
+		{"t-Bold-fox", false},      // uppercase
+		{"t--fox", false},          // empty word
+		{"t-bold-", false},         // trailing empty word
+		{"", false},                // empty
 		{"t-hello world-x", false}, // space
 	}
 	for _, tt := range tests {
@@ -170,9 +170,9 @@ func TestIsTunnelRequest(t *testing.T) {
 		{"t-bold-fox.example.com", true},
 		{"t-calm-owl.example.com", true},
 		{"t-a-b.example.com", true},
-		{"myapp.example.com", false},      // no t- prefix
-		{"t-bold-fox.other.com", false},    // wrong base domain
-		{"example.com", false},             // no subdomain
+		{"myapp.example.com", false},         // no t- prefix
+		{"t-bold-fox.other.com", false},      // wrong base domain
+		{"example.com", false},               // no subdomain
 		{"t-bold-fox.example.com:443", true}, // with port
 	}
 	for _, tt := range tests {
@@ -488,7 +488,7 @@ func TestTraefikConfig_TunnelWithAuth(t *testing.T) {
 	// Since we can't easily mock the store, we test the tunnel portion of the config
 	// by building it manually the same way handleTraefikConfig does.
 	cfg := traefikDynamicConfig{
-		HTTP: traefikHTTP{
+		HTTP: &traefikHTTP{
 			Routers:  make(map[string]traefikRouter),
 			Services: make(map[string]traefikService),
 		},
@@ -569,7 +569,7 @@ func TestTraefikConfig_TunnelNoAuth(t *testing.T) {
 	s.tunnels.register("t-open-fox", tc)
 
 	cfg := traefikDynamicConfig{
-		HTTP: traefikHTTP{
+		HTTP: &traefikHTTP{
 			Routers:  make(map[string]traefikRouter),
 			Services: make(map[string]traefikService),
 		},
@@ -738,11 +738,11 @@ func TestIsTunnelRequest_DomainOnlyPrefix(t *testing.T) {
 		host string
 		want bool
 	}{
-		{"reserved.example.com", true},       // matches domain_only cache
-		{"reserved.example.com:443", true},   // with port
-		{"t-bold-fox.example.com", true},     // ephemeral tunnel
-		{"unreserved.example.com", false},    // neither tunnel nor domain_only
-		{"reserved.other.com", false},        // wrong base domain
+		{"reserved.example.com", true},     // matches domain_only cache
+		{"reserved.example.com:443", true}, // with port
+		{"t-bold-fox.example.com", true},   // ephemeral tunnel
+		{"unreserved.example.com", false},  // neither tunnel nor domain_only
+		{"reserved.other.com", false},      // wrong base domain
 	}
 	for _, tt := range tests {
 		t.Run(tt.host, func(t *testing.T) {

@@ -13,12 +13,12 @@ func TestValidateDemoUsername(t *testing.T) {
 		}
 	}
 	invalid := []string{
-		"",              // required
-		"Demo",          // uppercase
-		"-demo",         // leading punctuation
-		"demo-",         // trailing punctuation
-		"de mo",         // whitespace
-		"demo@site",     // illegal char
+		"",                      // required
+		"Demo",                  // uppercase
+		"-demo",                 // leading punctuation
+		"demo-",                 // trailing punctuation
+		"de mo",                 // whitespace
+		"demo@site",             // illegal char
 		strings.Repeat("a", 65), // too long
 	}
 	for _, u := range invalid {

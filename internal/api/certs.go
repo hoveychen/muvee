@@ -15,13 +15,13 @@ import (
 
 // CertStatus is the ACME state of one expected HTTPS domain.
 type CertStatus struct {
-	Domain    string     `json:"domain"`
-	Kind      string     `json:"kind"`   // base|registry|traefik|project|alias|tunnel
-	Status    string     `json:"status"` // issued|pending|unknown
-	NotAfter  *time.Time `json:"not_after,omitempty"`
-	DaysLeft  *int       `json:"days_left,omitempty"`
-	Issuer    string     `json:"issuer,omitempty"`
-	Message   string     `json:"message,omitempty"`
+	Domain   string     `json:"domain"`
+	Kind     string     `json:"kind"`   // base|registry|traefik|project|alias|tunnel
+	Status   string     `json:"status"` // issued|pending|unknown
+	NotAfter *time.Time `json:"not_after,omitempty"`
+	DaysLeft *int       `json:"days_left,omitempty"`
+	Issuer   string     `json:"issuer,omitempty"`
+	Message  string     `json:"message,omitempty"`
 }
 
 // CertReport is the full set of domains muvee expects to be served over HTTPS,

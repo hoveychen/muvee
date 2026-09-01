@@ -109,24 +109,70 @@ func TestAddTCPRouteSkippedWhenUnconfigured(t *testing.T) {
 	}
 }
 
-// The config every existing project sees must be byte-identical to before this
-// feature existed — Traefik rejects the whole dynamic config on a malformed
-// section, so an empty `"tcp":{}` would put every project at risk for a
-// feature none of them use.
-func TestTCPSectionOmittedWhenNobodyUsesIt(t *testing.T) {
-	cfg := traefikDynamicConfig{
-		HTTP: traefikHTTP{
-			Routers:  map[string]traefikRouter{},
-			Services: map[string]traefikService{},
-		},
+// Traefik's HTTP provider rejects the **whole** document if it contains an
+// empty map — one empty section takes every project's routing down. These
+// shapes were checked against a live traefik:v3.6.1 over the HTTP provider on
+// 2026-09-01; the accept/reject split below is what that instance actually did.
+func TestPruneEmptyProducesShapesTraefikAccepts(t *testing.T) {
+	// Nothing configured at all → `{}`. Accepted (verified live).
+	cfg := traefikDynamicConfig{HTTP: &traefikHTTP{
+		Routers:  map[string]traefikRouter{},
+		Services: map[string]traefikService{},
+	}}
+	cfg.pruneEmpty()
+	if b := mustJSON(t, cfg); b != "{}" {
+		t.Fatalf("empty config = %s, want {}", b)
 	}
-	b, err := json.Marshal(cfg)
+
+	// A TCP route with no HTTP routers → the http key must be gone, not `{}`
+	// ("http":{} is rejected live).
+	cfg = traefikDynamicConfig{HTTP: &traefikHTTP{
+		Routers:  map[string]traefikRouter{},
+		Services: map[string]traefikService{},
+	}}
+	s := &Server{baseDomain: "example.com"}
+	s.addTCPRoute(&cfg, tcpDep("lkturn", intp(5349)))
+	cfg.pruneEmpty()
+	b := mustJSON(t, cfg)
+	if strings.Contains(b, `"http"`) {
+		t.Errorf("empty http section not pruned: %s", b)
+	}
+	if !strings.Contains(b, `"tcp"`) {
+		t.Errorf("tcp section missing: %s", b)
+	}
+
+	// No TCP route → the tcp key must be absent entirely.
+	cfg = traefikDynamicConfig{HTTP: &traefikHTTP{
+		Routers:  map[string]traefikRouter{"r": {Rule: "Host(`a.example.com`)"}},
+		Services: map[string]traefikService{"r": {}},
+	}}
+	cfg.pruneEmpty()
+	if b := mustJSON(t, cfg); strings.Contains(b, `"tcp"`) {
+		t.Errorf("tcp key present with no TCP routes: %s", b)
+	}
+}
+
+// A half-empty http section is rejected too (routers set, services empty ->
+// "routers cannot be a standalone element"), so the maps carry omitempty.
+func TestEmptyMapsAreNeverSerialised(t *testing.T) {
+	cfg := traefikDynamicConfig{HTTP: &traefikHTTP{
+		Routers:  map[string]traefikRouter{"r": {Rule: "Host(`a.example.com`)"}},
+		Services: map[string]traefikService{},
+	}}
+	cfg.pruneEmpty()
+	b := mustJSON(t, cfg)
+	if strings.Contains(b, `"services":{}`) {
+		t.Errorf("empty services map serialised: %s", b)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), "tcp") {
-		t.Fatalf("tcp key present with no TCP routes: %s", b)
-	}
+	return string(b)
 }
 
 func TestSNIMatchRule(t *testing.T) {

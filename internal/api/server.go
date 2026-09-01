@@ -4524,7 +4524,10 @@ func (s *Server) appendDeploymentLog(w http.ResponseWriter, r *http.Request) {
 
 // traefikDynamicConfig is the shape Traefik expects from an HTTP provider endpoint.
 type traefikDynamicConfig struct {
-	HTTP traefikHTTP `json:"http"`
+	// Pointer + omitempty so an empty section is **omitted entirely** rather
+	// than serialised as `"http":{}`. Traefik's HTTP provider rejects the whole
+	// document on an empty map or an empty section — see pruneEmpty.
+	HTTP *traefikHTTP `json:"http,omitempty"`
 	// TCP is omitted entirely when no project declares a TCP route, so the
 	// config Traefik sees is byte-identical to before this feature existed.
 	TCP *traefikTCP `json:"tcp,omitempty"`
@@ -4536,8 +4539,8 @@ type traefikDynamicConfig struct {
 // its HostSNI rule — which is why that SNI must not collide with any project's
 // HTTP host (enforced in validateProject).
 type traefikTCP struct {
-	Routers  map[string]traefikTCPRouter  `json:"routers"`
-	Services map[string]traefikTCPService `json:"services"`
+	Routers  map[string]traefikTCPRouter  `json:"routers,omitempty"`
+	Services map[string]traefikTCPService `json:"services,omitempty"`
 }
 
 type traefikTCPRouter struct {
@@ -4565,8 +4568,8 @@ type traefikTCPServer struct {
 }
 
 type traefikHTTP struct {
-	Routers     map[string]traefikRouter     `json:"routers"`
-	Services    map[string]traefikService    `json:"services"`
+	Routers     map[string]traefikRouter     `json:"routers,omitempty"`
+	Services    map[string]traefikService    `json:"services,omitempty"`
 	Middlewares map[string]traefikMiddleware `json:"middlewares,omitempty"`
 }
 
@@ -4715,6 +4718,31 @@ func hostMatchRule(hosts []string) string {
 	return "(" + strings.Join(parts, " || ") + ")"
 }
 
+// pruneEmpty drops sections and maps that are empty.
+//
+// This is not cosmetic. Traefik's HTTP provider refuses to decode a document
+// containing an empty map — `{"http":{"routers":{},"services":{}}}` fails with
+// "routers cannot be a standalone element", and it rejects the **whole**
+// configuration, not just that section. So one empty map takes every project's
+// routing down with it.
+//
+// Verified against traefik:v3.6.1 on 2026-09-01 by feeding a live instance each
+// shape over the HTTP provider: `{}`, an omitted section, and a section with
+// only non-empty maps are all accepted; `"http":{}`, `"routers":{}` and
+// `"services":{}` are each rejected.
+//
+// muvee has always emitted both `routers` and `services` unconditionally; the
+// bug never fired in practice only because a server with at least one running
+// deployment never has empty maps. A brand-new install does.
+func (c *traefikDynamicConfig) pruneEmpty() {
+	if c.HTTP != nil && len(c.HTTP.Routers) == 0 && len(c.HTTP.Services) == 0 && len(c.HTTP.Middlewares) == 0 {
+		c.HTTP = nil
+	}
+	if c.TCP != nil && len(c.TCP.Routers) == 0 && len(c.TCP.Services) == 0 {
+		c.TCP = nil
+	}
+}
+
 // sniMatchRule is hostMatchRule's TCP counterpart. TCP routers match on the
 // TLS SNI rather than the HTTP Host header, so the matcher name differs even
 // though the shape is identical.
@@ -4789,7 +4817,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := traefikDynamicConfig{
-		HTTP: traefikHTTP{
+		HTTP: &traefikHTTP{
 			Routers:  make(map[string]traefikRouter),
 			Services: make(map[string]traefikService),
 		},
@@ -5051,6 +5079,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Empty maps make Traefik reject the entire document — see pruneEmpty.
+	cfg.pruneEmpty()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)
