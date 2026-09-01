@@ -380,6 +380,10 @@ type RunningDeploymentInfo struct {
 	AuthRequired       bool       `db:"auth_required"`
 	AuthAllowedDomains string     `db:"auth_allowed_domains"`
 	AuthBypassPaths    string     `db:"auth_bypass_paths"`
+	// TCP route (migration 051). Empty prefix / nil port = this project has no
+	// TCP router; the Traefik config generator skips it.
+	TCPDomainPrefix string `db:"tcp_domain_prefix"`
+	TCPHostPort     *int   `db:"tcp_host_port"`
 	AccessMode         string     `db:"access_mode"`
 	HostIP             string     `db:"host_ip"`
 	HostPort           int        `db:"host_port"`

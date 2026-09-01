@@ -1400,7 +1400,8 @@ func (s *Store) GetTask(ctx context.Context, id uuid.UUID) (*Task, error) {
 // GetRunningDeployments returns all running deployments with the info needed to build Traefik routes.
 func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeploymentInfo, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.access_mode, n.host_ip, d.host_port
+		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.access_mode, n.host_ip, d.host_port,
+		       COALESCE(p.tcp_domain_prefix, ''), p.tcp_host_port
 		FROM deployments d
 		JOIN projects p ON d.project_id = p.id
 		JOIN nodes n ON d.node_id = n.id
@@ -1413,7 +1414,7 @@ func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeployment
 	items := make([]*RunningDeploymentInfo, 0)
 	for rows.Next() {
 		var r RunningDeploymentInfo
-		if err := rows.Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.AuthBypassPaths, &r.AccessMode, &r.HostIP, &r.HostPort); err != nil {
+		if err := rows.Scan(&r.DeploymentID, &r.ProjectID, &r.DomainPrefix, &r.AuthRequired, &r.AuthAllowedDomains, &r.AuthBypassPaths, &r.AccessMode, &r.HostIP, &r.HostPort, &r.TCPDomainPrefix, &r.TCPHostPort); err != nil {
 			return nil, err
 		}
 		items = append(items, &r)
