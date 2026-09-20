@@ -222,6 +222,14 @@ func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.S
 			if err != nil || project == nil {
 				continue
 			}
+			// A paused project keeps its deployment row on 'running' (that is how
+			// resume finds it again), so it still shows up here — but it must not
+			// be resurrected: re-dispatching it would start the container the
+			// admin deliberately stopped.
+			if project.Paused {
+				log.Printf("Skipping eviction of deployment %s: project %s is paused", dep.ID, project.Name)
+				continue
+			}
 			if dep.ImageTag == "" {
 				log.Printf("Skipping eviction of deployment %s: no image tag", dep.ID)
 				continue

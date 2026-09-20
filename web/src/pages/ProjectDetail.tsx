@@ -158,7 +158,11 @@ export default function ProjectDetail() {
   const isImage = project.project_type === 'image'
   const isBuild = project.project_type === 'build'
   const latestDeploy = deployments[0]
-  const color = isTunnel ? 'var(--accent)' : statusColor(latestDeploy?.status ?? 'pending')
+  // paused wins over the deployment row: that row stays on 'running' while the
+  // project is paused so resume can still locate it (see triggerPause).
+  const color = isTunnel
+    ? 'var(--accent)'
+    : statusColor(project.paused ? 'paused' : (latestDeploy?.status ?? 'pending'))
 
   return (
     <div className="page-enter">
