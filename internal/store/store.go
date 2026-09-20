@@ -1419,6 +1419,12 @@ func (s *Store) GetTask(ctx context.Context, id uuid.UUID) (*Task, error) {
 }
 
 // GetRunningDeployments returns all running deployments with the info needed to build Traefik routes.
+//
+// Paused projects are excluded even though their deployment row stays on
+// 'running' (that is how resume finds it again): their container is stopped, so
+// the host port it used to hold is back in Docker's ephemeral pool and may
+// already have been handed to an unrelated project. Keeping the route alive
+// would then silently serve someone else's container on this project's domain.
 func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeploymentInfo, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT d.id, d.project_id, p.domain_prefix, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.access_mode, n.host_ip, d.host_port,
@@ -1426,7 +1432,7 @@ func (s *Store) GetRunningDeployments(ctx context.Context) ([]*RunningDeployment
 		FROM deployments d
 		JOIN projects p ON d.project_id = p.id
 		JOIN nodes n ON d.node_id = n.id
-		WHERE d.status = 'running' AND d.host_port > 0 AND n.host_ip != ''
+		WHERE d.status = 'running' AND d.host_port > 0 AND n.host_ip != '' AND p.paused = FALSE
 	`)
 	if err != nil {
 		return nil, err
