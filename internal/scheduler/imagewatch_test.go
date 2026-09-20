@@ -3,6 +3,10 @@ package scheduler
 import (
 	"sort"
 	"testing"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/hoveychen/muvee/internal/store"
 )
 
 func TestParseComposeImages(t *testing.T) {
@@ -146,6 +150,84 @@ func TestHostMatchesRegistryAddr(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := hostMatchesRegistryAddr(tc.ref, tc.cfg); got != tc.want {
 				t.Errorf("hostMatchesRegistryAddr(%q, %q) = %v, want %v", tc.ref, tc.cfg, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRegistryHostMatches(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  string
+		addr string
+		want bool
+	}{
+		{"exact", "ghcr.io", "ghcr.io", true},
+		{"case insensitive", "GHCR.IO", "ghcr.io", true},
+		{"addr carries a port", "harbor.corp.com", "harbor.corp.com:443", true},
+		{"docker hub spellings fold together", "index.docker.io", "docker.io", true},
+		{"registry-1 spelling too", "registry-1.docker.io", "docker.io", true},
+		{"different registries", "ghcr.io", "docker.io", false},
+		{"empty addr never matches", "ghcr.io", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := registryHostMatches(tc.ref, tc.addr); got != tc.want {
+				t.Errorf("registryHostMatches(%q, %q) = %v, want %v", tc.ref, tc.addr, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAuthForImage pins the priority order: our own registry wins, then a
+// matching owner credential, then anonymous. The middle case is the whole
+// point of the change — without it a private ghcr.io image can be deployed but
+// never watched.
+func TestAuthForImage(t *testing.T) {
+	ownerAuths := []store.RegistryAuth{
+		{Addr: "ghcr.io", Username: "gh-user", Password: "gh-token"},
+		{Addr: "docker.io", Username: "dh-user", Password: "dh-token"},
+		{Addr: "incomplete.io", Username: "", Password: "no-user"},
+	}
+	s := &Scheduler{
+		registryAddr:     "registry.muvee.local:5000",
+		registryUser:     "muvee",
+		registryPassword: "muvee-pw",
+	}
+
+	cases := []struct {
+		name         string
+		image        string
+		auths        []store.RegistryAuth
+		wantUser     string // "" means anonymous
+		wantPassword string
+	}{
+		{"our own registry wins", "registry.muvee.local:5000/app:latest", ownerAuths, "muvee", "muvee-pw"},
+		{"private ghcr uses owner credential", "ghcr.io/org/repo:latest", ownerAuths, "gh-user", "gh-token"},
+		{"docker hub shorthand normalises", "redis:7-alpine", ownerAuths, "dh-user", "dh-token"},
+		{"unknown registry falls back to anonymous", "quay.io/org/repo:v1", ownerAuths, "", ""},
+		{"credential missing a username is skipped", "incomplete.io/org/repo:v1", ownerAuths, "", ""},
+		{"no credentials at all", "ghcr.io/org/repo:latest", nil, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ref, err := name.ParseReference(tc.image)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tc.image, err)
+			}
+			got := s.authForImage(ref, tc.auths)
+			if tc.wantUser == "" {
+				if got != authn.Anonymous {
+					t.Fatalf("got %#v, want anonymous", got)
+				}
+				return
+			}
+			basic, ok := got.(*authn.Basic)
+			if !ok {
+				t.Fatalf("got %#v, want *authn.Basic", got)
+			}
+			if basic.Username != tc.wantUser || basic.Password != tc.wantPassword {
+				t.Errorf("got %s/%s, want %s/%s", basic.Username, basic.Password, tc.wantUser, tc.wantPassword)
 			}
 		})
 	}
