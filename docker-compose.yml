@@ -124,6 +124,11 @@ services:
       TUNNEL_BACKEND_URL: ${TUNNEL_BACKEND_URL:-http://muvee-server:8080}
       # Path (inside the container) of the Traefik JSON access log tailed for per-project traffic metrics.
       TRAEFIK_ACCESS_LOG_PATH: /var/log/traefik/access.log
+      # How long per-request rows are kept in project_traffic (any Go duration,
+      # default 168h). One row per HTTP request Traefik serves, so a node with a
+      # high-frequency polling project accumulates millions of rows a week —
+      # shorten this if the table outgrows what the node's page cache can hold.
+      TRAFFIC_RETENTION: ${TRAFFIC_RETENTION:-168h}
     volumes:
       - ${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:${VOLUME_NFS_BASE_PATH:-/opt/muvee/volumes}:rw
       - ${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:${DATASET_NFS_BASE_PATH:-/opt/muvee/datasets}:rw

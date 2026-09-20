@@ -145,10 +145,28 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 // traffic page for never expired anything — that grew to 18M rows / 5.2GB and
 // filled the server's disk.
 const (
-	trafficRetention        = 7 * 24 * time.Hour
+	defaultTrafficRetention = 7 * 24 * time.Hour
 	trafficPurgeInterval    = time.Hour
 	trafficPurgeQueryBudget = 5 * time.Minute
 )
+
+// trafficRetentionWindow reads the TRAFFIC_RETENTION override, so a node whose
+// disk or page cache cannot carry a week of one row per request can keep less
+// without a rebuild. Any Go duration is accepted ("48h", "36h30m"); anything
+// unparseable or non-positive falls back to the default rather than silently
+// disabling retention or deleting everything.
+func trafficRetentionWindow() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("TRAFFIC_RETENTION"))
+	if raw == "" {
+		return defaultTrafficRetention
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		log.Printf("traffic retention: ignoring invalid TRAFFIC_RETENTION %q, using %s", raw, defaultTrafficRetention)
+		return defaultTrafficRetention
+	}
+	return d
+}
 
 // StartBackgroundWorkers launches the server's long-running goroutines (visit
 // recorder batch flusher, traffic retention sweeper, etc.). Safe to skip in
@@ -162,16 +180,18 @@ func (s *Server) StartBackgroundWorkers(ctx context.Context) {
 // cancelled, starting with one sweep at boot so a backlog is not left waiting
 // for the first tick.
 func (s *Server) runTrafficRetention(ctx context.Context) {
+	retention := trafficRetentionWindow()
+	log.Printf("traffic retention: keeping %s of project traffic", retention)
 	ticker := time.NewTicker(trafficPurgeInterval)
 	defer ticker.Stop()
 	for {
 		purgeCtx, cancel := context.WithTimeout(ctx, trafficPurgeQueryBudget)
-		n, err := s.store.PurgeOldProjectTraffic(purgeCtx, trafficRetention)
+		n, err := s.store.PurgeOldProjectTraffic(purgeCtx, retention)
 		cancel()
 		if err != nil {
 			log.Printf("traffic retention: purged %d rows then failed: %v", n, err)
 		} else if n > 0 {
-			log.Printf("traffic retention: purged %d rows older than %s", n, trafficRetention)
+			log.Printf("traffic retention: purged %d rows older than %s", n, retention)
 		}
 		select {
 		case <-ctx.Done():
