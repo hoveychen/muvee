@@ -79,11 +79,16 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
       .catch(() => {})
   }, [project.id, isTunnel])
 
-  const status = isTunnel ? 'tunnel' : (latestDeploy?.status ?? 'pending')
-  const color = isTunnel ? 'var(--accent)' : statusColor(latestDeploy?.status ?? 'pending')
+  // A paused project keeps its deployment row on 'running' (that is how resume
+  // finds it), so the flag has to win here — otherwise a stopped container is
+  // advertised as running.
+  const deployStatus = project.paused ? 'paused' : (latestDeploy?.status ?? 'pending')
+  const status = isTunnel ? 'tunnel' : deployStatus
+  const color = isTunnel ? 'var(--accent)' : statusColor(deployStatus)
 
   const STATUS_LABELS: Record<string, string> = {
     running: t('projects.status.running'),
+    paused: t('projects.status.paused'),
     building: t('projects.status.building'),
     deploying: t('projects.status.deploying'),
     failed: t('projects.status.failed'),

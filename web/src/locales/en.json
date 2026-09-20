@@ -98,6 +98,7 @@
     "copy": "Copy",
     "status": {
       "running": "running",
+      "paused": "paused",
       "building": "building",
       "deploying": "deploying",
       "failed": "failed",

@@ -33,6 +33,9 @@ export function isValidDomainPrefix(s: string): boolean {
 export function statusColor(status: string): string {
   switch (status) {
     case 'running': return 'var(--success)'
+    // Not a deployment status: a paused project keeps its deployment row on
+    // 'running' so resume can find it, and the UI substitutes this instead.
+    case 'paused': return 'var(--warning)'
     case 'building': return 'var(--warning)'
     case 'deploying': return 'var(--accent)'
     case 'failed': return 'var(--danger)'
