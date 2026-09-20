@@ -145,7 +145,7 @@ func (s *Scheduler) checkSingleImage(ctx context.Context, p *store.Project) erro
 		_ = json.Unmarshal([]byte(p.LastTrackedImageDigests), &prior)
 	}
 
-	digest, err := s.fetchImageDigest(ctx, p.ImageRef)
+	digest, err := s.fetchImageDigest(ctx, p.ImageRef, s.ownerRegistryAuths(ctx, p))
 	if err != nil {
 		return fmt.Errorf("digest %q: %w", p.ImageRef, err)
 	}
@@ -194,10 +194,14 @@ func (s *Scheduler) checkComposeImages(ctx context.Context, p *store.Project) er
 		_ = json.Unmarshal([]byte(p.LastTrackedImageDigests), &prior)
 	}
 
+	// Loaded once per tick, not per image: every image in the file is looked up
+	// against the same owner's credentials.
+	ownerAuths := s.ownerRegistryAuths(ctx, p)
+
 	current := map[string]string{}
 	changed := false
 	for _, img := range images {
-		digest, err := s.fetchImageDigest(ctx, img)
+		digest, err := s.fetchImageDigest(ctx, img, ownerAuths)
 		if err != nil {
 			// One image's lookup failure shouldn't poison the whole project —
 			// keep the previous digest so we can compare on the next tick once
@@ -410,11 +414,11 @@ func containsInterpolation(s string) bool {
 }
 
 // fetchImageDigest resolves the manifest digest of `image` by talking to the
-// registry directly. The image's host is matched against the muvee
-// private-registry address; on a match we authenticate with the configured
-// REGISTRY_USER / REGISTRY_PASSWORD, otherwise we go anonymous (which is
-// what most public images need).
-func (s *Scheduler) fetchImageDigest(ctx context.Context, image string) (string, error) {
+// registry directly. ownerAuths are the project owner's private-registry pull
+// credentials — the same ones the deploy path hands the agent — so a private
+// image on an EXTERNAL registry (ghcr.io, a company Harbor) can be watched at
+// all. Pass nil to force the anonymous path.
+func (s *Scheduler) fetchImageDigest(ctx context.Context, image string, ownerAuths []store.RegistryAuth) (string, error) {
 	ref, err := name.ParseReference(image)
 	if err != nil {
 		return "", fmt.Errorf("parse image: %w", err)
@@ -422,7 +426,7 @@ func (s *Scheduler) fetchImageDigest(ctx context.Context, image string) (string,
 	cctx, cancel := context.WithTimeout(ctx, imageWatchPerImageTimeout)
 	defer cancel()
 
-	auth := s.authForImage(ref)
+	auth := s.authForImage(ref, ownerAuths)
 	digest, err := crane.Digest(image,
 		crane.WithContext(cctx),
 		crane.WithAuth(auth),
@@ -434,14 +438,60 @@ func (s *Scheduler) fetchImageDigest(ctx context.Context, image string) (string,
 	return digest, nil
 }
 
-// authForImage decides which auth to present for a given image reference.
-// muvee's private registry → REGISTRY_USER/PASSWORD; everything else →
-// anonymous (crane handles docker-hub anonymous OAuth automatically).
-func (s *Scheduler) authForImage(ref name.Reference) authn.Authenticator {
+// ownerRegistryAuths loads the project owner's type=registry secrets. They are
+// tenant-level (every project the owner has gets all of them), matching how
+// the compose deploy path already injects them — see buildRegistryAuthsPayload
+// in scheduler.go. A lookup failure is not fatal: we fall back to anonymous,
+// which is still right for every public image in the file.
+func (s *Scheduler) ownerRegistryAuths(ctx context.Context, p *store.Project) []store.RegistryAuth {
+	auths, err := s.store.GetUserRegistrySecretsDecrypted(ctx, p.OwnerID)
+	if err != nil {
+		log.Printf("image watch: project %q registry credentials: %v", p.Name, err)
+		return nil
+	}
+	return auths
+}
+
+// authForImage decides which auth to present for a given image reference, in
+// priority order: muvee's own private registry → REGISTRY_USER/PASSWORD; an
+// external registry the owner has a credential for → that credential;
+// everything else → anonymous (crane handles docker-hub anonymous OAuth).
+//
+// Without the middle case a private ghcr.io image can be *deployed* (the agent
+// gets the credential) but never *watched*: crane gets a 401/403, the per-image
+// error is logged and skipped, and the image silently never enters the digest
+// tracking map — so auto-deploy looks enabled and simply never fires.
+func (s *Scheduler) authForImage(ref name.Reference, ownerAuths []store.RegistryAuth) authn.Authenticator {
 	if s.imageBelongsToOurRegistry(ref) && s.registryUser != "" && s.registryPassword != "" {
 		return &authn.Basic{Username: s.registryUser, Password: s.registryPassword}
 	}
+	host := ref.Context().RegistryStr()
+	for _, a := range ownerAuths {
+		if a.Username == "" || a.Password == "" || a.Addr == "" {
+			continue
+		}
+		if registryHostMatches(host, a.Addr) {
+			return &authn.Basic{Username: a.Username, Password: a.Password}
+		}
+	}
 	return authn.Anonymous
+}
+
+// registryHostMatches compares the host parsed off an image reference with the
+// addr stored on a registry secret. Ports are tolerated on either side, and the
+// several spellings of Docker Hub are folded together because name.ParseReference
+// normalises a bare `redis:7` to `index.docker.io` while users type `docker.io`.
+func registryHostMatches(refHost, secretAddr string) bool {
+	return normalizeRegistryHost(refHost) == normalizeRegistryHost(secretAddr)
+}
+
+func normalizeRegistryHost(h string) string {
+	h = stripPort(strings.ToLower(strings.TrimSpace(h)))
+	switch h {
+	case "index.docker.io", "registry-1.docker.io":
+		return "docker.io"
+	}
+	return h
 }
 
 func (s *Scheduler) imageBelongsToOurRegistry(ref name.Reference) bool {
