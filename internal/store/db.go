@@ -3,9 +3,27 @@ package store
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Default budget for Connect to keep retrying before giving up. On a host
+// reboot dockerd restores containers concurrently by restart policy and
+// ignores Compose's depends_on, so the server can come up well before
+// Postgres finishes recovering. Exiting on the first failed Ping turns that
+// into a restart loop that only a manual `docker compose up -d` breaks.
+const defaultConnectTimeout = 5 * time.Minute
+
+// Bounds for the exponential backoff between Ping attempts.
+const (
+	connectRetryInitial = 1 * time.Second
+	connectRetryMax     = 15 * time.Second
+	// Each Ping gets its own deadline so an unreachable host that blackholes
+	// SYNs can't stall the whole budget on a single attempt.
+	connectPingTimeout = 5 * time.Second
 )
 
 func Connect(ctx context.Context) (*pgxpool.Pool, error) {
@@ -17,10 +35,48 @@ func Connect(ctx context.Context) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect db: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("ping db: %w", err)
+
+	budget := defaultConnectTimeout
+	if v := os.Getenv("DB_CONNECT_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("parse DB_CONNECT_TIMEOUT %q: %w", v, err)
+		}
+		budget = d
 	}
-	return pool, nil
+
+	deadline := time.Now().Add(budget)
+	backoff := connectRetryInitial
+	for attempt := 1; ; attempt++ {
+		pingCtx, cancel := context.WithTimeout(ctx, connectPingTimeout)
+		err := pool.Ping(pingCtx)
+		cancel()
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("db: connected after %d attempts", attempt)
+			}
+			return pool, nil
+		}
+		if ctx.Err() != nil {
+			pool.Close()
+			return nil, fmt.Errorf("ping db: %w", ctx.Err())
+		}
+		if !time.Now().Add(backoff).Before(deadline) {
+			pool.Close()
+			return nil, fmt.Errorf("ping db: giving up after %s (%d attempts): %w", budget, attempt, err)
+		}
+		log.Printf("db: not ready yet (attempt %d): %v; retrying in %s", attempt, err, backoff)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			pool.Close()
+			return nil, fmt.Errorf("ping db: %w", ctx.Err())
+		}
+		if backoff *= 2; backoff > connectRetryMax {
+			backoff = connectRetryMax
+		}
+	}
 }
 
 func Migrate(ctx context.Context, db *pgxpool.Pool, migrationsDir string) error {
