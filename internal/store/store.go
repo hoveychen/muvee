@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/crypto"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -2385,16 +2386,21 @@ func (s *Store) DeleteSecret(ctx context.Context, id, userID uuid.UUID) error {
 	return err
 }
 
-const projectSecretCols = `id, project_id, source_secret_id, name, type, env_var_name, use_for_git, use_for_build, build_secret_id, git_username, created_at, updated_at`
-
-func scanProjectSecret(row pgx.Row, ps *ProjectSecret, extra ...any) error {
-	return row.Scan(append([]any{&ps.ID, &ps.ProjectID, &ps.SourceSecretID, &ps.Name, &ps.Type, &ps.EnvVarName, &ps.UseForGit, &ps.UseForBuild, &ps.BuildSecretID, &ps.GitUsername, &ps.CreatedAt, &ps.UpdatedAt}, extra...)...)
-}
-
 // DescribeSecretValue reports non-sensitive facts about an encrypted secret
 // value: its status (one of SecretValue*), rune length and display preview.
 // The plaintext is decrypted only in memory and never returned.
 func (s *Store) DescribeSecretValue(secretType SecretType, encryptedValue string) (status string, length int, preview string) {
+	status, length, plain := s.describeEncrypted(encryptedValue)
+	if status == SecretValueSet {
+		preview = computeSecretPreview(secretType, plain)
+	}
+	return status, length, preview
+}
+
+// describeEncrypted decrypts in memory and returns the value's status, rune
+// length and plaintext (empty unless status is "set"). Callers decide whether
+// the plaintext may leave the store.
+func (s *Store) describeEncrypted(encryptedValue string) (status string, length int, plain string) {
 	if encryptedValue == "" {
 		return SecretValueEmpty, 0, ""
 	}
@@ -2408,159 +2414,240 @@ func (s *Store) DescribeSecretValue(secretType SecretType, encryptedValue string
 	if plain == "" {
 		return SecretValueEmpty, 0, ""
 	}
-	return SecretValueSet, utf8.RuneCountInString(plain), computeSecretPreview(secretType, plain)
+	return SecretValueSet, utf8.RuneCountInString(plain), plain
 }
 
-// ListProjectSecrets returns a project's secrets with non-sensitive facts about
-// each value (set / empty / undecryptable, length, preview). Plaintext is
-// decrypted only in memory to derive those facts and is never returned.
-func (s *Store) ListProjectSecrets(ctx context.Context, projectID uuid.UUID) ([]*ProjectSecretView, error) {
+func (s *Store) encrypt(plaintext string) (string, error) {
+	if s.encryptionKey == nil {
+		return "", fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
+	}
+	enc, err := crypto.Encrypt(s.encryptionKey, plaintext)
+	if err != nil {
+		return "", fmt.Errorf("encrypt secret: %w", err)
+	}
+	return enc, nil
+}
+
+// ErrEnvKeyExists is returned when a project already has a variable with the key.
+var ErrEnvKeyExists = errors.New("a variable with this key already exists in the project")
+
+const projectEnvVarCols = `id, project_id, source_secret_id, key, sensitive, runtime, build, created_at, updated_at`
+
+func scanProjectEnvVar(row pgx.Row, v *ProjectEnvVar, extra ...any) error {
+	return row.Scan(append([]any{&v.ID, &v.ProjectID, &v.SourceSecretID, &v.Key, &v.Sensitive, &v.Runtime, &v.Build, &v.CreatedAt, &v.UpdatedAt}, extra...)...)
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// ListProjectEnvVars returns a project's variables with facts about each value.
+// Plaintext is included only for non-sensitive variables.
+func (s *Store) ListProjectEnvVars(ctx context.Context, projectID uuid.UUID) ([]*ProjectEnvVarView, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT `+projectSecretCols+`, encrypted_value
-		FROM project_secrets
+		SELECT `+projectEnvVarCols+`, encrypted_value
+		FROM project_env_vars
 		WHERE project_id = $1
-		ORDER BY name, created_at
+		ORDER BY key
 	`, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := make([]*ProjectSecretView, 0)
+	result := make([]*ProjectEnvVarView, 0)
 	for rows.Next() {
-		var v ProjectSecretView
-		var encVal string
-		if err := scanProjectSecret(rows, &v.ProjectSecret, &encVal); err != nil {
+		var v ProjectEnvVarView
+		var encVal, plain string
+		if err := scanProjectEnvVar(rows, &v.ProjectEnvVar, &encVal); err != nil {
 			return nil, err
 		}
-		v.ValueStatus, v.ValueLength, v.ValuePreview = s.DescribeSecretValue(v.Type, encVal)
+		v.ValueStatus, v.ValueLength, plain = s.describeEncrypted(encVal)
+		if !v.Sensitive {
+			v.Value = plain
+		}
 		result = append(result, &v)
 	}
 	return result, rows.Err()
 }
 
-// GetProjectSecret returns one secret of a project (without its value).
-func (s *Store) GetProjectSecret(ctx context.Context, projectID, id uuid.UUID) (*ProjectSecret, error) {
-	var ps ProjectSecret
-	row := s.db.QueryRow(ctx, `SELECT `+projectSecretCols+` FROM project_secrets WHERE project_id = $1 AND id = $2`, projectID, id)
-	if err := scanProjectSecret(row, &ps); err != nil {
+// GetProjectEnvVar returns one variable of a project (without its value).
+func (s *Store) GetProjectEnvVar(ctx context.Context, projectID, id uuid.UUID) (*ProjectEnvVar, error) {
+	var v ProjectEnvVar
+	row := s.db.QueryRow(ctx, `SELECT `+projectEnvVarCols+` FROM project_env_vars WHERE project_id = $1 AND id = $2`, projectID, id)
+	if err := scanProjectEnvVar(row, &v); err != nil {
 		return nil, err
 	}
-	return &ps, nil
+	return &v, nil
 }
 
-// CreateProjectSecret stores a new project-owned secret with the given plaintext value.
-func (s *Store) CreateProjectSecret(ctx context.Context, ps *ProjectSecret, plaintextValue string) error {
-	if s.encryptionKey == nil {
-		return fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
-	}
-	encrypted, err := crypto.Encrypt(s.encryptionKey, plaintextValue)
+// CreateProjectEnvVar stores a new variable with the given plaintext value.
+// Returns ErrEnvKeyExists if the key is taken.
+func (s *Store) CreateProjectEnvVar(ctx context.Context, v *ProjectEnvVar, plaintextValue string) error {
+	enc, err := s.encrypt(plaintextValue)
 	if err != nil {
-		return fmt.Errorf("encrypt secret: %w", err)
-	}
-	return s.insertProjectSecret(ctx, ps, encrypted)
-}
-
-// CopySecretToProject creates a project secret whose value is a copy of the
-// personal secret src. The copy is independent: later
-// changes to (or deletion of) the personal secret do not affect it. The caller
-// is responsible for checking that src belongs to the acting user.
-func (s *Store) CopySecretToProject(ctx context.Context, ps *ProjectSecret, src *Secret) error {
-	ps.SourceSecretID = &src.ID
-	if ps.Name == "" {
-		ps.Name = src.Name
-	}
-	ps.Type = src.Type
-	return s.insertProjectSecret(ctx, ps, src.EncryptedValue)
-}
-
-func (s *Store) insertProjectSecret(ctx context.Context, ps *ProjectSecret, encryptedValue string) error {
-	ps.ID = uuid.New()
-	now := time.Now()
-	ps.CreatedAt, ps.UpdatedAt = now, now
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO project_secrets (id, project_id, source_secret_id, name, type, encrypted_value, env_var_name, use_for_git, use_for_build, build_secret_id, git_username, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, ps.ID, ps.ProjectID, ps.SourceSecretID, ps.Name, ps.Type, encryptedValue, ps.EnvVarName, ps.UseForGit, ps.UseForBuild, ps.BuildSecretID, ps.GitUsername, ps.CreatedAt, ps.UpdatedAt)
-	return err
-}
-
-// UpdateProjectSecret saves ps's name and usage fields. If newValue is non-nil
-// the stored value is replaced too (and the copy-source link is dropped, since
-// the value no longer matches the personal secret it came from).
-func (s *Store) UpdateProjectSecret(ctx context.Context, ps *ProjectSecret, newValue *string) error {
-	ps.UpdatedAt = time.Now()
-	if newValue == nil {
-		_, err := s.db.Exec(ctx, `
-			UPDATE project_secrets SET name=$3, env_var_name=$4, use_for_git=$5, use_for_build=$6, build_secret_id=$7, git_username=$8, updated_at=$9
-			WHERE project_id=$1 AND id=$2
-		`, ps.ProjectID, ps.ID, ps.Name, ps.EnvVarName, ps.UseForGit, ps.UseForBuild, ps.BuildSecretID, ps.GitUsername, ps.UpdatedAt)
 		return err
 	}
-	if s.encryptionKey == nil {
-		return fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
+	return s.insertProjectEnvVar(ctx, v, enc)
+}
+
+// CopySecretToProjectEnv creates a variable whose value is a copy of the
+// personal secret src. The copy is independent: later changes to (or deletion
+// of) the personal secret do not affect it. The caller is responsible for
+// checking that src belongs to the acting user.
+func (s *Store) CopySecretToProjectEnv(ctx context.Context, v *ProjectEnvVar, src *Secret) error {
+	v.SourceSecretID = &src.ID
+	return s.insertProjectEnvVar(ctx, v, src.EncryptedValue)
+}
+
+func (s *Store) insertProjectEnvVar(ctx context.Context, v *ProjectEnvVar, encryptedValue string) error {
+	v.ID = uuid.New()
+	now := time.Now()
+	v.CreatedAt, v.UpdatedAt = now, now
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO project_env_vars (id, project_id, source_secret_id, key, encrypted_value, sensitive, runtime, build, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, v.ID, v.ProjectID, v.SourceSecretID, v.Key, encryptedValue, v.Sensitive, v.Runtime, v.Build, v.CreatedAt, v.UpdatedAt)
+	if isUniqueViolation(err) {
+		return ErrEnvKeyExists
 	}
-	encrypted, err := crypto.Encrypt(s.encryptionKey, *newValue)
-	if err != nil {
-		return fmt.Errorf("encrypt secret: %w", err)
-	}
-	ps.SourceSecretID = nil
-	_, err = s.db.Exec(ctx, `
-		UPDATE project_secrets SET name=$3, env_var_name=$4, use_for_git=$5, use_for_build=$6, build_secret_id=$7, git_username=$8, updated_at=$9,
-		       encrypted_value=$10, source_secret_id=NULL
-		WHERE project_id=$1 AND id=$2
-	`, ps.ProjectID, ps.ID, ps.Name, ps.EnvVarName, ps.UseForGit, ps.UseForBuild, ps.BuildSecretID, ps.GitUsername, ps.UpdatedAt, encrypted)
 	return err
 }
 
-// DeleteProjectSecret removes one secret from a project.
-func (s *Store) DeleteProjectSecret(ctx context.Context, projectID, id uuid.UUID) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM project_secrets WHERE project_id = $1 AND id = $2`, projectID, id)
+// UpdateProjectEnvVar saves v's key and flags. If newValue is non-nil the
+// stored value is replaced too, and the copy-source link is dropped since the
+// value no longer matches the personal secret it came from.
+func (s *Store) UpdateProjectEnvVar(ctx context.Context, v *ProjectEnvVar, newValue *string) error {
+	v.UpdatedAt = time.Now()
+	var err error
+	if newValue == nil {
+		_, err = s.db.Exec(ctx, `
+			UPDATE project_env_vars SET key=$3, sensitive=$4, runtime=$5, build=$6, updated_at=$7
+			WHERE project_id=$1 AND id=$2
+		`, v.ProjectID, v.ID, v.Key, v.Sensitive, v.Runtime, v.Build, v.UpdatedAt)
+	} else {
+		var enc string
+		if enc, err = s.encrypt(*newValue); err != nil {
+			return err
+		}
+		v.SourceSecretID = nil
+		_, err = s.db.Exec(ctx, `
+			UPDATE project_env_vars SET key=$3, sensitive=$4, runtime=$5, build=$6, updated_at=$7,
+			       encrypted_value=$8, source_secret_id=NULL
+			WHERE project_id=$1 AND id=$2
+		`, v.ProjectID, v.ID, v.Key, v.Sensitive, v.Runtime, v.Build, v.UpdatedAt, enc)
+	}
+	if isUniqueViolation(err) {
+		return ErrEnvKeyExists
+	}
 	return err
 }
 
-type DecryptedProjectSecret struct {
-	SecretID      uuid.UUID // project secret id
-	SecretName    string
-	SecretType    SecretType
-	EnvVarName    string
-	UseForGit     bool
-	UseForBuild   bool
-	BuildSecretID string
-	GitUsername   string // HTTPS username for git clone (password type with use_for_git=true)
-	PlainValue    string
+// DeleteProjectEnvVar removes one variable from a project.
+func (s *Store) DeleteProjectEnvVar(ctx context.Context, projectID, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM project_env_vars WHERE project_id = $1 AND id = $2`, projectID, id)
+	return err
 }
 
-// GetProjectSecretsDecrypted returns all secrets for a project with decrypted values.
-// Used by the scheduler when building task payloads.
-func (s *Store) GetProjectSecretsDecrypted(ctx context.Context, projectID uuid.UUID) ([]*DecryptedProjectSecret, error) {
+// DecryptedEnvVar is a project variable with its plaintext, for task payloads.
+type DecryptedEnvVar struct {
+	Key     string
+	Runtime bool
+	Build   bool
+	Value   string
+}
+
+// GetProjectEnvDecrypted returns all variables of a project with decrypted
+// values. Used by the scheduler when building task payloads.
+func (s *Store) GetProjectEnvDecrypted(ctx context.Context, projectID uuid.UUID) ([]*DecryptedEnvVar, error) {
 	if s.encryptionKey == nil {
 		return nil, nil
 	}
-	rows, err := s.db.Query(ctx, `
-		SELECT id, env_var_name, use_for_git, use_for_build, build_secret_id, git_username,
-		       name, type, encrypted_value
-		FROM project_secrets
-		WHERE project_id = $1
-	`, projectID)
+	rows, err := s.db.Query(ctx, `SELECT key, runtime, build, encrypted_value FROM project_env_vars WHERE project_id = $1`, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := make([]*DecryptedProjectSecret, 0)
+	result := make([]*DecryptedEnvVar, 0)
 	for rows.Next() {
-		var d DecryptedProjectSecret
+		var d DecryptedEnvVar
 		var encVal string
-		if err := rows.Scan(&d.SecretID, &d.EnvVarName, &d.UseForGit, &d.UseForBuild, &d.BuildSecretID, &d.GitUsername, &d.SecretName, &d.SecretType, &encVal); err != nil {
+		if err := rows.Scan(&d.Key, &d.Runtime, &d.Build, &encVal); err != nil {
 			return nil, err
 		}
 		plain, err := crypto.Decrypt(s.encryptionKey, encVal)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt secret %s: %w", d.SecretID, err)
+			return nil, fmt.Errorf("decrypt env var %s: %w", d.Key, err)
 		}
-		d.PlainValue = plain
+		d.Value = plain
 		result = append(result, &d)
 	}
-	return result, nil
+	return result, rows.Err()
+}
+
+// ─── Project git credential ─────────────────────────────────────────────────
+
+// GitCredentialInfo describes a project's git clone credential without its value.
+type GitCredentialInfo struct {
+	Type        string // one of GitAuth*
+	Username    string // HTTPS username; empty for ssh_key
+	ValueStatus string // one of SecretValue*; "empty" when Type is none
+	ValueLength int
+}
+
+// GetProjectGitCredentialInfo returns the kind and value status of a project's
+// git clone credential.
+func (s *Store) GetProjectGitCredentialInfo(ctx context.Context, projectID uuid.UUID) (*GitCredentialInfo, error) {
+	var info GitCredentialInfo
+	var enc string
+	if err := s.db.QueryRow(ctx, `SELECT git_auth_type, git_auth_username, git_auth_encrypted FROM projects WHERE id = $1`, projectID).
+		Scan(&info.Type, &info.Username, &enc); err != nil {
+		return nil, err
+	}
+	info.ValueStatus, info.ValueLength, _ = s.describeEncrypted(enc)
+	return &info, nil
+}
+
+// GetProjectGitCredential returns the decrypted git clone credential. For
+// https_token, username/token are set; for ssh_key, sshKey is set. All empty
+// when none is configured or secrets are disabled.
+func (s *Store) GetProjectGitCredential(ctx context.Context, projectID uuid.UUID) (username, token, sshKey string, err error) {
+	var typ, user, enc string
+	if err = s.db.QueryRow(ctx, `SELECT git_auth_type, git_auth_username, git_auth_encrypted FROM projects WHERE id = $1`, projectID).
+		Scan(&typ, &user, &enc); err != nil {
+		return "", "", "", err
+	}
+	if typ == GitAuthNone || enc == "" || s.encryptionKey == nil {
+		return "", "", "", nil
+	}
+	plain, err := crypto.Decrypt(s.encryptionKey, enc)
+	if err != nil {
+		return "", "", "", fmt.Errorf("decrypt git credential: %w", err)
+	}
+	if typ == GitAuthSSHKey {
+		return "", "", plain, nil
+	}
+	return user, plain, "", nil
+}
+
+// SetProjectGitCredential sets the project's git clone credential. A nil value
+// keeps the stored value (e.g. to change only the HTTPS username); type none
+// clears everything.
+func (s *Store) SetProjectGitCredential(ctx context.Context, projectID uuid.UUID, typ, username string, value *string) error {
+	if typ == GitAuthNone {
+		_, err := s.db.Exec(ctx, `UPDATE projects SET git_auth_type='none', git_auth_username='', git_auth_encrypted='' WHERE id=$1`, projectID)
+		return err
+	}
+	if value == nil {
+		_, err := s.db.Exec(ctx, `UPDATE projects SET git_auth_type=$2, git_auth_username=$3 WHERE id=$1`, projectID, typ, username)
+		return err
+	}
+	enc, err := s.encrypt(*value)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `UPDATE projects SET git_auth_type=$2, git_auth_username=$3, git_auth_encrypted=$4 WHERE id=$1`, projectID, typ, username, enc)
+	return err
 }
 
 // ─── Authorization Requests ─────────────────────────────────────────────────
