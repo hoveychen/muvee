@@ -981,10 +981,12 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/projects/{id}", s.requireAuthorized(s.deleteProject))
 		r.Get("/api/projects/{id}/datasets", s.getProjectDatasets)
 		r.Put("/api/projects/{id}/datasets", s.requireAuthorized(s.setProjectDatasets))
-		r.Get("/api/projects/{id}/secrets", s.listProjectSecrets)
-		r.Post("/api/projects/{id}/secrets", s.requireAuthorized(s.createProjectSecret))
-		r.Patch("/api/projects/{id}/secrets/{secretId}", s.requireAuthorized(s.updateProjectSecret))
-		r.Delete("/api/projects/{id}/secrets/{secretId}", s.requireAuthorized(s.deleteProjectSecret))
+		r.Get("/api/projects/{id}/env", s.listProjectEnvVars)
+		r.Post("/api/projects/{id}/env", s.requireAuthorized(s.createProjectEnvVar))
+		r.Patch("/api/projects/{id}/env/{varId}", s.requireAuthorized(s.updateProjectEnvVar))
+		r.Delete("/api/projects/{id}/env/{varId}", s.requireAuthorized(s.deleteProjectEnvVar))
+		r.Get("/api/projects/{id}/git-credential", s.getProjectGitCredential)
+		r.Put("/api/projects/{id}/git-credential", s.requireAuthorized(s.setProjectGitCredential))
 		r.Get("/api/projects/{id}/access-users", s.listProjectAccessUsers)
 		r.Post("/api/projects/{id}/access-users", s.requireAuthorized(s.addProjectAccessUser))
 		r.Delete("/api/projects/{id}/access-users/{userId}", s.requireAuthorized(s.removeProjectAccessUser))
@@ -5517,52 +5519,69 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
-// projectSecretJSON is the wire shape of a project secret. Values are never
-// returned; value_status / value_length / value_preview say whether one is set.
-type projectSecretJSON struct {
+// envKeyRe is the allowed shape of a project variable name.
+var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// envKeyFromName turns a free-form secret name into a valid variable name.
+func envKeyFromName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(name)) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	key := b.String()
+	if key != "" && key[0] >= '0' && key[0] <= '9' {
+		key = "_" + key
+	}
+	return key
+}
+
+// projectEnvVarJSON is the wire shape of a project variable. value is only
+// present for non-sensitive variables; value_status / value_length always say
+// whether a value is set.
+type projectEnvVarJSON struct {
 	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	Type           string  `json:"type"`
+	Key            string  `json:"key"`
+	Sensitive      bool    `json:"sensitive"`
+	Runtime        bool    `json:"runtime"`
+	Build          bool    `json:"build"`
 	ValueStatus    string  `json:"value_status"`
 	ValueLength    int     `json:"value_length"`
-	ValuePreview   string  `json:"value_preview"`
+	Value          *string `json:"value,omitempty"`
 	SourceSecretID *string `json:"source_secret_id"`
-	EnvVarName     string  `json:"env_var_name"`
-	UseForGit      bool    `json:"use_for_git"`
-	UseForBuild    bool    `json:"use_for_build"`
-	BuildSecretID  string  `json:"build_secret_id"`
-	GitUsername    string  `json:"git_username"`
 	CreatedAt      string  `json:"created_at"`
 	UpdatedAt      string  `json:"updated_at"`
 }
 
-func toProjectSecretJSON(v *store.ProjectSecretView) projectSecretJSON {
-	var src *string
+func toProjectEnvVarJSON(v *store.ProjectEnvVarView) projectEnvVarJSON {
+	out := projectEnvVarJSON{
+		ID:          v.ID.String(),
+		Key:         v.Key,
+		Sensitive:   v.Sensitive,
+		Runtime:     v.Runtime,
+		Build:       v.Build,
+		ValueStatus: v.ValueStatus,
+		ValueLength: v.ValueLength,
+		CreatedAt:   v.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   v.UpdatedAt.Format(time.RFC3339),
+	}
+	if !v.Sensitive {
+		val := v.Value
+		out.Value = &val
+	}
 	if v.SourceSecretID != nil {
-		s := v.SourceSecretID.String()
-		src = &s
+		src := v.SourceSecretID.String()
+		out.SourceSecretID = &src
 	}
-	return projectSecretJSON{
-		ID:             v.ID.String(),
-		Name:           v.Name,
-		Type:           string(v.Type),
-		ValueStatus:    v.ValueStatus,
-		ValueLength:    v.ValueLength,
-		ValuePreview:   v.ValuePreview,
-		SourceSecretID: src,
-		EnvVarName:     v.EnvVarName,
-		UseForGit:      v.UseForGit,
-		UseForBuild:    v.UseForBuild,
-		BuildSecretID:  v.BuildSecretID,
-		GitUsername:    v.GitUsername,
-		CreatedAt:      v.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:      v.UpdatedAt.Format(time.RFC3339),
-	}
+	return out
 }
 
-// projectSecretAccess resolves {id} and checks the caller may manage the
-// project's secrets (any member, or an admin).
-func (s *Server) projectSecretAccess(w http.ResponseWriter, r *http.Request) (uuid.UUID, *store.User, bool) {
+// projectMemberAccess resolves {id} and checks the caller may manage the
+// project's variables and credentials (any member, or an admin).
+func (s *Server) projectMemberAccess(w http.ResponseWriter, r *http.Request) (uuid.UUID, *store.User, bool) {
 	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
 		return uuid.Nil, nil, false
@@ -5576,69 +5595,72 @@ func (s *Server) projectSecretAccess(w http.ResponseWriter, r *http.Request) (uu
 	return projectID, user, true
 }
 
-// respondProjectSecret writes the listed view of one project secret.
-func (s *Server) respondProjectSecret(w http.ResponseWriter, r *http.Request, projectID, id uuid.UUID) {
-	views, err := s.store.ListProjectSecrets(r.Context(), projectID)
+func (s *Server) envStoreErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrEnvKeyExists) {
+		jsonErr(w, err, http.StatusConflict)
+		return
+	}
+	jsonErr(w, err, 500)
+}
+
+// respondProjectEnvVar writes the listed view of one variable.
+func (s *Server) respondProjectEnvVar(w http.ResponseWriter, r *http.Request, projectID, id uuid.UUID) {
+	views, err := s.store.ListProjectEnvVars(r.Context(), projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
 	for _, v := range views {
 		if v.ID == id {
-			jsonOK(w, toProjectSecretJSON(v))
+			jsonOK(w, toProjectEnvVarJSON(v))
 			return
 		}
 	}
 	jsonErr(w, nil, 404)
 }
 
-func (s *Server) listProjectSecrets(w http.ResponseWriter, r *http.Request) {
-	projectID, _, ok := s.projectSecretAccess(w, r)
+func (s *Server) listProjectEnvVars(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := s.projectMemberAccess(w, r)
 	if !ok {
 		return
 	}
-	views, err := s.store.ListProjectSecrets(r.Context(), projectID)
+	views, err := s.store.ListProjectEnvVars(r.Context(), projectID)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
-	out := make([]projectSecretJSON, 0, len(views))
+	out := make([]projectEnvVarJSON, 0, len(views))
 	for _, v := range views {
-		out = append(out, toProjectSecretJSON(v))
+		out = append(out, toProjectEnvVarJSON(v))
 	}
 	jsonOK(w, out)
 }
 
-// createProjectSecret adds a secret to a project, either with a value given
-// directly or by copying one of the caller's personal secrets (from_secret_id).
-func (s *Server) createProjectSecret(w http.ResponseWriter, r *http.Request) {
-	projectID, user, ok := s.projectSecretAccess(w, r)
+// createProjectEnvVar adds a variable, either with a value given directly or
+// by copying one of the caller's personal secrets (from_secret_id).
+func (s *Server) createProjectEnvVar(w http.ResponseWriter, r *http.Request) {
+	projectID, user, ok := s.projectMemberAccess(w, r)
 	if !ok {
 		return
 	}
 	var body struct {
-		Name          string `json:"name"`
-		Type          string `json:"type"`
-		Value         string `json:"value"`
-		FromSecretID  string `json:"from_secret_id"`
-		EnvVarName    string `json:"env_var_name"`
-		UseForGit     bool   `json:"use_for_git"`
-		UseForBuild   bool   `json:"use_for_build"`
-		BuildSecretID string `json:"build_secret_id"`
-		GitUsername   string `json:"git_username"`
+		Key          string `json:"key"`
+		Value        string `json:"value"`
+		Sensitive    *bool  `json:"sensitive"` // default true
+		Runtime      *bool  `json:"runtime"`   // default true
+		Build        bool   `json:"build"`
+		FromSecretID string `json:"from_secret_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
-	ps := &store.ProjectSecret{
-		ProjectID:     projectID,
-		Name:          strings.TrimSpace(body.Name),
-		EnvVarName:    strings.TrimSpace(body.EnvVarName),
-		UseForGit:     body.UseForGit,
-		UseForBuild:   body.UseForBuild,
-		BuildSecretID: strings.TrimSpace(body.BuildSecretID),
-		GitUsername:   body.GitUsername,
+	v := &store.ProjectEnvVar{
+		ProjectID: projectID,
+		Key:       strings.TrimSpace(body.Key),
+		Sensitive: body.Sensitive == nil || *body.Sensitive,
+		Runtime:   body.Runtime == nil || *body.Runtime,
+		Build:     body.Build,
 	}
 	if body.FromSecretID != "" {
 		srcID, err := uuid.Parse(body.FromSecretID)
@@ -5656,107 +5678,190 @@ func (s *Server) createProjectSecret(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, fmt.Errorf("registry secrets apply to all of the owner's projects and cannot be copied into a project"), 400)
 			return
 		}
-		if err := s.store.CopySecretToProject(r.Context(), ps, src); err != nil {
-			jsonErr(w, err, 500)
+		if v.Key == "" {
+			v.Key = envKeyFromName(src.Name)
+		}
+		if body.Sensitive == nil {
+			v.Sensitive = src.Type != store.SecretTypeEnvVar
+		}
+		if !envKeyRe.MatchString(v.Key) {
+			jsonErr(w, fmt.Errorf("key must match %s", envKeyRe), 400)
+			return
+		}
+		if err := s.store.CopySecretToProjectEnv(r.Context(), v, src); err != nil {
+			s.envStoreErr(w, err)
 			return
 		}
 	} else {
-		if ps.Name == "" || body.Value == "" {
-			jsonErr(w, fmt.Errorf("name and value are required"), 400)
+		if !envKeyRe.MatchString(v.Key) {
+			jsonErr(w, fmt.Errorf("key must match %s", envKeyRe), 400)
 			return
 		}
-		switch store.SecretType(body.Type) {
-		case store.SecretTypePassword, store.SecretTypeSSHKey, store.SecretTypeAPIKey, store.SecretTypeEnvVar:
-		default:
-			jsonErr(w, fmt.Errorf("type must be one of: password, ssh_key, api_key, env_var"), 400)
+		if body.Value == "" {
+			jsonErr(w, fmt.Errorf("value is required"), 400)
 			return
 		}
-		ps.Type = store.SecretType(body.Type)
-		if err := s.store.CreateProjectSecret(r.Context(), ps, body.Value); err != nil {
-			jsonErr(w, err, 500)
+		if err := s.store.CreateProjectEnvVar(r.Context(), v, body.Value); err != nil {
+			s.envStoreErr(w, err)
 			return
 		}
 	}
-	s.respondProjectSecret(w, r, projectID, ps.ID)
+	s.respondProjectEnvVar(w, r, projectID, v.ID)
 }
 
-// updateProjectSecret patches a project secret. Omitted fields are unchanged;
-// a non-empty value replaces the stored value.
-func (s *Server) updateProjectSecret(w http.ResponseWriter, r *http.Request) {
-	projectID, _, ok := s.projectSecretAccess(w, r)
+// updateProjectEnvVar patches a variable. Omitted fields are unchanged; a
+// non-empty value replaces the stored value. A sensitive variable cannot be
+// made non-sensitive (that would reveal a write-only value to every member).
+func (s *Server) updateProjectEnvVar(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := s.projectMemberAccess(w, r)
 	if !ok {
 		return
 	}
-	secretID, ok := parsePathUUID(w, r, "secretId")
+	varID, ok := parsePathUUID(w, r, "varId")
 	if !ok {
 		return
 	}
 	var body struct {
-		Name          *string `json:"name"`
-		Value         *string `json:"value"`
-		EnvVarName    *string `json:"env_var_name"`
-		UseForGit     *bool   `json:"use_for_git"`
-		UseForBuild   *bool   `json:"use_for_build"`
-		BuildSecretID *string `json:"build_secret_id"`
-		GitUsername   *string `json:"git_username"`
+		Key       *string `json:"key"`
+		Value     *string `json:"value"`
+		Sensitive *bool   `json:"sensitive"`
+		Runtime   *bool   `json:"runtime"`
+		Build     *bool   `json:"build"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
-	ps, err := s.store.GetProjectSecret(r.Context(), projectID, secretID)
+	v, err := s.store.GetProjectEnvVar(r.Context(), projectID, varID)
 	if err != nil {
 		jsonErr(w, nil, 404)
 		return
 	}
-	if body.Name != nil {
-		name := strings.TrimSpace(*body.Name)
-		if name == "" {
-			jsonErr(w, fmt.Errorf("name cannot be empty"), 400)
+	if body.Key != nil {
+		key := strings.TrimSpace(*body.Key)
+		if !envKeyRe.MatchString(key) {
+			jsonErr(w, fmt.Errorf("key must match %s", envKeyRe), 400)
 			return
 		}
-		ps.Name = name
+		v.Key = key
 	}
-	if body.EnvVarName != nil {
-		ps.EnvVarName = strings.TrimSpace(*body.EnvVarName)
+	if body.Sensitive != nil {
+		if v.Sensitive && !*body.Sensitive {
+			jsonErr(w, fmt.Errorf("a sensitive variable cannot be made non-sensitive; delete and recreate it instead"), 400)
+			return
+		}
+		v.Sensitive = *body.Sensitive
 	}
-	if body.UseForGit != nil {
-		ps.UseForGit = *body.UseForGit
+	if body.Runtime != nil {
+		v.Runtime = *body.Runtime
 	}
-	if body.UseForBuild != nil {
-		ps.UseForBuild = *body.UseForBuild
-	}
-	if body.BuildSecretID != nil {
-		ps.BuildSecretID = strings.TrimSpace(*body.BuildSecretID)
-	}
-	if body.GitUsername != nil {
-		ps.GitUsername = *body.GitUsername
+	if body.Build != nil {
+		v.Build = *body.Build
 	}
 	newValue := body.Value
 	if newValue != nil && *newValue == "" {
 		newValue = nil
 	}
-	if err := s.store.UpdateProjectSecret(r.Context(), ps, newValue); err != nil {
-		jsonErr(w, err, 500)
+	if err := s.store.UpdateProjectEnvVar(r.Context(), v, newValue); err != nil {
+		s.envStoreErr(w, err)
 		return
 	}
-	s.respondProjectSecret(w, r, projectID, ps.ID)
+	s.respondProjectEnvVar(w, r, projectID, v.ID)
 }
 
-func (s *Server) deleteProjectSecret(w http.ResponseWriter, r *http.Request) {
-	projectID, _, ok := s.projectSecretAccess(w, r)
+func (s *Server) deleteProjectEnvVar(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := s.projectMemberAccess(w, r)
 	if !ok {
 		return
 	}
-	secretID, ok := parsePathUUID(w, r, "secretId")
+	varID, ok := parsePathUUID(w, r, "varId")
 	if !ok {
 		return
 	}
-	if err := s.store.DeleteProjectSecret(r.Context(), projectID, secretID); err != nil {
+	if err := s.store.DeleteProjectEnvVar(r.Context(), projectID, varID); err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// ─── Project git credential ─────────────────────────────────────────────────
+
+func (s *Server) respondGitCredential(w http.ResponseWriter, r *http.Request, projectID uuid.UUID) {
+	info, err := s.store.GetProjectGitCredentialInfo(r.Context(), projectID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]any{
+		"type":         info.Type,
+		"username":     info.Username,
+		"value_status": info.ValueStatus,
+		"value_length": info.ValueLength,
+	})
+}
+
+func (s *Server) getProjectGitCredential(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := s.projectMemberAccess(w, r)
+	if !ok {
+		return
+	}
+	s.respondGitCredential(w, r, projectID)
+}
+
+// setProjectGitCredential sets how muvee authenticates when cloning an
+// external repo: none, an HTTPS token (with username) or an SSH deploy key.
+// An empty value keeps the stored one, which is only allowed when the type is
+// unchanged (e.g. editing just the HTTPS username).
+func (s *Server) setProjectGitCredential(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := s.projectMemberAccess(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Type     string `json:"type"`
+		Username string `json:"username"`
+		Value    string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	username := strings.TrimSpace(body.Username)
+	switch body.Type {
+	case store.GitAuthNone:
+		username = ""
+	case store.GitAuthHTTPSToken:
+		if username == "" {
+			username = "x-access-token"
+		}
+	case store.GitAuthSSHKey:
+		username = ""
+	default:
+		jsonErr(w, fmt.Errorf("type must be one of: none, https_token, ssh_key"), 400)
+		return
+	}
+	var value *string
+	if body.Type != store.GitAuthNone {
+		if body.Value != "" {
+			value = &body.Value
+		} else {
+			cur, err := s.store.GetProjectGitCredentialInfo(r.Context(), projectID)
+			if err != nil {
+				jsonErr(w, err, 500)
+				return
+			}
+			if cur.Type != body.Type || cur.ValueStatus != store.SecretValueSet {
+				jsonErr(w, fmt.Errorf("value is required"), 400)
+				return
+			}
+		}
+	}
+	if err := s.store.SetProjectGitCredential(r.Context(), projectID, body.Type, username, value); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	s.respondGitCredential(w, r, projectID)
 }
 
 // ─── Workspace File Management ────────────────────────────────────────────────

@@ -299,20 +299,7 @@ func (s *Scheduler) fetchComposeFileExternal(ctx context.Context, p *store.Proje
 		return nil, nil
 	}
 
-	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, p.ID)
-	var gitSSHKey, gitUsername, gitToken string
-	for _, sec := range secrets {
-		if !sec.UseForGit {
-			continue
-		}
-		switch sec.SecretType {
-		case store.SecretTypeSSHKey:
-			gitSSHKey = sec.PlainValue
-		case store.SecretTypePassword:
-			gitUsername = sec.GitUsername
-			gitToken = sec.PlainValue
-		}
-	}
+	gitUsername, gitToken, gitSSHKey, _ := s.store.GetProjectGitCredential(ctx, p.ID)
 
 	remote := p.GitURL
 	if gitUsername != "" && gitToken != "" && strings.HasPrefix(remote, "https://") {
