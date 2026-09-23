@@ -382,11 +382,12 @@ Four kubectl-style read-only / single-shot commands for poking at a running proj
 # changing secrets or env vars, or to clear memory.
 muveectl projects restart PROJECT_ID
 
-# Print env vars effective inside the container. Secret-looking keys
+# Print env vars effective inside the running container. Secret-looking keys
 # (PASSWORD/SECRET/TOKEN/KEY/CREDENTIAL/...) mask their values as '***';
-# add --raw to see the unmasked value.
-muveectl projects env PROJECT_ID
-muveectl projects env PROJECT_ID --raw
+# add --raw to see the unmasked value. (Without --live, `projects env` lists
+# the project's configured variables — see "Project Environment Variables".)
+muveectl projects env PROJECT_ID --live
+muveectl projects env PROJECT_ID --live --raw
 
 # Kubectl-describe-style snapshot: status, exit code, OOMKilled, restart
 # count, image+sha, ports, mounts, env keys.
@@ -409,7 +410,7 @@ When to reach for each:
 - **`restart`** when env vars / secrets changed but the project file is unchanged, or to break a wedged process without a deploy cycle.
 - **`pause` / `resume`** to park an idle project: pause frees its CPU/memory (image and volumes are kept, config preserved) and blocks all redeploys; resume brings it back with no rebuild. Use instead of `delete` when you want the project back later. Note: paused frees compute, not disk — use `delete` if you need the image layers reclaimed.
 - **`describe`** as the first stop when "why did my container die?" — it gives you ExitCode, OOMKilled, RestartCount, and Health on one screen.
-- **`env`** to confirm an injected secret or auto-injected `MUVEE_*` env var actually reached the container.
+- **`env --live`** to confirm a project variable or auto-injected `MUVEE_*` env var actually reached the container.
 - **`events`** to follow what the platform itself thinks is happening — useful when you suspect the deploy lifecycle, not the app, is misbehaving.
 
 ### Interactive Debugging (`exec` / `shell` / `cp`)
@@ -572,7 +573,7 @@ muveectl tokens delete PROJECT_ID TOKEN_ID
 
 ## Secrets
 
-Secrets store passwords, API tokens, and SSH private keys — encrypted at rest (AES-256-GCM). Values are **write-only** and never returned after creation.
+Personal secrets store passwords, API tokens, and SSH private keys — encrypted at rest (AES-256-GCM). Values are **write-only** and never returned after creation (`value_status` says whether a value is set). A personal secret does nothing on its own: it is a source you copy into projects (`projects env copy`, `projects git-credential set --from-secret-id`), except `registry` secrets, which apply to all your compose projects.
 
 ```bash
 # List secrets (names and types only)
@@ -594,85 +595,95 @@ muveectl secrets create --name GHCR_PULL --type registry \
 muveectl secrets delete SECRET_ID
 ```
 
-### Project Secrets
+### Project Environment Variables
 
-Each project owns its own secrets; every project member sees the same list
-(`muveectl projects secrets`, values never returned — `value_status` says
-whether a value is set). `bind-secret` **copies** one of your personal secrets
-into the project: the copy is independent, so rotating or deleting the personal
-secret later does not change the project (copy it again to pick up a new
-value). `registry` secrets are the exception — they are never copied and apply
-to all of your compose projects automatically. Project secrets can be used in
-three ways:
-- Runtime env vars (`--env-var`)
-- Git clone auth (`--use-for-git`)
-- Docker build-time secret mounts (`--use-for-build --build-secret-id`)
+Each project owns its own environment variables; every project member (and
+every admin) sees the same list. A variable is a `KEY` plus a value and three
+switches:
+- **sensitive** (default on) — the value is write-only: `value_status` /
+  `value_length` say whether it is set, but it is never returned. Non-sensitive
+  (`--plain`) values are shown in full. A sensitive variable cannot be made
+  plain; unset it and set it again instead.
+- **runtime** (default on) — injected into the container environment.
+- **build** (default off) — passed to `docker buildx` as a build secret whose
+  id is the `KEY` (`RUN --mount=type=secret,id=KEY`).
+
+`env copy` **copies** one of your personal secrets into the project: the copy is
+independent, so rotating or deleting the personal secret later does not change
+the project (copy it again to pick up a new value). `registry` secrets are never
+copied — they apply to all of your compose projects automatically.
 
 ```bash
-# List a project's secrets (ID, name, type, value_status, ...)
-muveectl projects secrets PROJECT_ID
+# List a project's variables (KEY, SENSITIVE, RUNTIME, BUILD, VALUE_STATUS, ...)
+muveectl projects env PROJECT_ID
 
-# Copy a personal secret into the project as an environment variable
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --env-var GITHUB_TOKEN
+# Create or update a variable (sensitive by default)
+muveectl projects env set PROJECT_ID DATABASE_URL=postgres://...
+muveectl projects env set PROJECT_ID LOG_LEVEL=debug --plain
 
-# Copy a password secret for HTTPS git auth (GitHub fine-grained PAT)
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id TOKEN_SECRET_ID \
-  --use-for-git \
-  --git-username x-access-token   # default; for GitLab use "oauth2"
+# Build-time only (docker build secret, not injected at runtime)
+muveectl projects env set PROJECT_ID NPM_TOKEN=npm_xxx --build --no-runtime
 
-# Copy a secret for docker buildx secret mount
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id TOKEN_SECRET_ID \
-  --use-for-build \
-  --build-secret-id github_token
+# Updating an existing KEY replaces the value; its scope only changes when a
+# flag is given explicitly (e.g. --build=false, --no-runtime=false)
+muveectl projects env set PROJECT_ID DATABASE_URL=postgres://new...
 
-# --build-secret-id is optional; muveectl auto-derives it from secret name
-# e.g. "GITHUB_TOKEN" -> "github_token"
+# Copy a personal secret (KEY defaults to the secret name; env_var secrets
+# become plain variables, other types sensitive)
+muveectl projects env copy PROJECT_ID --secret-id SECRET_ID [--key GITHUB_TOKEN] [--build] [--no-runtime]
 
-# Copy an SSH key for git clone
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SSH_KEY_SECRET_ID \
-  --use-for-git
+# Delete a variable
+muveectl projects env unset PROJECT_ID DATABASE_URL
+```
 
-# Copy a secret for BOTH git auth AND as runtime env var
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id TOKEN_SECRET_ID \
-  --env-var GITHUB_TOKEN \
-  --use-for-git \
-  --git-username x-access-token
+After changing runtime variables, `muveectl projects restart PROJECT_ID` (or
+redeploy) so the container picks them up; build variables apply on the next
+deploy.
 
-# Remove a secret from the project (PROJECT_SECRET_ID from `projects secrets`)
-muveectl projects unbind-secret PROJECT_ID PROJECT_SECRET_ID
+### Private Git Repository Credential
+
+The credential muvee uses to clone an external repository is a project setting,
+separate from the variables. Types: `https_token` (username + token), `ssh_key`
+(deploy key), or `none`. The value is write-only.
+
+```bash
+# Show the current credential (type, username, value_status)
+muveectl projects git-credential PROJECT_ID
+
+# HTTPS token (username defaults to x-access-token)
+muveectl projects git-credential set PROJECT_ID --type https_token --value github_pat_xxxx
+
+# SSH deploy key from a file
+muveectl projects git-credential set PROJECT_ID --type ssh_key --value-file deploy_key
+
+# Or copy one of your personal password / ssh_key secrets
+muveectl projects git-credential set PROJECT_ID --from-secret-id SECRET_ID [--username oauth2]
+
+# Change only the HTTPS username (keeps the stored token)
+muveectl projects git-credential set PROJECT_ID --type https_token --username oauth2
+
+# Remove it (clone anonymously)
+muveectl projects git-credential clear PROJECT_ID
 ```
 
 ### Private Git Repository — GitHub Fine-Grained PAT (Recommended)
 
-GitHub recommends fine-grained PATs over SSH deploy keys. Use a `password` secret with HTTPS git auth:
+GitHub recommends fine-grained PATs over SSH deploy keys:
 
 ```bash
-# 1. Create a password secret with the GitHub PAT value
-muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
+# 1. Set the PAT as the project's git credential
+muveectl projects git-credential set PROJECT_ID --type https_token --value github_pat_xxxx
 
-# 2. Copy into the project — use x-access-token as the HTTPS username (GitHub convention)
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --use-for-git \
-  --git-username x-access-token
+# Optionally also expose it to the app at runtime:
+# muveectl projects env set PROJECT_ID GITHUB_TOKEN=github_pat_xxxx
 
-# Optionally also inject as env var for runtime use:
-# muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID \
-#   --use-for-git --git-username x-access-token --env-var GITHUB_TOKEN
-
-# 3. Deploy
+# 2. Deploy
 muveectl projects deploy PROJECT_ID
 ```
 
 The builder rewrites the git URL to `https://x-access-token:TOKEN@github.com/...` before cloning.
 
-| Provider | `--git-username` |
+| Provider | `--username` |
 |---|---|
 | GitHub | `x-access-token` (default) |
 | GitLab | `oauth2` |
@@ -680,21 +691,18 @@ The builder rewrites the git URL to `https://x-access-token:TOKEN@github.com/...
 
 ### Private Build Dependencies (e.g. private Go modules)
 
-If your Docker build needs secrets (for `go mod download`, private package registries, etc.), copy a secret into the project with build flags:
+If your Docker build needs secrets (for `go mod download`, private package registries, etc.), add a build variable — the build secret id is the variable's KEY:
 
 ```bash
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --use-for-build \
-  --build-secret-id github_token
+muveectl projects env set PROJECT_ID GITHUB_TOKEN=github_pat_xxxx --build --no-runtime
 ```
 
 In Dockerfile:
 
 ```dockerfile
 # syntax=docker/dockerfile:1.7
-RUN --mount=type=secret,id=github_token \
-    TOKEN="$(cat /run/secrets/github_token)" && \
+RUN --mount=type=secret,id=GITHUB_TOKEN \
+    TOKEN="$(cat /run/secrets/GITHUB_TOKEN)" && \
     # ... use token for private deps ...
     go mod download
 ```
@@ -708,13 +716,10 @@ For SSH-based authentication or providers that require it:
 ssh-keygen -t ed25519 -f deploy_key -N ""
 # Add deploy_key.pub as a Deploy Key in your repository settings
 
-# 2. Create SSH key secret
-muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file deploy_key
+# 2. Set it as the project's git credential
+muveectl projects git-credential set PROJECT_ID --type ssh_key --value-file deploy_key
 
-# 3. Copy into the project
-muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID --use-for-git
-
-# 4. Deploy
+# 3. Deploy
 muveectl projects deploy PROJECT_ID
 ```
 
@@ -730,7 +735,7 @@ muveectl projects deploy PROJECT_ID
 For a project to deploy successfully the repository must satisfy:
 
 ### Build
-- Accessible via `git clone --depth=1` over HTTPS (public or with PAT via Secrets) or SSH (SSH key via Secrets)
+- Accessible via `git clone --depth=1` over HTTPS (public, or with a PAT / SSH deploy key set via `projects git-credential`)
 - The configured branch must exist (default: `main`)
 - A `Dockerfile` must exist at the configured path (default: `Dockerfile` in repo root). The `--dockerfile` flag takes a **file path** relative to the repo root (e.g. `web/Dockerfile`), not a directory path like `.` or `web/`.
 - Image must build for **`linux/amd64`** (`docker buildx build --platform linux/amd64`)
