@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
@@ -921,41 +922,43 @@ var projectsPortForwardCmd = &cobra.Command{
 			ln.Addr().(*net.TCPAddr).Port, str(proj, "domain_prefix")+"."+str(proj, "name"), projectID)
 		fmt.Println("Press Ctrl+C to stop.")
 
-		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			targetURL := proxyBase + r.URL.Path
-			if r.URL.RawQuery != "" {
-				targetURL += "?" + r.URL.RawQuery
-			}
+		target, err := url.Parse(proxyBase)
+		if err != nil {
+			return fmt.Errorf("parse server url: %w", err)
+		}
 
-			proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			for k, vv := range r.Header {
-				for _, v := range vv {
-					proxyReq.Header.Add(k, v)
+		// HTTP/1.1 connection pool instead of the default HTTP/2 transport:
+		// HTTP/2 multiplexes every local request onto one TCP connection, so
+		// with several browsers attached a small request queues behind bulk
+		// downloads (head-of-line blocking, seconds of latency). One
+		// connection per in-flight request matches what a browser would do
+		// against the server directly, and lets WebSocket upgrades through.
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		// Earlier cl.do calls already set up h2 on DefaultTransport, leaving
+		// "h2" in its TLS ALPN list; drop it or the server still picks h2.
+		transport.TLSClientConfig = nil
+		transport.Protocols = new(http.Protocols)
+		transport.Protocols.SetHTTP1(true)
+		transport.MaxIdleConnsPerHost = 64
+
+		// ReverseProxy also flushes streaming responses (SSE) immediately and
+		// strips hop-by-hop headers, which a plain io.Copy did not.
+		proxy := &httputil.ReverseProxy{
+			Rewrite: func(pr *httputil.ProxyRequest) {
+				pr.Out.URL.Scheme = target.Scheme
+				pr.Out.URL.Host = target.Host
+				pr.Out.URL.Path = target.Path + pr.In.URL.Path
+				pr.Out.URL.RawPath = ""
+				if pr.In.URL.RawPath != "" {
+					pr.Out.URL.RawPath = target.Path + pr.In.URL.RawPath
 				}
-			}
-			proxyReq.Header.Set("Authorization", "Bearer "+cl.token)
+				pr.Out.Host = target.Host
+				pr.Out.Header.Set("Authorization", "Bearer "+cl.token)
+			},
+			Transport: transport,
+		}
 
-			resp, err := http.DefaultClient.Do(proxyReq)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			defer resp.Body.Close()
-
-			for k, vv := range resp.Header {
-				for _, v := range vv {
-					w.Header().Add(k, v)
-				}
-			}
-			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body)
-		})
-
-		return http.Serve(ln, handler)
+		return http.Serve(ln, proxy)
 	},
 }
 
