@@ -104,6 +104,8 @@
       "failed": "failed",
       "stopped": "stopped",
       "pending": "idle",
+      "queued": "queued",
+      "superseded": "superseded",
       "tunnel": "tunnel"
     }
   },

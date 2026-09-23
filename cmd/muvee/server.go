@@ -162,6 +162,7 @@ func runServer() {
 	go processBuildCompletions(ctx, st, sched)
 	go processNodeFailovers(ctx, st, sched)
 	sched.StartAutoDeployPoller(ctx)
+	sched.StartDeployQueueSweeper(ctx, 30*time.Second)
 	sched.StartImageWatcher(ctx)
 
 	if p := os.Getenv("TRAEFIK_ACCESS_LOG_PATH"); p != "" {
@@ -262,6 +263,7 @@ func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.S
 			if err := sched.DispatchDeploy(ctx, newDep, project, newDep.ImageTag); err != nil {
 				log.Printf("Failed to dispatch failover deploy for project %s: %v", project.Name, err)
 				_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusFailed, err.Error())
+				_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
 			} else {
 				log.Printf("Failover deployment %s dispatched for project %s", newDep.ID, project.Name)
 			}
@@ -331,14 +333,18 @@ func checkBuildCompletions(ctx context.Context, st *store.Store, sched *schedule
 			_ = st.SetProjectLastImageTag(ctx, project.ID, res.ImageTag)
 			_ = st.UpdateDeploymentStatus(ctx, r.deploymentID, store.DeploymentStatusRunning, "")
 			_ = st.SetDeploymentHostPort(ctx, r.deploymentID, 0)
-			autoTriggerDownstreamRedeploys(ctx, st, sched, project)
 			_ = st.UpdateTaskStatus(ctx, r.taskID, store.TaskStatusCompleted, r.result+"_dispatched")
+			_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
+			autoTriggerDownstreamRedeploys(ctx, st, sched, project)
 			continue
 		}
 		_ = st.UpdateDeploymentStatus(ctx, r.deploymentID, store.DeploymentStatusDeploying, "")
 		if err := sched.DispatchDeploy(ctx, deployment, project, res.ImageTag); err != nil {
 			fmt.Printf("dispatch deploy error: %v\n", err)
 			_ = st.UpdateDeploymentStatus(ctx, r.deploymentID, store.DeploymentStatusFailed, err.Error())
+			_ = st.UpdateTaskStatus(ctx, r.taskID, store.TaskStatusCompleted, r.result+"_dispatched")
+			_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
+			continue
 		}
 		_ = st.UpdateTaskStatus(ctx, r.taskID, store.TaskStatusCompleted, r.result+"_dispatched")
 	}
