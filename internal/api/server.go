@@ -5427,6 +5427,8 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 		ID               string `json:"id"`
 		Name             string `json:"name"`
 		Type             string `json:"type"`
+		ValueStatus      string `json:"value_status"`
+		ValueLength      int    `json:"value_length"`
 		ValuePreview     string `json:"value_preview"`
 		RegistryAddr     string `json:"registry_addr"`
 		RegistryUsername string `json:"registry_username"`
@@ -5435,10 +5437,13 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]safeSecret, 0, len(secrets))
 	for _, sec := range secrets {
+		status, length, _ := s.store.DescribeSecretValue(sec.Type, sec.EncryptedValue)
 		out = append(out, safeSecret{
 			ID:               sec.ID.String(),
 			Name:             sec.Name,
 			Type:             string(sec.Type),
+			ValueStatus:      status,
+			ValueLength:      length,
 			ValuePreview:     sec.ValuePreview,
 			RegistryAddr:     sec.RegistryAddr,
 			RegistryUsername: sec.RegistryUsername,
@@ -5486,10 +5491,13 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 500)
 		return
 	}
-	jsonOK(w, map[string]string{
+	status, length, _ := s.store.DescribeSecretValue(sec.Type, sec.EncryptedValue)
+	jsonOK(w, map[string]any{
 		"id":                sec.ID.String(),
 		"name":              sec.Name,
 		"type":              string(sec.Type),
+		"value_status":      status,
+		"value_length":      length,
 		"value_preview":     sec.ValuePreview,
 		"registry_addr":     sec.RegistryAddr,
 		"registry_username": sec.RegistryUsername,

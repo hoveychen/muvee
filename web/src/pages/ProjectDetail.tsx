@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette, Pause, Play } from 'lucide-react'
 import { api } from '../lib/api'
+import SecretValueStatus from '../components/SecretValueStatus'
 import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectAlias, ProjectDataset, ProjectPasswordAccount, ProjectSecret, ProjectSecretPatch, ProjectTraffic, ProjectVisit, Secret, SecretType, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
@@ -3156,24 +3157,6 @@ function AddProjectSecretForm({
   )
 }
 
-function SecretValueStatus({ secret }: { secret: ProjectSecret }) {
-  const { t } = useTranslation()
-  if (secret.value_status === 'empty') {
-    return <span className="badge badge-warning">{t('projectDetail.secrets.statusEmpty')}</span>
-  }
-  if (secret.value_status === 'undecryptable') {
-    return <span className="badge badge-danger">{t('projectDetail.secrets.statusUndecryptable')}</span>
-  }
-  return (
-    <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-      title={secret.value_preview || undefined}>
-      {secret.value_preview
-        ? t('projectDetail.secrets.statusSetPreview', { preview: secret.value_preview, len: secret.value_length })
-        : t('projectDetail.secrets.statusSet', { len: secret.value_length })}
-    </span>
-  )
-}
-
 function ProjectSecretRow({
   projectId, secret, last, onChange, onDelete,
 }: {
@@ -3242,7 +3225,7 @@ function ProjectSecretRow({
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <span style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>{secret.name}</span>
             <span className={`badge ${secretTypeBadge(secret.type)}`}>{t(secretTypeLabelKey(secret.type))}</span>
-            <SecretValueStatus secret={secret} />
+            <SecretValueStatus status={secret.value_status} length={secret.value_length} preview={secret.value_preview} />
             {secret.source_secret_id && (
               <span style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>{t('projectDetail.secrets.copiedFromPersonal')}</span>
             )}
@@ -3268,7 +3251,7 @@ function ProjectSecretRow({
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
             <div className="flex items-center gap-2">
               <span className="form-label" style={fieldLabel}>{t('projectDetail.secrets.envVar')}</span>
-              {textInput('env_var_name', 'MY_SECRET', '180px')}
+              {textInput('env_var_name', t('projectDetail.secrets.envVarPlaceholder'), '180px')}
             </div>
 
             <label className="flex items-center gap-2" style={optionLabel}>

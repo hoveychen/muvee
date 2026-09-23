@@ -2391,6 +2391,26 @@ func scanProjectSecret(row pgx.Row, ps *ProjectSecret, extra ...any) error {
 	return row.Scan(append([]any{&ps.ID, &ps.ProjectID, &ps.SourceSecretID, &ps.Name, &ps.Type, &ps.EnvVarName, &ps.UseForGit, &ps.UseForBuild, &ps.BuildSecretID, &ps.GitUsername, &ps.CreatedAt, &ps.UpdatedAt}, extra...)...)
 }
 
+// DescribeSecretValue reports non-sensitive facts about an encrypted secret
+// value: its status (one of SecretValue*), rune length and display preview.
+// The plaintext is decrypted only in memory and never returned.
+func (s *Store) DescribeSecretValue(secretType SecretType, encryptedValue string) (status string, length int, preview string) {
+	if encryptedValue == "" {
+		return SecretValueEmpty, 0, ""
+	}
+	if s.encryptionKey == nil {
+		return SecretValueUndecryptable, 0, ""
+	}
+	plain, err := crypto.Decrypt(s.encryptionKey, encryptedValue)
+	if err != nil {
+		return SecretValueUndecryptable, 0, ""
+	}
+	if plain == "" {
+		return SecretValueEmpty, 0, ""
+	}
+	return SecretValueSet, utf8.RuneCountInString(plain), computeSecretPreview(secretType, plain)
+}
+
 // ListProjectSecrets returns a project's secrets with non-sensitive facts about
 // each value (set / empty / undecryptable, length, preview). Plaintext is
 // decrypted only in memory to derive those facts and is never returned.
@@ -2412,20 +2432,7 @@ func (s *Store) ListProjectSecrets(ctx context.Context, projectID uuid.UUID) ([]
 		if err := scanProjectSecret(rows, &v.ProjectSecret, &encVal); err != nil {
 			return nil, err
 		}
-		v.ValueStatus = SecretValueUndecryptable
-		if encVal == "" {
-			v.ValueStatus = SecretValueEmpty
-		} else if s.encryptionKey != nil {
-			if plain, err := crypto.Decrypt(s.encryptionKey, encVal); err == nil {
-				if plain == "" {
-					v.ValueStatus = SecretValueEmpty
-				} else {
-					v.ValueStatus = SecretValueSet
-					v.ValueLength = utf8.RuneCountInString(plain)
-					v.ValuePreview = computeSecretPreview(v.Type, plain)
-				}
-			}
-		}
+		v.ValueStatus, v.ValueLength, v.ValuePreview = s.DescribeSecretValue(v.Type, encVal)
 		result = append(result, &v)
 	}
 	return result, rows.Err()

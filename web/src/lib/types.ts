@@ -266,6 +266,8 @@ export interface CreatedApiToken {
 
 export type SecretType = 'password' | 'ssh_key' | 'api_key' | 'env_var' | 'registry'
 
+export type SecretValueStatus = 'set' | 'empty' | 'undecryptable'
+
 export interface Secret {
   id: string
   name: string
@@ -275,6 +277,9 @@ export interface Secret {
   // - env_var: full plaintext value
   // - password / ssh_key / registry: empty string
   value_preview: string
+  // Whether a value is actually stored, and its length (never the value itself).
+  value_status: SecretValueStatus
+  value_length: number
   // registry_addr / registry_username are set only for type=registry secrets.
   registry_addr: string
   registry_username: string
@@ -288,7 +293,7 @@ export interface ProjectSecret {
   id: string
   name: string
   type: SecretType
-  value_status: 'set' | 'empty' | 'undecryptable'
+  value_status: SecretValueStatus
   value_length: number
   // Same rules as Secret.value_preview: masked for api_key, plaintext for env_var, empty otherwise.
   value_preview: string

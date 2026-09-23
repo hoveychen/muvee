@@ -294,15 +294,17 @@
       "statusUndecryptable": "Cannot decrypt (encryption key may have changed)",
       "copiedFromPersonal": "Copied from a personal secret",
       "saving": "Saving…",
-      "envVar": "ENV VAR",
+      "envVar": "Inject at runtime as env var",
       "username": "USERNAME",
-      "useForBuild": "Use for docker build secret",
+      "useForBuild": "Expose to Dockerfile at build time (docker build secret)",
       "buildSecretId": "BUILD SECRET ID",
       "buildSecretHint": "Used as /run/secrets/<id> in Dockerfile RUN steps.",
       "useForGitSsh": "Use for git clone (SSH)",
       "useForGitHttps": "Use for git clone (HTTPS)",
       "githubPat": "(GitHub PAT → x-access-token)",
-      "failedToUpdate": "Failed to update secrets: "
+      "failedToUpdate": "Failed to update secrets: ",
+      "envVarPlaceholder": "empty = not injected",
+      "valueLabel": "Value"
     },
     "tokens": {
       "hint": "Project-scoped API tokens for git push and CLI access. Each token only works with this project.",
