@@ -594,31 +594,36 @@ muveectl secrets create --name GHCR_PULL --type registry \
 muveectl secrets delete SECRET_ID
 ```
 
-### Binding Secrets to Projects
+### Project Secrets
 
-Most secret types must be bound to a project; `registry` secrets are the
-exception — they apply to all of your compose projects automatically. Bindable
-secrets can be used in three ways:
+Each project owns its own secrets; every project member sees the same list
+(`muveectl projects secrets`, values never returned — `value_status` says
+whether a value is set). `bind-secret` **copies** one of your personal secrets
+into the project: the copy is independent, so rotating or deleting the personal
+secret later does not change the project (copy it again to pick up a new
+value). `registry` secrets are the exception — they are never copied and apply
+to all of your compose projects automatically. Project secrets can be used in
+three ways:
 - Runtime env vars (`--env-var`)
 - Git clone auth (`--use-for-git`)
 - Docker build-time secret mounts (`--use-for-build --build-secret-id`)
 
 ```bash
-# List secrets bound to a project
+# List a project's secrets (ID, name, type, value_status, ...)
 muveectl projects secrets PROJECT_ID
 
-# Bind a secret as an environment variable
+# Copy a personal secret into the project as an environment variable
 muveectl projects bind-secret PROJECT_ID \
   --secret-id SECRET_ID \
   --env-var GITHUB_TOKEN
 
-# Bind a password secret for HTTPS git auth (GitHub fine-grained PAT)
+# Copy a password secret for HTTPS git auth (GitHub fine-grained PAT)
 muveectl projects bind-secret PROJECT_ID \
   --secret-id TOKEN_SECRET_ID \
   --use-for-git \
   --git-username x-access-token   # default; for GitLab use "oauth2"
 
-# Bind a secret for docker buildx secret mount
+# Copy a secret for docker buildx secret mount
 muveectl projects bind-secret PROJECT_ID \
   --secret-id TOKEN_SECRET_ID \
   --use-for-build \
@@ -627,20 +632,20 @@ muveectl projects bind-secret PROJECT_ID \
 # --build-secret-id is optional; muveectl auto-derives it from secret name
 # e.g. "GITHUB_TOKEN" -> "github_token"
 
-# Bind an SSH key for git clone
+# Copy an SSH key for git clone
 muveectl projects bind-secret PROJECT_ID \
   --secret-id SSH_KEY_SECRET_ID \
   --use-for-git
 
-# Bind a secret for BOTH git auth AND as runtime env var
+# Copy a secret for BOTH git auth AND as runtime env var
 muveectl projects bind-secret PROJECT_ID \
   --secret-id TOKEN_SECRET_ID \
   --env-var GITHUB_TOKEN \
   --use-for-git \
   --git-username x-access-token
 
-# Remove a secret binding
-muveectl projects unbind-secret PROJECT_ID SECRET_ID
+# Remove a secret from the project (PROJECT_SECRET_ID from `projects secrets`)
+muveectl projects unbind-secret PROJECT_ID PROJECT_SECRET_ID
 ```
 
 ### Private Git Repository — GitHub Fine-Grained PAT (Recommended)
@@ -651,7 +656,7 @@ GitHub recommends fine-grained PATs over SSH deploy keys. Use a `password` secre
 # 1. Create a password secret with the GitHub PAT value
 muveectl secrets create --name GITHUB_TOKEN --type password --value github_pat_xxxx
 
-# 2. Bind to project — use x-access-token as the HTTPS username (GitHub convention)
+# 2. Copy into the project — use x-access-token as the HTTPS username (GitHub convention)
 muveectl projects bind-secret PROJECT_ID \
   --secret-id SECRET_ID \
   --use-for-git \
@@ -675,7 +680,7 @@ The builder rewrites the git URL to `https://x-access-token:TOKEN@github.com/...
 
 ### Private Build Dependencies (e.g. private Go modules)
 
-If your Docker build needs secrets (for `go mod download`, private package registries, etc.), bind a secret with build flags:
+If your Docker build needs secrets (for `go mod download`, private package registries, etc.), copy a secret into the project with build flags:
 
 ```bash
 muveectl projects bind-secret PROJECT_ID \
@@ -706,7 +711,7 @@ ssh-keygen -t ed25519 -f deploy_key -N ""
 # 2. Create SSH key secret
 muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file deploy_key
 
-# 3. Bind to project
+# 3. Copy into the project
 muveectl projects bind-secret PROJECT_ID --secret-id SECRET_ID --use-for-git
 
 # 4. Deploy
