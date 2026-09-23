@@ -91,6 +91,31 @@ BASE_DOMAINS=muveeai.com,muvee.ai
 - **TLS**：额外根域名**没有通配证书**——每个项目子域名各自通过 Let's Encrypt HTTP-01 申请证书，因此该域名必须在 80 端口公网可达以完成 ACME 挑战。
 - **OAuth Provider 后台**：把每个域名的回调 URL 注册到你使用的每个 provider，如 `https://app.<base>/auth/google/callback`（控制面板登录）和 `https://app.<base>/_oauth/google`（per-project ForwardAuth）。
 
+### Cloudflare Tunnel 域名
+
+根域名也可以改走 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)，与 ACME 域名并存。证书由 Cloudflare 边缘持有，`cloudflared` 容器主动外连 Cloudflare，所以这个域名不需要开放任何端口，也不走 Let's Encrypt。其余根域名保持原样（DNS → 公网 `:80`/`:443` → HTTP-01）。
+
+```bash
+BASE_DOMAINS=muveeai.com,example.net
+CF_TUNNEL_DOMAINS=example.net      # 必须是 BASE_DOMAINS 中的一个
+CF_TUNNEL_TOKEN=eyJhIjoi...        # 隧道的 connector token
+COMPOSE_PROFILES=cftunnel          # 同时启用 watchtower 时写 auto-update,cftunnel
+```
+
+1. 在 Cloudflare 后台（Zero Trust → Networks → Tunnels）创建隧道，把 token 填进 `CF_TUNNEL_TOKEN`。
+2. 给隧道加两个 Public Hostname：`example.net` 和 `*.example.net`，服务都填 `http://localhost:8000`。apex 的 CNAME 由 Cloudflare 自动创建；如果后台没有自动创建通配记录，就手动加一条 `*` CNAME 指向 `<tunnel-id>.cfargotunnel.com`。
+3. 在 SSL/TLS → Edge Certificates 打开 **Always Use HTTPS**。
+4. 拉取更新后的 `traefik/traefik.yml`（新增了内网入口 `cftunnel`），再执行 `docker compose up -d`。
+
+工作方式：`cloudflared` 与 Traefik 共用网络命名空间，把请求转发到 Traefik 的 `cftunnel` 入口（`:8000`）。该入口是明文 HTTP，不映射到宿主机，并且只信任来自回环地址的 `X-Forwarded-*`，因此应用拿到的是真实客户端 IP 和 `X-Forwarded-Proto: https`。muvee-server 把隧道域名下的所有 host 都放到这个入口上，不配证书解析器。它还会为 `<base>` 和 `app.<base>` 生成面板路由和 `/_oauth` 路由，不需要额外的 compose label。后台「证书」面板中，这些 host 显示为「Cloudflare 托管」。
+
+隧道域名的限制：
+
+- **TCP 路由不可用**：它依赖 `:443` 上的 SNI 透传，隧道不转发这类流量。ACME 域名上的 TCP 路由不受影响。
+- **上传大小**：Cloudflare Free / Pro 套餐单个请求体上限 100 MB。大文件 `muveectl dataset push` 请走 ACME 域名。隧道域名下不提供 `registry.<base>` 和 `traefik.<base>`。
+- **二级子域名**（如 `a.b.example.net`）不在 Cloudflare 免费 Universal SSL 证书的覆盖范围内。
+- 与其他额外根域名一样，需要把隧道域名的 OAuth 回调注册到各个 provider。
+
 ## 运行时设置（管理员后台）
 
 少数几个开关存放在 `system_settings` 表里，通过管理员后台编辑，
