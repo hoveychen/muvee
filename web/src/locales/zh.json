@@ -104,6 +104,8 @@
       "failed": "失败",
       "stopped": "已停止",
       "pending": "空闲",
+      "queued": "排队中",
+      "superseded": "已被取代",
       "tunnel": "隧道"
     }
   },

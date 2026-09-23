@@ -219,7 +219,7 @@ export interface Deployment {
   project_id: string
   image_tag: string
   commit_sha: string
-  status: 'pending' | 'building' | 'deploying' | 'running' | 'failed' | 'stopped'
+  status: 'pending' | 'building' | 'deploying' | 'running' | 'failed' | 'stopped' | 'queued' | 'superseded'
   node_id: string | null
   logs: string
   restart_count: number

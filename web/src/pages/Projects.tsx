@@ -94,6 +94,8 @@ function ProjectRow({ project, index, total }: { project: Project; index: number
     failed: t('projects.status.failed'),
     stopped: t('projects.status.stopped'),
     pending: t('projects.status.pending'),
+    queued: t('projects.status.queued'),
+    superseded: t('projects.status.superseded'),
     tunnel: t('projects.status.tunnel'),
   }
 

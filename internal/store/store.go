@@ -1267,7 +1267,9 @@ func (s *Store) CanAccessDataset(ctx context.Context, userID, datasetID uuid.UUI
 
 func (s *Store) CreateDeployment(ctx context.Context, d *Deployment) (*Deployment, error) {
 	d.ID = uuid.New()
-	d.Status = DeploymentStatusPending
+	if d.Status == "" {
+		d.Status = DeploymentStatusPending
+	}
 	d.CreatedAt = time.Now()
 	d.UpdatedAt = time.Now()
 	_, err := s.db.Exec(ctx, `
@@ -1484,6 +1486,229 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, id uuid.UUID, status
 	}
 	_, err := s.db.Exec(ctx, `UPDATE deployments SET status=$1, updated_at=NOW() WHERE id=$2`, status, id)
 	return err
+}
+
+// DeployQueueAdvance reports what one AdvanceDeployQueue call decided.
+type DeployQueueAdvance struct {
+	// Dispatch is the newest queued deployment, already flipped to 'pending'.
+	// The caller must dispatch its build/deploy task (or mark it failed).
+	Dispatch *Deployment
+	// Superseded are older queued deployments retired without being dispatched.
+	Superseded []uuid.UUID
+	// Reaped are in-flight deployments presumed lost, marked failed so they
+	// stop blocking the queue.
+	Reaped []uuid.UUID
+}
+
+// inFlightDeploymentStatuses are the statuses of a deployment whose build or
+// deploy chain has been dispatched and has not reached a terminal state.
+const inFlightDeploymentStatuses = `('pending','building','deploying')`
+
+// DeployQueuePolicy tunes when an in-flight deployment is presumed lost and
+// stops blocking its project's deploy queue.
+type DeployQueuePolicy struct {
+	// Grace: an in-flight deployment with no update for this long is lost when
+	// none of its build/deploy tasks is still alive — alive meaning pending or
+	// running on a node that heartbeated within Grace (agents poll every 5s),
+	// or a completed build still waiting for its deploy to be dispatched.
+	// Agents buffer command output, so a long `docker compose pull` is silent;
+	// liveness therefore comes from the node heartbeat, not the log stream.
+	Grace time.Duration
+	// HardTimeout: an in-flight deployment with no update for this long is lost
+	// regardless of task liveness (a wedged agent goroutine).
+	HardTimeout time.Duration
+}
+
+// AdvanceDeployQueue enforces "at most one in-flight deployment per project,
+// and only the newest queued one runs next". Under a per-project advisory lock:
+//
+//  1. in-flight deployments presumed lost (see DeployQueuePolicy) are marked
+//     failed together with their unfinished build/deploy tasks, so a pending
+//     task can't be picked up later behind the next deployment;
+//  2. if any in-flight deployment remains, nothing else happens;
+//  3. otherwise the newest queued deployment becomes 'pending' (returned in
+//     Dispatch) and every older queued one becomes 'superseded'.
+//
+// It is idempotent and safe to call from any number of goroutines/processes.
+func (s *Store) AdvanceDeployQueue(ctx context.Context, projectID uuid.UUID, policy DeployQueuePolicy) (*DeployQueueAdvance, error) {
+	res := &DeployQueueAdvance{}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('deploy-queue:' || $1::text, 0))`, projectID); err != nil {
+		return nil, fmt.Errorf("lock deploy queue: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		UPDATE deployments d SET status='failed', logs=d.logs||$4, updated_at=NOW()
+		WHERE d.project_id=$1 AND d.status IN `+inFlightDeploymentStatuses+`
+		  AND (
+		    d.updated_at < NOW() - make_interval(secs => $3)
+		    OR (d.updated_at < NOW() - make_interval(secs => $2) AND NOT EXISTS (
+		      SELECT 1 FROM tasks t LEFT JOIN nodes n ON n.id = t.node_id
+		      WHERE t.deployment_id = d.id AND t.type IN ('build','deploy') AND (
+		        (t.status IN ('pending','running') AND n.last_seen_at > NOW() - make_interval(secs => $2))
+		        OR (t.type = 'build' AND t.status = 'completed' AND d.status = 'building')
+		      )
+		    ))
+		  )
+		RETURNING d.id
+	`, projectID, policy.Grace.Seconds(), policy.HardTimeout.Seconds(),
+		"marked failed: agent task presumed lost (no live build/deploy task); unblocking the deploy queue\n")
+	if err != nil {
+		return nil, fmt.Errorf("reap lost deployments: %w", err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		res.Reaped = append(res.Reaped, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(res.Reaped) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE tasks SET status='failed', result='deployment presumed lost', updated_at=NOW()
+			WHERE deployment_id = ANY($1) AND type IN ('build','deploy') AND status IN ('pending','running')
+		`, res.Reaped); err != nil {
+			return nil, fmt.Errorf("fail lost tasks: %w", err)
+		}
+	}
+
+	var inFlight int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM deployments WHERE project_id=$1 AND status IN `+inFlightDeploymentStatuses, projectID).Scan(&inFlight); err != nil {
+		return nil, err
+	}
+	if inFlight > 0 {
+		return res, tx.Commit(ctx)
+	}
+
+	rows, err = tx.Query(ctx, `SELECT id FROM deployments WHERE project_id=$1 AND status='queued' ORDER BY created_at DESC, id DESC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var queued []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		queued = append(queued, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(queued) == 0 {
+		return res, tx.Commit(ctx)
+	}
+
+	newest := queued[0]
+	if _, err := tx.Exec(ctx, `UPDATE deployments SET status='pending', updated_at=NOW() WHERE id=$1`, newest); err != nil {
+		return nil, err
+	}
+	if len(queued) > 1 {
+		res.Superseded = queued[1:]
+		if _, err := tx.Exec(ctx, `
+			UPDATE deployments SET status='superseded', logs=logs||$2, updated_at=NOW() WHERE id = ANY($1)
+		`, res.Superseded, fmt.Sprintf("superseded by newer deployment %s; not executed\n", newest)); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	res.Dispatch, err = s.GetDeployment(ctx, newest)
+	return res, err
+}
+
+// ListProjectsWithQueuedDeployments returns the projects that have at least
+// one queued deployment — the work list of the periodic queue sweeper.
+func (s *Store) ListProjectsWithQueuedDeployments(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT project_id FROM deployments WHERE status='queued'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// FailOrphanedTasksForNode is called when an agent (re)registers: any build or
+// deploy task it had marked running died with the previous process, so the
+// task and its still-in-flight deployment are marked failed. Returns the
+// affected project IDs so the caller can advance their deploy queues.
+func (s *Store) FailOrphanedTasksForNode(ctx context.Context, nodeID uuid.UUID, reason string) ([]uuid.UUID, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		UPDATE tasks SET status='failed', result=$2, updated_at=NOW()
+		WHERE node_id=$1 AND status='running' AND type IN ('build','deploy')
+		RETURNING deployment_id
+	`, nodeID, reason)
+	if err != nil {
+		return nil, err
+	}
+	var depIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		depIDs = append(depIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(depIDs) == 0 {
+		return nil, tx.Commit(ctx)
+	}
+	rows, err = tx.Query(ctx, `
+		UPDATE deployments SET status='failed', logs=logs||$2, updated_at=NOW()
+		WHERE id = ANY($1) AND status IN `+inFlightDeploymentStatuses+`
+		RETURNING project_id
+	`, depIDs, reason+"\n")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[uuid.UUID]bool{}
+	var projectIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if !seen[id] {
+			seen[id] = true
+			projectIDs = append(projectIDs, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return projectIDs, tx.Commit(ctx)
 }
 
 func (s *Store) AppendDeploymentLog(ctx context.Context, id uuid.UUID, line string) error {

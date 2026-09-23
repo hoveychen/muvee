@@ -339,6 +339,13 @@ const (
 	DeploymentStatusRunning   DeploymentStatus = "running"
 	DeploymentStatusFailed    DeploymentStatus = "failed"
 	DeploymentStatusStopped   DeploymentStatus = "stopped"
+	// Queued: created by TriggerDeployment while another deployment of the same
+	// project is still in flight; nothing has been dispatched to an agent yet.
+	DeploymentStatusQueued DeploymentStatus = "queued"
+	// Superseded: terminal. A newer queued deployment of the same project was
+	// picked instead, so this one was never dispatched (every deploy clones the
+	// branch HEAD / pulls the same tags, so running it would be wasted work).
+	DeploymentStatusSuperseded DeploymentStatus = "superseded"
 )
 
 type Deployment struct {

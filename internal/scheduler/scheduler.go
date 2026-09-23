@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ type Scheduler struct {
 	registryAddr     string
 	registryUser     string
 	registryPassword string
+	// queuePolicy overrides defaultDeployQueuePolicy (tests only).
+	queuePolicy *store.DeployQueuePolicy
 }
 
 func New(st *store.Store) *Scheduler {
@@ -325,6 +328,11 @@ func (s *Scheduler) DispatchComposeCleanup(ctx context.Context, project *store.P
 // the manual-deploy API handler, the external-repo poller, and the hosted-repo
 // post-receive trigger so all three flows stay in lockstep.
 //
+// Deployments of one project are serialised: the new row is created 'queued'
+// and AdvanceDeployQueue dispatches it right away only when nothing else of
+// the project is in flight. Otherwise it waits; when the in-flight one ends,
+// only the newest queued row runs and older ones become 'superseded'.
+//
 // source is a free-form tag ("manual", "auto-poll", "auto-push") used only for
 // logging; it does not affect dispatch behaviour.
 func (s *Scheduler) TriggerDeployment(ctx context.Context, projectID uuid.UUID, source string) (*store.Deployment, error) {
@@ -343,23 +351,149 @@ func (s *Scheduler) TriggerDeployment(ctx context.Context, projectID uuid.UUID, 
 	if project.Paused {
 		return nil, fmt.Errorf("project %s is paused", projectID)
 	}
-	deployment, err := s.store.CreateDeployment(ctx, &store.Deployment{ProjectID: projectID})
+	deployment, err := s.store.CreateDeployment(ctx, &store.Deployment{ProjectID: projectID, Status: store.DeploymentStatusQueued})
 	if err != nil {
 		return nil, fmt.Errorf("create deployment: %w", err)
 	}
-	// Compose and image projects skip the build phase: images are pulled by
-	// `docker compose up` directly on the pinned deploy node. Image projects
-	// reuse the same code path with a synthesised inline compose YAML.
-	if project.ProjectType == store.ProjectTypeCompose || project.ProjectType == store.ProjectTypeImage {
-		if err := s.DispatchDeploy(ctx, deployment, project, ""); err != nil {
-			return nil, fmt.Errorf("dispatch deploy: %w", err)
-		}
-		return deployment, nil
+	dispatched, dispatchErr := s.AdvanceDeployQueue(ctx, projectID)
+	if dispatched == deployment.ID && dispatchErr != nil {
+		return nil, dispatchErr
 	}
-	if err := s.DispatchBuild(ctx, deployment, project); err != nil {
-		return nil, fmt.Errorf("dispatch build: %w", err)
+	if dispatched != deployment.ID {
+		log.Printf("deploy queue: project %s deployment %s (%s) queued behind an in-flight deployment", projectID, deployment.ID, source)
+	}
+	if d, err := s.store.GetDeployment(ctx, deployment.ID); err == nil && d != nil {
+		return d, nil
 	}
 	return deployment, nil
+}
+
+// Deploy-queue liveness thresholds; see store.DeployQueuePolicy.
+var defaultDeployQueuePolicy = store.DeployQueuePolicy{
+	Grace:       10 * time.Minute,
+	HardTimeout: 6 * time.Hour,
+}
+
+func (s *Scheduler) deployQueuePolicy() store.DeployQueuePolicy {
+	if s.queuePolicy != nil {
+		return *s.queuePolicy
+	}
+	return defaultDeployQueuePolicy
+}
+
+// AdvanceDeployQueue moves the project's deploy queue forward: if no
+// deployment of the project is in flight, the newest queued one is dispatched
+// and older queued ones are superseded. Call it whenever a deployment reaches
+// a terminal state; it is a cheap no-op otherwise. Returns the dispatched
+// deployment ID (uuid.Nil if none) and, if dispatching it failed, the error —
+// the deployment is then already marked failed.
+func (s *Scheduler) AdvanceDeployQueue(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error) {
+	adv, err := s.store.AdvanceDeployQueue(ctx, projectID, s.deployQueuePolicy())
+	if err != nil {
+		log.Printf("deploy queue: project %s: %v", projectID, err)
+		return uuid.Nil, nil
+	}
+	for _, id := range adv.Reaped {
+		log.Printf("deploy queue: project %s deployment %s presumed lost, marked failed", projectID, id)
+	}
+	for _, id := range adv.Superseded {
+		log.Printf("deploy queue: project %s deployment %s superseded", projectID, id)
+	}
+	if adv.Dispatch == nil {
+		return uuid.Nil, nil
+	}
+	dep := adv.Dispatch
+	if err := s.dispatchChain(ctx, dep); err != nil {
+		_ = s.store.UpdateDeploymentStatus(ctx, dep.ID, store.DeploymentStatusFailed, err.Error())
+		return dep.ID, err
+	}
+	return dep.ID, nil
+}
+
+// dispatchChain creates the first task of a deployment's chain: a deploy for
+// compose/image projects (images are pulled on the pinned node), a build
+// otherwise (the deploy follows once the build completes).
+func (s *Scheduler) dispatchChain(ctx context.Context, dep *store.Deployment) error {
+	project, err := s.store.GetProject(ctx, dep.ProjectID)
+	if err != nil {
+		return fmt.Errorf("get project: %w", err)
+	}
+	if project == nil {
+		return fmt.Errorf("project %s not found", dep.ProjectID)
+	}
+	// Re-check the pause gate: the project may have been paused while this
+	// deployment sat in the queue.
+	if project.Paused {
+		return fmt.Errorf("project %s is paused", project.ID)
+	}
+	if project.ProjectType == store.ProjectTypeCompose || project.ProjectType == store.ProjectTypeImage {
+		if err := s.DispatchDeploy(ctx, dep, project, ""); err != nil {
+			return fmt.Errorf("dispatch deploy: %w", err)
+		}
+		return nil
+	}
+	if err := s.DispatchBuild(ctx, dep, project); err != nil {
+		return fmt.Errorf("dispatch build: %w", err)
+	}
+	return nil
+}
+
+// AdvanceDeployQueueFor is AdvanceDeployQueue keyed by a deployment that just
+// reached a terminal state.
+func (s *Scheduler) AdvanceDeployQueueFor(ctx context.Context, deploymentID uuid.UUID) {
+	dep, err := s.store.GetDeployment(ctx, deploymentID)
+	if err != nil || dep == nil {
+		return
+	}
+	_, _ = s.AdvanceDeployQueue(ctx, dep.ProjectID)
+}
+
+// StartDeployQueueSweeper periodically advances every project that has queued
+// deployments. The event-driven AdvanceDeployQueue calls cover the normal
+// path; the sweeper is the safety net for anything that ends a deployment
+// without advancing its queue (control-plane restart mid-flight, an agent
+// that vanished, a lost completion callback).
+func (s *Scheduler) StartDeployQueueSweeper(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.SweepDeployQueues(ctx)
+			}
+		}
+	}()
+}
+
+// SweepDeployQueues runs AdvanceDeployQueue once for every project with a
+// queued deployment.
+func (s *Scheduler) SweepDeployQueues(ctx context.Context) {
+	ids, err := s.store.ListProjectsWithQueuedDeployments(ctx)
+	if err != nil {
+		log.Printf("deploy queue sweep: %v", err)
+		return
+	}
+	for _, id := range ids {
+		_, _ = s.AdvanceDeployQueue(ctx, id)
+	}
+}
+
+// RecoverAgentRestart handles an agent (re)registering: build/deploy tasks it
+// had marked running died with the previous process, so they and their
+// deployments are marked failed and the affected projects' queues advance.
+func (s *Scheduler) RecoverAgentRestart(ctx context.Context, nodeID uuid.UUID) {
+	projectIDs, err := s.store.FailOrphanedTasksForNode(ctx, nodeID, "agent restarted; task lost")
+	if err != nil {
+		log.Printf("deploy queue: recover orphaned tasks on node %s: %v", nodeID, err)
+		return
+	}
+	for _, id := range projectIDs {
+		log.Printf("deploy queue: project %s deployment failed by agent restart on node %s", id, nodeID)
+		_, _ = s.AdvanceDeployQueue(ctx, id)
+	}
 }
 
 // DispatchBuild creates a build task on the best builder node.

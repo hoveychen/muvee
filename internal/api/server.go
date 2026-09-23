@@ -4424,6 +4424,9 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 500)
 		return
 	}
+	// Agents register once per process start, so any build/deploy task this
+	// node still has marked running died with the previous agent process.
+	s.sched.RecoverAgentRestart(context.WithoutCancel(r.Context()), registered.ID)
 	jsonOK(w, registered)
 }
 
@@ -4505,6 +4508,7 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 					projectevents.Push(dep.ProjectID, projectevents.TypeDeployFailed, projectevents.SeverityError,
 						fmt.Sprintf("%s task failed: %s", task.Type, errMsg))
 				}
+				s.sched.AdvanceDeployQueueFor(context.WithoutCancel(r.Context()), task.DeploymentID)
 			}
 		}
 		jsonOK(w, map[string]string{"status": "ok"})
@@ -4551,6 +4555,8 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 					"deploy completed but no host_port reported")
 			}
 		}
+		// The deployment is terminal either way: let the next queued one run.
+		s.sched.AdvanceDeployQueueFor(context.WithoutCancel(r.Context()), task.DeploymentID)
 	}
 
 	jsonOK(w, map[string]string{"status": "ok"})
