@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -31,20 +30,6 @@ func init() {
 	secretsCreateCmd.Flags().String("registry-username", "", "Registry login username for type=registry")
 	secretsCreateCmd.MarkFlagRequired("name")
 	secretsCreateCmd.MarkFlagRequired("type")
-
-	// Project secret bindings
-	projectsCmd.AddCommand(projectsSecretsCmd)
-	projectsCmd.AddCommand(projectsBindSecretCmd)
-	projectsCmd.AddCommand(projectsUnbindSecretCmd)
-
-	// bind-secret flags
-	projectsBindSecretCmd.Flags().String("secret-id", "", "Personal secret ID to copy into the project (required)")
-	projectsBindSecretCmd.Flags().String("env-var", "", "Environment variable name to inject")
-	projectsBindSecretCmd.Flags().Bool("use-for-git", false, "Use this secret for git clone during build")
-	projectsBindSecretCmd.Flags().Bool("use-for-build", false, "Use this secret for docker buildx --secret during image build")
-	projectsBindSecretCmd.Flags().String("build-secret-id", "", "Secret ID exposed as /run/secrets/<ID> inside Dockerfile")
-	projectsBindSecretCmd.Flags().String("git-username", "", "HTTPS git username (default: x-access-token for GitHub PATs)")
-	projectsBindSecretCmd.MarkFlagRequired("secret-id")
 }
 
 // ─── List ────────────────────────────────────────────────────────────────────
@@ -149,147 +134,4 @@ var secretsDeleteCmd = &cobra.Command{
 		fmt.Println("Deleted secret", args[0])
 		return nil
 	},
-}
-
-// ─── Project Secret Bindings ─────────────────────────────────────────────────
-
-var projectsSecretsCmd = &cobra.Command{
-	Use:   "secrets PROJECT-ID-OR-NAME",
-	Short: "List a project's secrets (values are never returned)",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := requireAuth(); err != nil {
-			return err
-		}
-		projectID, err := resolveProjectRef(cl, args[0])
-		if err != nil {
-			return err
-		}
-		items, err := cl.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
-		if err != nil {
-			return err
-		}
-		if jsonMode {
-			printJSON(items)
-			return nil
-		}
-		if len(items) == 0 {
-			fmt.Println("This project has no secrets.")
-			return nil
-		}
-		printTable(items, []string{"id", "name", "type", "value_status", "value_length", "value_preview", "env_var_name", "use_for_git", "use_for_build", "build_secret_id"})
-		return nil
-	},
-}
-
-var projectsBindSecretCmd = &cobra.Command{
-	Use:   "bind-secret PROJECT-ID-OR-NAME",
-	Short: "Copy a personal secret into a project (an independent copy)",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := requireAuth(); err != nil {
-			return err
-		}
-		projectID, err := resolveProjectRef(cl, args[0])
-		if err != nil {
-			return err
-		}
-		secretID, _ := cmd.Flags().GetString("secret-id")
-		envVar, _ := cmd.Flags().GetString("env-var")
-		useForGit, _ := cmd.Flags().GetBool("use-for-git")
-		useForBuild, _ := cmd.Flags().GetBool("use-for-build")
-		buildSecretID, _ := cmd.Flags().GetString("build-secret-id")
-		gitUsername, _ := cmd.Flags().GetString("git-username")
-
-		// Default git_username for HTTPS PAT auth when --use-for-git is set and no username provided
-		if useForGit && gitUsername == "" {
-			gitUsername = "x-access-token"
-		}
-
-		// Default build_secret_id from secret name when --use-for-build is set.
-		if useForBuild && strings.TrimSpace(buildSecretID) == "" {
-			secrets, err := cl.doArray("GET", "/api/secrets", nil)
-			if err != nil {
-				return fmt.Errorf("resolve default --build-secret-id: %w", err)
-			}
-			var secretName string
-			for _, item := range secrets {
-				m, _ := item.(map[string]interface{})
-				if m != nil && str(m, "id") == secretID {
-					secretName = str(m, "name")
-					break
-				}
-			}
-			if secretName == "" {
-				return fmt.Errorf("cannot infer --build-secret-id: secret %s not found", secretID)
-			}
-			buildSecretID = normalizeBuildSecretID(secretName)
-			if buildSecretID == "" {
-				return fmt.Errorf("cannot infer --build-secret-id from secret name %q; please pass --build-secret-id explicitly", secretName)
-			}
-		}
-
-		body := map[string]interface{}{
-			"from_secret_id":  secretID,
-			"env_var_name":    envVar,
-			"use_for_git":     useForGit,
-			"use_for_build":   useForBuild,
-			"build_secret_id": buildSecretID,
-			"git_username":    gitUsername,
-		}
-		result, err := cl.do("POST", "/api/projects/"+projectID+"/secrets", body)
-		if err != nil {
-			return err
-		}
-		if jsonMode {
-			printJSON(result)
-			return nil
-		}
-		fmt.Printf("Secret %s copied into project %s as project secret %s (env_var: %q, use_for_git: %v, use_for_build: %v, build_secret_id: %q, git_username: %q)\n",
-			secretID, projectID, str(result, "id"), envVar, useForGit, useForBuild, buildSecretID, gitUsername)
-		return nil
-	},
-}
-
-var projectsUnbindSecretCmd = &cobra.Command{
-	Use:   "unbind-secret PROJECT-ID-OR-NAME PROJECT-SECRET-ID",
-	Short: "Delete a secret from a project (IDs from `projects secrets`)",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := requireAuth(); err != nil {
-			return err
-		}
-		projectID, err := resolveProjectRef(cl, args[0])
-		if err != nil {
-			return err
-		}
-		if _, err := cl.do("DELETE", "/api/projects/"+projectID+"/secrets/"+args[1], nil); err != nil {
-			return err
-		}
-		fmt.Printf("Secret %s removed from project %s\n", args[1], projectID)
-		return nil
-	},
-}
-
-func normalizeBuildSecretID(raw string) string {
-	s := strings.ToLower(strings.TrimSpace(raw))
-	if s == "" {
-		return ""
-	}
-	var b strings.Builder
-	prevUnderscore := false
-	for _, r := range s {
-		isAlphaNum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if isAlphaNum {
-			b.WriteRune(r)
-			prevUnderscore = false
-			continue
-		}
-		if !prevUnderscore {
-			b.WriteByte('_')
-			prevUnderscore = true
-		}
-	}
-	out := strings.Trim(b.String(), "_")
-	return out
 }

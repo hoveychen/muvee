@@ -304,34 +304,47 @@ muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_
 muveectl secrets delete SECRET_ID
 ```
 
-### Project Secret Bindings
+### Project Environment Variables
+
+Each project owns its own environment variables (`KEY` + value + sensitive / runtime / build switches); every project member and admin sees the same list. `env copy` copies a personal secret into the project — the copy is independent of the source secret. See [Secrets & Environment Variables](./secrets) for the full model.
 
 ```bash
-# List project bindings
-muveectl projects secrets PROJECT_ID
+# List a project's variables
+muveectl projects env PROJECT_ID
 
-# Runtime env var injection
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --env-var GITHUB_TOKEN
+# Create or update a variable (sensitive by default)
+muveectl projects env set PROJECT_ID GITHUB_TOKEN=github_pat_xxxx
+muveectl projects env set PROJECT_ID LOG_LEVEL=debug --plain
 
-# Git clone auth (HTTPS token)
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --use-for-git \
-  --git-username x-access-token
+# Build-time only (docker build secret, not injected at runtime)
+muveectl projects env set PROJECT_ID GITHUB_TOKEN=github_pat_xxxx --build --no-runtime
 
-# Build-time secret (docker buildx --secret)
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --use-for-build \
-  --build-secret-id github_token
+# Copy a personal secret into the project
+muveectl projects env copy PROJECT_ID --secret-id SECRET_ID [--key GITHUB_TOKEN] [--build] [--no-runtime]
 
-# --build-secret-id is optional; when omitted, muveectl derives it from the secret name
-# e.g. "GITHUB_TOKEN" -> "github_token"
+# Delete a variable
+muveectl projects env unset PROJECT_ID GITHUB_TOKEN
+```
 
-# Unbind
-muveectl projects unbind-secret PROJECT_ID SECRET_ID
+### Private Git Repository Credential
+
+The credential used to clone an external repository is a separate project setting (not one of the environment variables above):
+
+```bash
+# Show the current credential (type, username, value_status)
+muveectl projects git-credential PROJECT_ID
+
+# HTTPS token (username defaults to x-access-token)
+muveectl projects git-credential set PROJECT_ID --type https_token --value github_pat_xxxx
+
+# SSH deploy key from a file
+muveectl projects git-credential set PROJECT_ID --type ssh_key --value-file deploy_key
+
+# Or copy one of your personal password / ssh_key secrets
+muveectl projects git-credential set PROJECT_ID --from-secret-id SECRET_ID [--username oauth2]
+
+# Remove it (clone anonymously)
+muveectl projects git-credential clear PROJECT_ID
 ```
 
 ## Global Flags
@@ -346,11 +359,11 @@ muveectl projects unbind-secret PROJECT_ID SECRET_ID
 For a project to deploy successfully, the repository must satisfy:
 
 ### Build
-- Accessible via `git clone --depth=1` over HTTPS (public or with token secret), SSH (SSH key secret), or hosted on muvee (automatic internal auth)
+- Accessible via `git clone --depth=1` over HTTPS (public, or with a PAT / SSH deploy key set via `projects git-credential`), or hosted on muvee (automatic internal auth)
 - The configured branch must exist (default: `main`)
 - A `Dockerfile` must exist at the configured path (default: `Dockerfile` in repo root)
 - Image must build for **`linux/amd64`** (`docker buildx build --platform linux/amd64`)
-- If private dependencies are required during build, bind a secret with `--use-for-build --build-secret-id <id>` and read it in Dockerfile via `/run/secrets/<id>`
+- If private dependencies are required during build, add a build variable with `projects env set PROJECT_ID KEY=VALUE --build --no-runtime` and read it in the Dockerfile via `/run/secrets/KEY`
 
 ### Runtime
 - Container must serve **HTTP** on port **8080** — Traefik handles TLS termination

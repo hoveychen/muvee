@@ -266,6 +266,8 @@ export interface CreatedApiToken {
 
 export type SecretType = 'password' | 'ssh_key' | 'api_key' | 'env_var' | 'registry'
 
+export type SecretValueStatus = 'set' | 'empty' | 'undecryptable'
+
 export interface Secret {
   id: string
   name: string
@@ -275,6 +277,9 @@ export interface Secret {
   // - env_var: full plaintext value
   // - password / ssh_key / registry: empty string
   value_preview: string
+  // Whether a value is actually stored, and its length (never the value itself).
+  value_status: SecretValueStatus
+  value_length: number
   // registry_addr / registry_username are set only for type=registry secrets.
   registry_addr: string
   registry_username: string
@@ -282,39 +287,42 @@ export interface Secret {
   updated_at: string
 }
 
-// ProjectSecret is owned by the project; the value itself is never returned.
-// value_status tells whether a value is present.
-export interface ProjectSecret {
+// ProjectEnvVar is a KEY=VALUE owned by the project. Sensitive values are
+// write-only (value omitted); value_status tells whether a value is present.
+export interface ProjectEnvVar {
   id: string
-  name: string
-  type: SecretType
-  value_status: 'set' | 'empty' | 'undecryptable'
+  key: string
+  sensitive: boolean
+  // runtime: injected into the container env; build: docker build secret with id=key.
+  runtime: boolean
+  build: boolean
+  value_status: SecretValueStatus
   value_length: number
-  // Same rules as Secret.value_preview: masked for api_key, plaintext for env_var, empty otherwise.
-  value_preview: string
+  // Present only for non-sensitive variables.
+  value?: string
   // Personal secret this was copied from, if any. The copy is independent of it.
   source_secret_id: string | null
-  env_var_name: string
-  use_for_git: boolean
-  use_for_build: boolean
-  build_secret_id: string
-  // git_username is used with password-type secrets for HTTPS git authentication.
-  // e.g. "x-access-token" for GitHub fine-grained PATs.
-  git_username: string
   created_at: string
   updated_at: string
 }
 
-export type ProjectSecretUsage = Pick<ProjectSecret, 'env_var_name' | 'use_for_git' | 'use_for_build' | 'build_secret_id' | 'git_username'>
-
-// Create either directly (name/type/value) or by copying a personal secret (from_secret_id).
-export type ProjectSecretCreate = Partial<ProjectSecretUsage> & (
-  | { name: string; type: SecretType; value: string; from_secret_id?: undefined }
-  | { from_secret_id: string }
-)
+// Create either directly (key/value) or by copying a personal secret (from_secret_id).
+export type ProjectEnvVarCreate =
+  | { key: string; value: string; sensitive?: boolean; runtime?: boolean; build?: boolean }
+  | { from_secret_id: string; key?: string; runtime?: boolean; build?: boolean }
 
 // A non-empty value replaces the stored value; omitted fields are unchanged.
-export type ProjectSecretPatch = Partial<ProjectSecretUsage & { name: string; value: string }>
+export type ProjectEnvVarPatch = Partial<Pick<ProjectEnvVar, 'key' | 'sensitive' | 'runtime' | 'build'> & { value: string }>
+
+export type GitAuthType = 'none' | 'https_token' | 'ssh_key'
+
+// How muvee authenticates when cloning the project's external repo. The value is never returned.
+export interface GitCredential {
+  type: GitAuthType
+  username: string
+  value_status: SecretValueStatus
+  value_length: number
+}
 
 export interface NodeMetric {
   node_id: string

@@ -36,13 +36,18 @@ export const api = {
     delete: (id: string) => request(`/api/projects/${id}`, { method: 'DELETE' }),
     datasets: (id: string) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`),
     setDatasets: (id: string, data: import('./types').ProjectDataset[]) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`, { method: 'PUT', body: JSON.stringify(data) }),
-    secrets: (id: string) => request<import('./types').ProjectSecret[]>(`/api/projects/${id}/secrets`),
-    createSecret: (id: string, data: import('./types').ProjectSecretCreate) =>
-      request<import('./types').ProjectSecret>(`/api/projects/${id}/secrets`, { method: 'POST', body: JSON.stringify(data) }),
-    updateSecret: (id: string, secretId: string, patch: import('./types').ProjectSecretPatch) =>
-      request<import('./types').ProjectSecret>(`/api/projects/${id}/secrets/${secretId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
-    deleteSecret: (id: string, secretId: string) =>
-      request(`/api/projects/${id}/secrets/${secretId}`, { method: 'DELETE' }),
+    env: (id: string) => request<import('./types').ProjectEnvVar[]>(`/api/projects/${id}/env-vars`),
+    createEnv: (id: string, data: import('./types').ProjectEnvVarCreate) =>
+      request<import('./types').ProjectEnvVar>(`/api/projects/${id}/env-vars`, { method: 'POST', body: JSON.stringify(data) }),
+    updateEnv: (id: string, varId: string, patch: import('./types').ProjectEnvVarPatch) =>
+      request<import('./types').ProjectEnvVar>(`/api/projects/${id}/env-vars/${varId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    deleteEnv: (id: string, varId: string) =>
+      request(`/api/projects/${id}/env-vars/${varId}`, { method: 'DELETE' }),
+    gitCredential: (id: string) => request<import('./types').GitCredential>(`/api/projects/${id}/git-credential`),
+    setGitCredentialFromSecret: (id: string, secretId: string, username: string) =>
+      request<import('./types').GitCredential>(`/api/projects/${id}/git-credential`, { method: 'PUT', body: JSON.stringify({ from_secret_id: secretId, username }) }),
+    setGitCredential: (id: string, data: { type: import('./types').GitAuthType; username?: string; value?: string }) =>
+      request<import('./types').GitCredential>(`/api/projects/${id}/git-credential`, { method: 'PUT', body: JSON.stringify(data) }),
     deploy: (id: string) => request<import('./types').Deployment>(`/api/projects/${id}/deploy`, { method: 'POST' }),
     pause: (id: string) => request<{ status: string; task_id?: string; deployment_id?: string }>(`/api/projects/${id}/pause`, { method: 'POST' }),
     resume: (id: string) => request<{ status: string; task_id?: string; deployment_id?: string }>(`/api/projects/${id}/resume`, { method: 'POST' }),

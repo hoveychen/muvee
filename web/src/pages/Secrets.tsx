@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { KeyRound, Plus, Trash2, Eye, EyeOff, Lock, AlertTriangle } from 'lucide-react'
 import { api } from '../lib/api'
+import SecretValueStatus from '../components/SecretValueStatus'
 import type { Secret, SecretType } from '../lib/types'
 import { timeAgo } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
@@ -168,22 +169,9 @@ function SecretRow({ secret, index, total, onDelete }: { secret: Secret; index: 
             {secret.name}
           </span>
         </div>
-        {secret.value_preview && (
-          <span
-            style={{
-              fontFamily: MONO,
-              fontSize: '0.75rem',
-              color: 'var(--fg-muted)',
-              marginLeft: '1.625rem',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            title={secret.value_preview}
-          >
-            {secret.value_preview}
-          </span>
-        )}
+        <span style={{ marginLeft: '1.625rem', minWidth: 0 }}>
+          <SecretValueStatus status={secret.value_status} length={secret.value_length} preview={secret.value_preview} />
+        </span>
         {secret.type === 'registry' && secret.registry_addr && (
           <span
             style={{

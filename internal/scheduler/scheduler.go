@@ -378,22 +378,13 @@ func (s *Scheduler) DispatchBuild(ctx context.Context, deployment *store.Deploym
 		return err
 	}
 
-	// Collect decrypted secrets; find git credentials (SSH key or HTTPS token).
-	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
-	var gitSSHKey, gitUsername, gitToken string
+	// Git credentials (SSH key or HTTPS token) and build-time variables.
+	gitUsername, gitToken, gitSSHKey, _ := s.store.GetProjectGitCredential(ctx, project.ID)
 	buildSecrets := make(map[string]string)
-	for _, sec := range secrets {
-		if sec.UseForBuild && sec.BuildSecretID != "" {
-			buildSecrets[sec.BuildSecretID] = sec.PlainValue
-		}
-		if sec.UseForGit {
-			switch sec.SecretType {
-			case store.SecretTypeSSHKey:
-				gitSSHKey = sec.PlainValue
-			case store.SecretTypePassword:
-				gitUsername = sec.GitUsername
-				gitToken = sec.PlainValue
-			}
+	vars, _ := s.store.GetProjectEnvDecrypted(ctx, project.ID)
+	for _, v := range vars {
+		if v.Build {
+			buildSecrets[v.Key] = v.Value
 		}
 	}
 
@@ -492,14 +483,7 @@ func (s *Scheduler) DispatchDeploy(ctx context.Context, deployment *store.Deploy
 		})
 	}
 
-	// Collect env vars from secrets (all types with env_var_name set).
-	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
-	envVars := make(map[string]string)
-	for _, sec := range secrets {
-		if sec.EnvVarName != "" {
-			envVars[sec.EnvVarName] = sec.PlainValue
-		}
-	}
+	envVars := s.projectRuntimeEnv(ctx, project.ID)
 
 	payload := map[string]interface{}{
 		"image_tag":         imageTag,
@@ -573,23 +557,8 @@ func (s *Scheduler) dispatchComposeDeploy(ctx context.Context, deployment *store
 
 	// Collect git credentials and project env vars (compose receives env vars
 	// via a generated .env file that all services interpolate from).
-	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
-	var gitSSHKey, gitUsername, gitToken string
-	envVars := make(map[string]string)
-	for _, sec := range secrets {
-		if sec.UseForGit {
-			switch sec.SecretType {
-			case store.SecretTypeSSHKey:
-				gitSSHKey = sec.PlainValue
-			case store.SecretTypePassword:
-				gitUsername = sec.GitUsername
-				gitToken = sec.PlainValue
-			}
-		}
-		if sec.EnvVarName != "" {
-			envVars[sec.EnvVarName] = sec.PlainValue
-		}
-	}
+	gitUsername, gitToken, gitSSHKey, _ := s.store.GetProjectGitCredential(ctx, project.ID)
+	envVars := s.projectRuntimeEnv(ctx, project.ID)
 
 	// Collect the project owner's private-registry pull credentials so the agent
 	// can pull private compose images (e.g. ghcr.io). These are tenant-level:
@@ -674,13 +643,7 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 		return err
 	}
 
-	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, project.ID)
-	envVars := make(map[string]string)
-	for _, sec := range secrets {
-		if sec.EnvVarName != "" {
-			envVars[sec.EnvVarName] = sec.PlainValue
-		}
-	}
+	envVars := s.projectRuntimeEnv(ctx, project.ID)
 
 	inlineCompose := buildInlineComposeYAML(project.ImageRef, project.ContainerPort)
 
@@ -781,4 +744,17 @@ func (s *Scheduler) pickOrReusePinnedNode(ctx context.Context, project *store.Pr
 	}
 	project.PinnedNodeID = &node.ID
 	return node, nil
+}
+
+// projectRuntimeEnv returns the project's variables marked for runtime
+// injection, keyed by variable name.
+func (s *Scheduler) projectRuntimeEnv(ctx context.Context, projectID uuid.UUID) map[string]string {
+	envVars := make(map[string]string)
+	vars, _ := s.store.GetProjectEnvDecrypted(ctx, projectID)
+	for _, v := range vars {
+		if v.Runtime {
+			envVars[v.Key] = v.Value
+		}
+	}
+	return envVars
 }

@@ -619,3 +619,12 @@ body {
   }
   .mobile-stack > * { max-width: 100%; }
 }
+
+/* Project environment variables table (ProjectDetail → Env tab). */
+.env-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(0, 1.6fr) 170px 72px;
+  gap: 12px;
+  align-items: center;
+  padding: 0.75rem 1.25rem;
+}

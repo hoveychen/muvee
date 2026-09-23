@@ -472,27 +472,15 @@ export default function NewProject() {
 
       // Step 2: create + bind credential (if any, for external repos)
       if (cred.mode === 'new_pat') {
-        await api.projects.createSecret(project.id, {
-          name: `${form.name || 'project'} Git Token`,
-          type: 'password',
+        await api.projects.setGitCredential(project.id, {
+          type: 'https_token',
+          username: cred.patGitUsername || 'x-access-token',
           value: cred.patValue.trim(),
-          use_for_git: true,
-          git_username: cred.patGitUsername || 'x-access-token',
         })
       } else if (cred.mode === 'new_ssh') {
-        await api.projects.createSecret(project.id, {
-          name: `${form.name || 'project'} Deploy Key`,
-          type: 'ssh_key',
-          value: cred.sshKeyValue.trim(),
-          use_for_git: true,
-        })
+        await api.projects.setGitCredential(project.id, { type: 'ssh_key', value: cred.sshKeyValue.trim() })
       } else if (cred.mode === 'existing' && cred.existingSecretId) {
-        const sec = (await api.secrets.list()).find(s => s.id === cred.existingSecretId)
-        await api.projects.createSecret(project.id, {
-          from_secret_id: cred.existingSecretId,
-          use_for_git: true,
-          git_username: sec?.type === 'password' ? (cred.patGitUsername || 'x-access-token') : '',
-        })
+        await api.projects.setGitCredentialFromSecret(project.id, cred.existingSecretId, cred.patGitUsername || 'x-access-token')
       }
 
       navigate(`/projects/${project.id}`)

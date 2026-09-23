@@ -102,20 +102,7 @@ func (s *Scheduler) checkAndTriggerExternal(ctx context.Context, p *store.Projec
 // project's remote. Mirrors the builder's auth handling (HTTPS user/token
 // rewriting + GIT_SSH_COMMAND with a temp keyfile) so private repos work.
 func (s *Scheduler) fetchExternalRemoteHead(ctx context.Context, p *store.Project, branch string) (string, error) {
-	secrets, _ := s.store.GetProjectSecretsDecrypted(ctx, p.ID)
-	var gitSSHKey, gitUsername, gitToken string
-	for _, sec := range secrets {
-		if !sec.UseForGit {
-			continue
-		}
-		switch sec.SecretType {
-		case store.SecretTypeSSHKey:
-			gitSSHKey = sec.PlainValue
-		case store.SecretTypePassword:
-			gitUsername = sec.GitUsername
-			gitToken = sec.PlainValue
-		}
-	}
+	gitUsername, gitToken, gitSSHKey, _ := s.store.GetProjectGitCredential(ctx, p.ID)
 
 	remote := p.GitURL
 	if gitUsername != "" && gitToken != "" && strings.HasPrefix(remote, "https://") {
