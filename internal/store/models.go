@@ -614,10 +614,16 @@ type Secret struct {
 	UpdatedAt        time.Time `db:"updated_at"`
 }
 
+// ProjectSecret is a secret owned by a project. It carries its own encrypted
+// value; SourceSecretID only records which personal secret it was copied from
+// (nil if created directly on the project or the source was since deleted).
 type ProjectSecret struct {
-	ProjectID  uuid.UUID `db:"project_id"`
-	SecretID   uuid.UUID `db:"secret_id"`
-	EnvVarName string    `db:"env_var_name"`
+	ID             uuid.UUID  `db:"id"`
+	ProjectID      uuid.UUID  `db:"project_id"`
+	SourceSecretID *uuid.UUID `db:"source_secret_id"`
+	Name           string     `db:"name"`
+	Type           SecretType `db:"type"`
+	EnvVarName     string     `db:"env_var_name"`
 	UseForGit  bool      `db:"use_for_git"`
 	// UseForBuild controls whether this secret is passed to docker buildx as a build secret.
 	UseForBuild bool `db:"use_for_build"`
@@ -626,15 +632,26 @@ type ProjectSecret struct {
 	// GitUsername is the HTTPS username used when UseForGit=true and the secret type is password.
 	// The builder rewrites the git URL as https://GitUsername:SECRET@host/...
 	// For GitHub fine-grained PATs, use "x-access-token" or "oauth2".
-	GitUsername string `db:"git_username"`
+	GitUsername string    `db:"git_username"`
+	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
 }
 
-// ProjectSecretWithMeta is a ProjectSecret enriched with the Secret's name and type,
-// used when listing secrets bound to a project.
-type ProjectSecretWithMeta struct {
+// Value states reported for a project secret so the UI can tell whether a
+// value is actually present without ever returning it.
+const (
+	SecretValueSet           = "set"
+	SecretValueEmpty         = "empty"
+	SecretValueUndecryptable = "undecryptable"
+)
+
+// ProjectSecretView is a ProjectSecret plus non-sensitive facts about its value,
+// used when listing a project's secrets.
+type ProjectSecretView struct {
 	ProjectSecret
-	SecretName string     `db:"secret_name"`
-	SecretType SecretType `db:"secret_type"`
+	ValueStatus  string // one of SecretValue*
+	ValueLength  int    // rune count of the plaintext; 0 unless ValueStatus is "set"
+	ValuePreview string // same rules as Secret.ValuePreview
 }
 
 type Task struct {

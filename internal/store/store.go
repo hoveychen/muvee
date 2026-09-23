@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/crypto"
@@ -2384,34 +2385,138 @@ func (s *Store) DeleteSecret(ctx context.Context, id, userID uuid.UUID) error {
 	return err
 }
 
-// GetProjectSecretsWithMeta returns secrets bound to a project along with name/type metadata.
-// Encrypted values are NOT decrypted — use GetProjectSecretsDecrypted for runtime injection.
-func (s *Store) GetProjectSecretsWithMeta(ctx context.Context, projectID uuid.UUID) ([]*ProjectSecretWithMeta, error) {
+const projectSecretCols = `id, project_id, source_secret_id, name, type, env_var_name, use_for_git, use_for_build, build_secret_id, git_username, created_at, updated_at`
+
+func scanProjectSecret(row pgx.Row, ps *ProjectSecret, extra ...any) error {
+	return row.Scan(append([]any{&ps.ID, &ps.ProjectID, &ps.SourceSecretID, &ps.Name, &ps.Type, &ps.EnvVarName, &ps.UseForGit, &ps.UseForBuild, &ps.BuildSecretID, &ps.GitUsername, &ps.CreatedAt, &ps.UpdatedAt}, extra...)...)
+}
+
+// ListProjectSecrets returns a project's secrets with non-sensitive facts about
+// each value (set / empty / undecryptable, length, preview). Plaintext is
+// decrypted only in memory to derive those facts and is never returned.
+func (s *Store) ListProjectSecrets(ctx context.Context, projectID uuid.UUID) ([]*ProjectSecretView, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT ps.project_id, ps.secret_id, ps.env_var_name, ps.use_for_git, ps.use_for_build, ps.build_secret_id, ps.git_username,
-		       sec.name AS secret_name, sec.type AS secret_type
-		FROM project_secrets ps
-		JOIN secrets sec ON sec.id = ps.secret_id
-		WHERE ps.project_id = $1
-		ORDER BY sec.name
+		SELECT `+projectSecretCols+`, encrypted_value
+		FROM project_secrets
+		WHERE project_id = $1
+		ORDER BY name, created_at
 	`, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := make([]*ProjectSecretWithMeta, 0)
+	result := make([]*ProjectSecretView, 0)
 	for rows.Next() {
-		var ps ProjectSecretWithMeta
-		if err := rows.Scan(&ps.ProjectID, &ps.SecretID, &ps.EnvVarName, &ps.UseForGit, &ps.UseForBuild, &ps.BuildSecretID, &ps.GitUsername, &ps.SecretName, &ps.SecretType); err != nil {
+		var v ProjectSecretView
+		var encVal string
+		if err := scanProjectSecret(rows, &v.ProjectSecret, &encVal); err != nil {
 			return nil, err
 		}
-		result = append(result, &ps)
+		v.ValueStatus = SecretValueUndecryptable
+		if encVal == "" {
+			v.ValueStatus = SecretValueEmpty
+		} else if s.encryptionKey != nil {
+			if plain, err := crypto.Decrypt(s.encryptionKey, encVal); err == nil {
+				if plain == "" {
+					v.ValueStatus = SecretValueEmpty
+				} else {
+					v.ValueStatus = SecretValueSet
+					v.ValueLength = utf8.RuneCountInString(plain)
+					v.ValuePreview = computeSecretPreview(v.Type, plain)
+				}
+			}
+		}
+		result = append(result, &v)
 	}
-	return result, nil
+	return result, rows.Err()
+}
+
+// GetProjectSecret returns one secret of a project (without its value).
+func (s *Store) GetProjectSecret(ctx context.Context, projectID, id uuid.UUID) (*ProjectSecret, error) {
+	var ps ProjectSecret
+	row := s.db.QueryRow(ctx, `SELECT `+projectSecretCols+` FROM project_secrets WHERE project_id = $1 AND id = $2`, projectID, id)
+	if err := scanProjectSecret(row, &ps); err != nil {
+		return nil, err
+	}
+	return &ps, nil
+}
+
+// CreateProjectSecret stores a new project-owned secret with the given plaintext value.
+func (s *Store) CreateProjectSecret(ctx context.Context, ps *ProjectSecret, plaintextValue string) error {
+	if s.encryptionKey == nil {
+		return fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
+	}
+	encrypted, err := crypto.Encrypt(s.encryptionKey, plaintextValue)
+	if err != nil {
+		return fmt.Errorf("encrypt secret: %w", err)
+	}
+	return s.insertProjectSecret(ctx, ps, encrypted)
+}
+
+// CopySecretToProject creates a project secret whose value is a copy of the
+// personal secret sourceID owned by userID. The copy is independent: later
+// changes to (or deletion of) the personal secret do not affect it. Returns
+// pgx.ErrNoRows if the personal secret does not exist or is not owned by userID.
+func (s *Store) CopySecretToProject(ctx context.Context, ps *ProjectSecret, sourceID, userID uuid.UUID) error {
+	src, err := s.GetSecret(ctx, sourceID, userID)
+	if err != nil {
+		return err
+	}
+	ps.SourceSecretID = &src.ID
+	if ps.Name == "" {
+		ps.Name = src.Name
+	}
+	ps.Type = src.Type
+	return s.insertProjectSecret(ctx, ps, src.EncryptedValue)
+}
+
+func (s *Store) insertProjectSecret(ctx context.Context, ps *ProjectSecret, encryptedValue string) error {
+	ps.ID = uuid.New()
+	now := time.Now()
+	ps.CreatedAt, ps.UpdatedAt = now, now
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO project_secrets (id, project_id, source_secret_id, name, type, encrypted_value, env_var_name, use_for_git, use_for_build, build_secret_id, git_username, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, ps.ID, ps.ProjectID, ps.SourceSecretID, ps.Name, ps.Type, encryptedValue, ps.EnvVarName, ps.UseForGit, ps.UseForBuild, ps.BuildSecretID, ps.GitUsername, ps.CreatedAt, ps.UpdatedAt)
+	return err
+}
+
+// UpdateProjectSecret saves ps's name and usage fields. If newValue is non-nil
+// the stored value is replaced too (and the copy-source link is dropped, since
+// the value no longer matches the personal secret it came from).
+func (s *Store) UpdateProjectSecret(ctx context.Context, ps *ProjectSecret, newValue *string) error {
+	ps.UpdatedAt = time.Now()
+	if newValue == nil {
+		_, err := s.db.Exec(ctx, `
+			UPDATE project_secrets SET name=$3, env_var_name=$4, use_for_git=$5, use_for_build=$6, build_secret_id=$7, git_username=$8, updated_at=$9
+			WHERE project_id=$1 AND id=$2
+		`, ps.ProjectID, ps.ID, ps.Name, ps.EnvVarName, ps.UseForGit, ps.UseForBuild, ps.BuildSecretID, ps.GitUsername, ps.UpdatedAt)
+		return err
+	}
+	if s.encryptionKey == nil {
+		return fmt.Errorf("SECRET_ENCRYPTION_KEY is not configured")
+	}
+	encrypted, err := crypto.Encrypt(s.encryptionKey, *newValue)
+	if err != nil {
+		return fmt.Errorf("encrypt secret: %w", err)
+	}
+	ps.SourceSecretID = nil
+	_, err = s.db.Exec(ctx, `
+		UPDATE project_secrets SET name=$3, env_var_name=$4, use_for_git=$5, use_for_build=$6, build_secret_id=$7, git_username=$8, updated_at=$9,
+		       encrypted_value=$10, source_secret_id=NULL
+		WHERE project_id=$1 AND id=$2
+	`, ps.ProjectID, ps.ID, ps.Name, ps.EnvVarName, ps.UseForGit, ps.UseForBuild, ps.BuildSecretID, ps.GitUsername, ps.UpdatedAt, encrypted)
+	return err
+}
+
+// DeleteProjectSecret removes one secret from a project.
+func (s *Store) DeleteProjectSecret(ctx context.Context, projectID, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM project_secrets WHERE project_id = $1 AND id = $2`, projectID, id)
+	return err
 }
 
 type DecryptedProjectSecret struct {
-	SecretID      uuid.UUID
+	SecretID      uuid.UUID // project secret id
 	SecretName    string
 	SecretType    SecretType
 	EnvVarName    string
@@ -2429,11 +2534,10 @@ func (s *Store) GetProjectSecretsDecrypted(ctx context.Context, projectID uuid.U
 		return nil, nil
 	}
 	rows, err := s.db.Query(ctx, `
-		SELECT ps.secret_id, ps.env_var_name, ps.use_for_git, ps.use_for_build, ps.build_secret_id, ps.git_username,
-		       sec.name, sec.type, sec.encrypted_value
-		FROM project_secrets ps
-		JOIN secrets sec ON sec.id = ps.secret_id
-		WHERE ps.project_id = $1
+		SELECT id, env_var_name, use_for_git, use_for_build, build_secret_id, git_username,
+		       name, type, encrypted_value
+		FROM project_secrets
+		WHERE project_id = $1
 	`, projectID)
 	if err != nil {
 		return nil, err
@@ -2454,27 +2558,6 @@ func (s *Store) GetProjectSecretsDecrypted(ctx context.Context, projectID uuid.U
 		result = append(result, &d)
 	}
 	return result, nil
-}
-
-// SetProjectSecrets replaces all secret bindings for a project.
-func (s *Store) SetProjectSecrets(ctx context.Context, projectID uuid.UUID, bindings []ProjectSecret) error {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `DELETE FROM project_secrets WHERE project_id = $1`, projectID); err != nil {
-		return err
-	}
-	for _, b := range bindings {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO project_secrets (project_id, secret_id, env_var_name, use_for_git, use_for_build, build_secret_id, git_username)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, projectID, b.SecretID, b.EnvVarName, b.UseForGit, b.UseForBuild, b.BuildSecretID, b.GitUsername); err != nil {
-			return err
-		}
-	}
-	return tx.Commit(ctx)
 }
 
 // ─── Authorization Requests ─────────────────────────────────────────────────
