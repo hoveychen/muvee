@@ -221,34 +221,47 @@ muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_
 muveectl secrets delete SECRET_ID
 ```
 
-### 项目密钥绑定
+### 项目环境变量
+
+每个项目拥有自己的一套环境变量（`KEY` + 值 + 敏感 / 运行时 / 构建三个开关）；项目的所有成员和管理员看到的都是同一份列表。`env copy` 会把一个个人密钥复制到项目中——拷贝与来源相互独立。完整模型见[密钥与环境变量](./secrets)。
 
 ```bash
-# 查看项目绑定
-muveectl projects secrets PROJECT_ID
+# 列出项目的变量
+muveectl projects env PROJECT_ID
 
-# 作为运行时环境变量注入
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --env-var GITHUB_TOKEN
+# 创建或更新一个变量（默认敏感）
+muveectl projects env set PROJECT_ID GITHUB_TOKEN=github_pat_xxxx
+muveectl projects env set PROJECT_ID LOG_LEVEL=debug --plain
 
-# 用于 git clone（HTTPS token）
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --use-for-git \
-  --git-username x-access-token
+# 仅用于构建（docker build secret，不注入运行时）
+muveectl projects env set PROJECT_ID GITHUB_TOKEN=github_pat_xxxx --build --no-runtime
 
-# 用于构建阶段 secret（docker buildx --secret）
-muveectl projects bind-secret PROJECT_ID \
-  --secret-id SECRET_ID \
-  --use-for-build \
-  --build-secret-id github_token
+# 将一个个人密钥复制到项目中
+muveectl projects env copy PROJECT_ID --secret-id SECRET_ID [--key GITHUB_TOKEN] [--build] [--no-runtime]
 
-# --build-secret-id 可省略；省略时 muveectl 会根据密钥名自动推导
-# 例如 "GITHUB_TOKEN" -> "github_token"
+# 删除一个变量
+muveectl projects env unset PROJECT_ID GITHUB_TOKEN
+```
 
-# 解绑
-muveectl projects unbind-secret PROJECT_ID SECRET_ID
+### 私有 Git 仓库凭据
+
+用于克隆外部仓库的凭据是一项独立的项目设置（不是上面的环境变量之一）：
+
+```bash
+# 查看当前凭据（类型、用户名、value_status）
+muveectl projects git-credential PROJECT_ID
+
+# HTTPS token（用户名默认为 x-access-token）
+muveectl projects git-credential set PROJECT_ID --type https_token --value github_pat_xxxx
+
+# 从文件设置 SSH 部署密钥
+muveectl projects git-credential set PROJECT_ID --type ssh_key --value-file deploy_key
+
+# 或复制一个个人的 password / ssh_key 密钥
+muveectl projects git-credential set PROJECT_ID --from-secret-id SECRET_ID [--username oauth2]
+
+# 移除凭据（匿名克隆）
+muveectl projects git-credential clear PROJECT_ID
 ```
 
 ## 全局参数
@@ -263,11 +276,11 @@ muveectl projects unbind-secret PROJECT_ID SECRET_ID
 项目要成功部署，仓库必须满足以下条件：
 
 ### 构建阶段
-- 可通过 HTTPS（公开仓库或 token 密钥）或 SSH（SSH 密钥）进行 `git clone --depth=1`
+- 可通过 HTTPS（公开仓库，或通过 `projects git-credential` 设置的 PAT / SSH 部署密钥）进行 `git clone --depth=1`
 - 配置的分支必须存在（默认：`main`）
 - 配置路径下必须存在 `Dockerfile`（默认：仓库根目录的 `Dockerfile`）
 - 镜像必须为 **`linux/amd64`** 平台构建（`docker buildx build --platform linux/amd64`）
-- 若构建阶段需要私有依赖，可通过 `--use-for-build --build-secret-id <id>` 绑定密钥，并在 Dockerfile 中通过 `/run/secrets/<id>` 读取
+- 若构建阶段需要私有依赖，可通过 `projects env set PROJECT_ID KEY=值 --build --no-runtime` 添加一个构建变量，并在 Dockerfile 中通过 `/run/secrets/KEY` 读取
 
 ### 运行阶段
 - 容器必须在 **8080** 端口上提供 **HTTP** 服务——Traefik 负责 TLS 终止
