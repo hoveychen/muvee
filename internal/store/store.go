@@ -2454,14 +2454,10 @@ func (s *Store) CreateProjectSecret(ctx context.Context, ps *ProjectSecret, plai
 }
 
 // CopySecretToProject creates a project secret whose value is a copy of the
-// personal secret sourceID owned by userID. The copy is independent: later
-// changes to (or deletion of) the personal secret do not affect it. Returns
-// pgx.ErrNoRows if the personal secret does not exist or is not owned by userID.
-func (s *Store) CopySecretToProject(ctx context.Context, ps *ProjectSecret, sourceID, userID uuid.UUID) error {
-	src, err := s.GetSecret(ctx, sourceID, userID)
-	if err != nil {
-		return err
-	}
+// personal secret src. The copy is independent: later
+// changes to (or deletion of) the personal secret do not affect it. The caller
+// is responsible for checking that src belongs to the acting user.
+func (s *Store) CopySecretToProject(ctx context.Context, ps *ProjectSecret, src *Secret) error {
 	ps.SourceSecretID = &src.ID
 	if ps.Name == "" {
 		ps.Name = src.Name
