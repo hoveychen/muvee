@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette, Pause, Play } from 'lucide-react'
+import { Rocket, Settings, Database, KeyRound, HardDrive, ChevronDown, ChevronUp, Trash2, ArrowLeft, Link2, Link2Off, ExternalLink, Download, FolderOpen, File, Activity, GitBranch, Copy, Check, Key, Plus, Eye, EyeOff, HelpCircle, Shield, Users, Palette, Pause, Play, Pencil } from 'lucide-react'
 import { api } from '../lib/api'
 import SecretValueStatus from '../components/SecretValueStatus'
-import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectAlias, ProjectDataset, ProjectPasswordAccount, ProjectSecret, ProjectSecretPatch, ProjectTraffic, ProjectVisit, Secret, SecretType, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
+import type { ApiToken, CreatedApiToken, ContainerMetric, Dataset, Deployment, InvitationLink, InvitationLinkUse, Node as DeployNode, Project, ProjectAccessRequest, ProjectAccessUser, ProjectAlias, ProjectDataset, ProjectPasswordAccount, ProjectEnvVar, ProjectEnvVarPatch, GitCredential, GitAuthType, ProjectTraffic, ProjectVisit, Secret, SecretType, User, WorkspaceEntry, RepoTreeEntry, RepoCommit, RepoBranch } from '../lib/types'
 import { statusColor, timeAgo, formatBytes, isValidDomainPrefix, resolveDatasetPath } from '../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../lib/auth'
@@ -403,7 +403,7 @@ export default function ProjectDetail() {
           />
         )}
         {tab === 'secrets' && id && (
-          <SecretsTab projectId={id} />
+          <EnvVarsTab projectId={id} />
         )}
         {tab === 'tokens' && id && (
           <TokensTab projectId={id} />
@@ -897,6 +897,7 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
         <>
           {!isImage && field(t('projectDetail.config.gitUrl'), 'git_url')}
           {!isImage && field(t('projectDetail.config.gitBranch'), 'git_branch')}
+          {!isImage && form.id && form.git_source !== 'hosted' && <GitCredentialPanel projectId={form.id} />}
           {isImage && field(t('projectDetail.config.imageRef'), 'image_ref', t('projectDetail.config.imageRefHint'))}
           {isImage && (
             <div>
@@ -2952,12 +2953,18 @@ function WorkspaceTab({ projectId, volumeMountPath }: { projectId: string; volum
   )
 }
 
-// ─── Secrets Tab ──────────────────────────────────────────────────────────────
+// ─── Environment Variables Tab ────────────────────────────────────────────────
 
-// Project secrets are owned by the project and visible to every member. A
-// personal secret can be copied in as a shortcut; the copy is independent.
+// Each row is KEY=VALUE owned by the project and visible to every member.
+// Sensitive values are write-only; runtime/build decide where the value goes.
+// A personal secret can be copied in as a shortcut; the copy is independent.
 
-const PROJECT_SECRET_TYPES: SecretType[] = ['password', 'ssh_key', 'api_key', 'env_var']
+const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+const envKeyFromName = (name: string) => {
+  const key = name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+  return /^[0-9]/.test(key) ? `_${key}` : key
+}
 
 function secretTypeLabelKey(type: SecretType): string {
   switch (type) {
@@ -2969,131 +2976,142 @@ function secretTypeLabelKey(type: SecretType): string {
   }
 }
 
-function secretTypeBadge(type: SecretType): string {
-  return type === 'ssh_key' ? 'badge-info' :
-    type === 'api_key' ? 'badge-warning' :
-    type === 'env_var' ? 'badge-success' :
-    'badge-neutral'
-}
-
-const defaultEnvVarName = (name: string) => name.toUpperCase().replace(/[^A-Z0-9]/g, '_')
-
-function SecretsTab({ projectId }: { projectId: string }) {
+function EnvVarsTab({ projectId }: { projectId: string }) {
   const { t } = useTranslation()
-  const [secrets, setSecrets] = useState<ProjectSecret[] | null>(null)
+  const [vars, setVars] = useState<ProjectEnvVar[] | null>(null)
   const [mySecrets, setMySecrets] = useState<Secret[]>([])
   const [adding, setAdding] = useState<'new' | 'copy' | null>(null)
 
   useEffect(() => {
-    api.projects.secrets(projectId).then(setSecrets).catch(() => setSecrets([]))
+    api.projects.env(projectId).then(setVars).catch(() => setVars([]))
     api.secrets.list().then(setMySecrets).catch(() => {})
   }, [projectId])
 
-  const replace = (updated: ProjectSecret) =>
-    setSecrets(prev => (prev ?? []).map(s => s.id === updated.id ? updated : s))
+  const sortByKey = (list: ProjectEnvVar[]) => [...list].sort((a, b) => a.key.localeCompare(b.key))
+  const replace = (updated: ProjectEnvVar) =>
+    setVars(prev => sortByKey((prev ?? []).map(v => v.id === updated.id ? updated : v)))
 
-  const handleDelete = async (sec: ProjectSecret) => {
-    if (!confirm(t('projectDetail.secrets.deleteConfirm', { name: sec.name }))) return
+  const handleDelete = async (v: ProjectEnvVar) => {
+    if (!confirm(t('projectDetail.env.deleteConfirm', { key: v.key }))) return
     try {
-      await api.projects.deleteSecret(projectId, sec.id)
-      setSecrets(prev => (prev ?? []).filter(s => s.id !== sec.id))
+      await api.projects.deleteEnv(projectId, v.id)
+      setVars(prev => (prev ?? []).filter(x => x.id !== v.id))
     } catch (e) {
-      alert(t('projectDetail.secrets.failedToUpdate') + (e as Error).message)
+      alert(t('projectDetail.env.failed') + (e as Error).message)
     }
   }
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-          {t('projectDetail.secrets.hint')}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', maxWidth: '44rem' }}>
+          {t('projectDetail.env.hint')}
+          <div style={{ marginTop: 4, fontSize: '0.8125rem' }}>
+            {t('projectDetail.env.buildHint')} <code style={{ fontFamily: MONO, color: 'var(--accent)' }}>RUN --mount=type=secret,id=KEY</code>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button className="btn-secondary flex items-center gap-2" onClick={() => setAdding(adding === 'copy' ? null : 'copy')}>
-            <Copy size={14} /> {t('projectDetail.secrets.copyFromMine')}
+            <Copy size={14} /> {t('projectDetail.env.copyFromMine')}
           </button>
           <button className="btn-primary flex items-center gap-2" onClick={() => setAdding(adding === 'new' ? null : 'new')}>
-            <Plus size={14} /> {t('projectDetail.secrets.add')}
+            <Plus size={14} /> {t('projectDetail.env.add')}
           </button>
         </div>
       </div>
 
       {adding && (
-        <AddProjectSecretForm
+        <AddEnvVarForm
           projectId={projectId}
           mode={adding}
           mySecrets={mySecrets}
-          onCreated={sec => { setSecrets(prev => [...(prev ?? []), sec]); setAdding(null) }}
+          onCreated={v => { setVars(prev => sortByKey([...(prev ?? []), v])); setAdding(null) }}
           onCancel={() => setAdding(null)}
         />
       )}
 
       <div className="card" style={{ overflow: 'hidden' }}>
-        {secrets === null ? (
+        {vars === null ? (
           <div className="py-12 text-center" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>…</div>
-        ) : secrets.length === 0 ? (
+        ) : vars.length === 0 ? (
           <div className="py-12 text-center" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-            {t('projectDetail.secrets.empty')}
+            {t('projectDetail.env.empty')}
           </div>
         ) : (
-          secrets.map((sec, i) => (
-            <ProjectSecretRow
-              key={sec.id}
-              projectId={projectId}
-              secret={sec}
-              last={i === secrets.length - 1}
-              onChange={replace}
-              onDelete={() => handleDelete(sec)}
-            />
-          ))
+          <>
+            <div className="env-grid hide-on-mobile" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--fg-muted)', letterSpacing: '0.04em', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>
+              <span>KEY</span>
+              <span>{t('projectDetail.env.value')}</span>
+              <span>{t('projectDetail.env.scope')}</span>
+              <span />
+            </div>
+            {vars.map((v, i) => (
+              <EnvVarRow
+                key={v.id}
+                projectId={projectId}
+                envVar={v}
+                last={i === vars.length - 1}
+                onChange={replace}
+                onDelete={() => handleDelete(v)}
+              />
+            ))}
+          </>
         )}
       </div>
     </div>
   )
 }
 
-function AddProjectSecretForm({
+function ScopeToggle({ on, label, onClick, disabled }: { on: boolean; label: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`badge ${on ? 'badge-success' : 'badge-neutral'}`}
+      style={{ cursor: disabled ? 'default' : 'pointer', opacity: on ? 1 : 0.55, border: 'none', marginRight: 4 }}
+    >
+      {on ? '✓ ' : ''}{label}
+    </button>
+  )
+}
+
+function AddEnvVarForm({
   projectId, mode, mySecrets, onCreated, onCancel,
 }: {
   projectId: string
   mode: 'new' | 'copy'
   mySecrets: Secret[]
-  onCreated: (s: ProjectSecret) => void
+  onCreated: (v: ProjectEnvVar) => void
   onCancel: () => void
 }) {
   const { t } = useTranslation()
-  const [name, setName] = useState('')
-  const [type, setType] = useState<SecretType>('password')
+  const [key, setKey] = useState('')
   const [value, setValue] = useState('')
+  const [sensitive, setSensitive] = useState(true)
+  const [runtime, setRuntime] = useState(true)
+  const [build, setBuild] = useState(false)
   const [fromId, setFromId] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const copyable = mySecrets.filter(s => s.type !== 'registry')
+  const keyValid = ENV_KEY_RE.test(key.trim())
+
+  const pickSource = (id: string) => {
+    setFromId(id)
+    const src = copyable.find(s => s.id === id)
+    if (src) setKey(envKeyFromName(src.name))
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!keyValid) { setError(t('projectDetail.env.keyInvalid')); return }
     setSubmitting(true)
     setError(null)
     try {
-      let created: ProjectSecret
-      if (mode === 'copy') {
-        const src = copyable.find(s => s.id === fromId)
-        if (!src) return
-        created = await api.projects.createSecret(projectId, {
-          from_secret_id: src.id,
-          env_var_name: defaultEnvVarName(src.name),
-          git_username: src.type === 'password' ? 'x-access-token' : '',
-        })
-      } else {
-        created = await api.projects.createSecret(projectId, {
-          name: name.trim(),
-          type,
-          value,
-          env_var_name: defaultEnvVarName(name.trim()),
-          git_username: type === 'password' ? 'x-access-token' : '',
-        })
-      }
-      onCreated(created)
+      onCreated(await api.projects.createEnv(projectId, mode === 'copy'
+        ? { from_secret_id: fromId, key: key.trim(), runtime, build }
+        : { key: key.trim(), value, sensitive, runtime, build }))
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -3101,223 +3119,282 @@ function AddProjectSecretForm({
     }
   }
 
+  if (mode === 'copy' && copyable.length === 0) {
+    return (
+      <div className="card mb-4 p-4 flex items-center justify-between gap-3" style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+        <span>
+          {t('projectDetail.env.noPersonal')}{' '}
+          <a href="/secrets" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{t('projectDetail.env.personalLink')}</a>
+        </span>
+        <button type="button" className="btn-secondary" onClick={onCancel}>{t('projectDetail.env.cancel')}</button>
+      </div>
+    )
+  }
+
+  const src = copyable.find(s => s.id === fromId)
+
   return (
     <form onSubmit={submit} className="card mb-4 p-4 flex flex-col gap-3">
-      {mode === 'copy' ? (
-        copyable.length === 0 ? (
-          <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-            {t('projectDetail.secrets.noPersonal')}{' '}
-            <a href="/secrets" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{t('projectDetail.secrets.personalLink')}</a>
-          </div>
-        ) : (
-          <>
-            <label className="form-label" style={{ marginBottom: 0 }}>{t('projectDetail.secrets.copySource')}</label>
-            <select className="form-input" value={fromId} onChange={e => setFromId(e.target.value)} required>
-              <option value="" disabled>—</option>
-              {copyable.map(s => (
-                <option key={s.id} value={s.id}>{s.name} ({t(secretTypeLabelKey(s.type))})</option>
-              ))}
-            </select>
-            <div style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>{t('projectDetail.secrets.copyHint')}</div>
-          </>
-        )
-      ) : (
-        <>
-          <div className="flex flex-wrap gap-3">
-            <input
-              className="form-input" style={{ fontFamily: MONO, flex: '1 1 200px' }}
-              placeholder={t('secrets.form.name')} value={name} onChange={e => setName(e.target.value)} required
-            />
-            <select className="form-input" style={{ width: 160 }} value={type} onChange={e => setType(e.target.value as SecretType)}>
-              {PROJECT_SECRET_TYPES.map(ty => <option key={ty} value={ty}>{t(secretTypeLabelKey(ty))}</option>)}
-            </select>
-          </div>
-          {type === 'ssh_key' ? (
-            <textarea
-              className="form-input" rows={5} style={{ fontFamily: MONO, fontSize: '0.8125rem' }}
-              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" value={value} onChange={e => setValue(e.target.value)} required
-            />
-          ) : (
-            <input
-              className="form-input" style={{ fontFamily: MONO }}
-              type={type === 'env_var' ? 'text' : 'password'} autoComplete="new-password"
-              placeholder={t('projectDetail.secrets.value')} value={value} onChange={e => setValue(e.target.value)} required
-            />
-          )}
-        </>
+      {mode === 'copy' && (
+        <div>
+          <label className="form-label">{t('projectDetail.env.copySource')}</label>
+          <select className="form-input w-full" value={fromId} onChange={e => pickSource(e.target.value)} required>
+            <option value="" disabled>—</option>
+            {copyable.map(s => (
+              <option key={s.id} value={s.id}>{s.name} ({t(secretTypeLabelKey(s.type))})</option>
+            ))}
+          </select>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginTop: 4 }}>{t('projectDetail.env.copyHint')}</p>
+        </div>
+      )}
+      <div>
+        <label className="form-label">KEY</label>
+        <input
+          className="form-input w-full" style={{ fontFamily: MONO }}
+          placeholder="DATABASE_URL" value={key} onChange={e => setKey(e.target.value)} required
+        />
+        {key && !keyValid && <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginTop: 4 }}>{t('projectDetail.env.keyInvalid')}</p>}
+      </div>
+      {mode === 'new' && (
+        <div>
+          <label className="form-label">{t('projectDetail.env.value')}</label>
+          <textarea
+            className="form-input w-full" rows={value.includes('\n') ? 5 : 2} style={{ fontFamily: MONO, fontSize: '0.875rem' }}
+            value={value} onChange={e => setValue(e.target.value)} required autoComplete="off" spellCheck={false}
+          />
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2" style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
+        {mode === 'new' ? (
+          <label className="flex items-center gap-2" style={{ cursor: 'pointer' }}>
+            <input type="checkbox" checked={sensitive} onChange={() => setSensitive(!sensitive)} style={{ accentColor: 'var(--accent)' }} />
+            {t('projectDetail.env.sensitive')}
+          </label>
+        ) : src && (
+          <span>{src.type === 'env_var' ? t('projectDetail.env.copyPlain') : t('projectDetail.env.copySensitive')}</span>
+        )}
+        <label className="flex items-center gap-2" style={{ cursor: 'pointer' }}>
+          <input type="checkbox" checked={runtime} onChange={() => setRuntime(!runtime)} style={{ accentColor: 'var(--accent)' }} />
+          {t('projectDetail.env.runtime')}
+        </label>
+        <label className="flex items-center gap-2" style={{ cursor: 'pointer' }}>
+          <input type="checkbox" checked={build} onChange={() => setBuild(!build)} style={{ accentColor: 'var(--accent)' }} />
+          {t('projectDetail.env.build')}
+        </label>
+      </div>
+      {mode === 'new' && sensitive && (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>{t('projectDetail.env.sensitiveHint')}</p>
       )}
       {error && <div style={{ fontSize: '0.8125rem', color: 'var(--danger)' }}>{error}</div>}
       <div className="flex gap-2 justify-end">
-        <button type="button" className="btn-secondary" onClick={onCancel}>{t('projectDetail.secrets.cancel')}</button>
-        <button type="submit" className="btn-primary" disabled={submitting || (mode === 'copy' && !fromId)}>
-          {mode === 'copy' ? t('projectDetail.secrets.copy') : t('projectDetail.secrets.create')}
+        <button type="button" className="btn-secondary" onClick={onCancel}>{t('projectDetail.env.cancel')}</button>
+        <button type="submit" className="btn-primary" disabled={submitting || !keyValid || (mode === 'copy' && !fromId)}>
+          {mode === 'copy' ? t('projectDetail.env.copy') : t('projectDetail.env.create')}
         </button>
       </div>
     </form>
   )
 }
 
-function ProjectSecretRow({
-  projectId, secret, last, onChange, onDelete,
+function EnvValueCell({ envVar }: { envVar: ProjectEnvVar }) {
+  if (!envVar.sensitive && envVar.value_status === 'set') {
+    return (
+      <span style={{ fontFamily: MONO, fontSize: '0.8125rem', color: 'var(--fg-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
+        title={envVar.value}>
+        {envVar.value}
+      </span>
+    )
+  }
+  return (
+    <span className="flex items-center gap-2" style={{ minWidth: 0 }}>
+      {envVar.value_status === 'set' && <span style={{ fontFamily: MONO, color: 'var(--fg-muted)', letterSpacing: 2 }}>••••••</span>}
+      <SecretValueStatus status={envVar.value_status} length={envVar.value_length} preview="" />
+    </span>
+  )
+}
+
+function EnvVarRow({
+  projectId, envVar, last, onChange, onDelete,
 }: {
   projectId: string
-  secret: ProjectSecret
+  envVar: ProjectEnvVar
   last: boolean
-  onChange: (s: ProjectSecret) => void
+  onChange: (v: ProjectEnvVar) => void
   onDelete: () => void
 }) {
   const { t } = useTranslation()
-  const [draft, setDraft] = useState({ env_var_name: secret.env_var_name, build_secret_id: secret.build_secret_id, git_username: secret.git_username })
-  const [editingValue, setEditingValue] = useState(false)
-  const [newValue, setNewValue] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [key, setKey] = useState(envVar.key)
+  const [value, setValue] = useState('')
+  const [sensitive, setSensitive] = useState(envVar.sensitive)
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    setDraft({ env_var_name: secret.env_var_name, build_secret_id: secret.build_secret_id, git_username: secret.git_username })
-  }, [secret.env_var_name, secret.build_secret_id, secret.git_username])
+  const startEdit = () => {
+    setKey(envVar.key)
+    setValue(envVar.sensitive ? '' : (envVar.value ?? ''))
+    setSensitive(envVar.sensitive)
+    setError(null)
+    setEditing(true)
+  }
 
-  const save = async (patch: ProjectSecretPatch) => {
+  const patch = async (p: ProjectEnvVarPatch) => {
     setSaving(true)
+    setError(null)
     try {
-      onChange(await api.projects.updateSecret(projectId, secret.id, patch))
+      onChange(await api.projects.updateEnv(projectId, envVar.id, p))
       return true
     } catch (e) {
-      alert(t('projectDetail.secrets.failedToUpdate') + (e as Error).message)
+      setError((e as Error).message)
       return false
     } finally {
       setSaving(false)
     }
   }
 
-  // Text fields save on blur, only when changed.
-  const saveDraft = (key: keyof typeof draft) => {
-    if (draft[key] !== secret[key]) save({ [key]: draft[key] })
+  const saveEdit = async () => {
+    if (!ENV_KEY_RE.test(key.trim())) { setError(t('projectDetail.env.keyInvalid')); return }
+    const p: ProjectEnvVarPatch = {}
+    if (key.trim() !== envVar.key) p.key = key.trim()
+    if (sensitive !== envVar.sensitive) p.sensitive = sensitive
+    if (envVar.sensitive ? value !== '' : value !== (envVar.value ?? '')) p.value = value
+    if (Object.keys(p).length === 0 || await patch(p)) setEditing(false)
   }
-
-  const saveValue = async () => {
-    if (!newValue) return
-    if (await save({ value: newValue })) {
-      setEditingValue(false)
-      setNewValue('')
-    }
-  }
-
-  const textInput = (key: keyof typeof draft, placeholder: string, width: string) => (
-    <input
-      value={draft[key]}
-      onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))}
-      onBlur={() => saveDraft(key)}
-      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-      placeholder={placeholder}
-      className="form-input"
-      style={{ fontFamily: MONO, fontSize: '0.875rem', padding: '4px 8px', width }}
-    />
-  )
-
-  const optionLabel = { cursor: 'pointer', fontSize: '0.8125rem', color: 'var(--fg-muted)' }
-  const fieldLabel = { marginBottom: 0, fontSize: '0.8125rem' }
 
   return (
-    <div style={{ borderBottom: last ? 'none' : '1px solid var(--border)', padding: '1rem 1.25rem' }}>
-      <div className="flex items-start gap-3">
-        <KeyRound size={15} style={{ color: 'var(--fg-muted)', marginTop: 3, flexShrink: 0 }} />
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <span style={{ fontFamily: MONO, fontSize: '0.875rem', color: 'var(--fg-primary)', fontWeight: 500 }}>{secret.name}</span>
-            <span className={`badge ${secretTypeBadge(secret.type)}`}>{t(secretTypeLabelKey(secret.type))}</span>
-            <SecretValueStatus status={secret.value_status} length={secret.value_length} preview={secret.value_preview} />
-            {secret.source_secret_id && (
-              <span style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>{t('projectDetail.secrets.copiedFromPersonal')}</span>
-            )}
-            {saving && <span style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>{t('projectDetail.secrets.saving')}</span>}
-          </div>
-
-          {editingValue && (
-            <div className="flex flex-wrap items-center gap-2 mt-2">
-              {secret.type === 'ssh_key' ? (
-                <textarea className="form-input" rows={4} style={{ fontFamily: MONO, fontSize: '0.8125rem', flex: '1 1 320px' }}
-                  value={newValue} onChange={e => setNewValue(e.target.value)} autoFocus />
-              ) : (
-                <input className="form-input" style={{ fontFamily: MONO, fontSize: '0.875rem', padding: '4px 8px', width: 280 }}
-                  type={secret.type === 'env_var' ? 'text' : 'password'} autoComplete="new-password"
-                  placeholder={t('projectDetail.secrets.newValue')} value={newValue} onChange={e => setNewValue(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') saveValue() }} autoFocus />
-              )}
-              <button className="btn-primary" style={{ padding: '4px 10px' }} disabled={!newValue || saving} onClick={saveValue}>{t('projectDetail.secrets.save')}</button>
-              <button className="btn-secondary" style={{ padding: '4px 10px' }} onClick={() => { setEditingValue(false); setNewValue('') }}>{t('projectDetail.secrets.cancel')}</button>
-            </div>
+    <div style={{ borderBottom: last ? 'none' : '1px solid var(--border)' }}>
+      <div className="env-grid mobile-stack">
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: MONO, fontSize: '0.875rem', fontWeight: 600, color: 'var(--fg-primary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{envVar.key}</div>
+          {envVar.source_secret_id && (
+            <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)' }}>{t('projectDetail.env.copiedFromPersonal')}</div>
           )}
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
-            <div className="flex items-center gap-2">
-              <span className="form-label" style={fieldLabel}>{t('projectDetail.secrets.envVar')}</span>
-              {textInput('env_var_name', t('projectDetail.secrets.envVarPlaceholder'), '180px')}
-            </div>
-
-            <label className="flex items-center gap-2" style={optionLabel}>
-              <input
-                type="checkbox"
-                checked={secret.use_for_build}
-                onChange={() => save({
-                  use_for_build: !secret.use_for_build,
-                  build_secret_id: secret.build_secret_id || secret.name.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
-                })}
-                style={{ accentColor: 'var(--accent)' }}
-              />
-              {t('projectDetail.secrets.useForBuild')}
-            </label>
-            {secret.use_for_build && (
-              <div className="secret-binding-row flex items-center gap-2">
-                <span className="form-label" style={fieldLabel}>{t('projectDetail.secrets.buildSecretId')}</span>
-                {textInput('build_secret_id', 'github_token', '180px')}
-                <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>{t('projectDetail.secrets.buildSecretHint')}</span>
-              </div>
-            )}
-
-            {secret.type === 'ssh_key' && (
-              <label className="flex items-center gap-2" style={optionLabel}>
-                <input type="checkbox" checked={secret.use_for_git} onChange={() => save({ use_for_git: !secret.use_for_git })} style={{ accentColor: 'var(--accent)' }} />
-                {t('projectDetail.secrets.useForGitSsh')}
-              </label>
-            )}
-
-            {secret.type === 'password' && (
-              <>
-                <label className="flex items-center gap-2" style={optionLabel}>
-                  <input
-                    type="checkbox"
-                    checked={secret.use_for_git}
-                    onChange={() => save({ use_for_git: !secret.use_for_git, git_username: secret.git_username || 'x-access-token' })}
-                    style={{ accentColor: 'var(--accent)' }}
-                  />
-                  {t('projectDetail.secrets.useForGitHttps')}
-                </label>
-                {secret.use_for_git && (
-                  <div className="secret-binding-row flex items-center gap-2">
-                    <span className="form-label" style={fieldLabel}>{t('projectDetail.secrets.username')}</span>
-                    {textInput('git_username', 'x-access-token', '160px')}
-                    <span style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)' }}>
-                      {t('projectDetail.secrets.githubPat')} (<code style={{ fontFamily: MONO, color: 'var(--accent)' }}>x-access-token</code>)
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
         </div>
-
-        <div className="flex items-center gap-1" style={{ flexShrink: 0 }}>
-          {!editingValue && (
-            <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: '0.8125rem' }} onClick={() => setEditingValue(true)}>
-              {t('projectDetail.secrets.changeValue')}
-            </button>
-          )}
-          <button onClick={onDelete} title={t('projectDetail.secrets.delete')}
+        <div style={{ minWidth: 0 }}><EnvValueCell envVar={envVar} /></div>
+        <div>
+          <ScopeToggle on={envVar.runtime} label={t('projectDetail.env.runtimeShort')} disabled={saving} onClick={() => patch({ runtime: !envVar.runtime })} />
+          <ScopeToggle on={envVar.build} label={t('projectDetail.env.buildShort')} disabled={saving} onClick={() => patch({ build: !envVar.build })} />
+        </div>
+        <div className="flex items-center justify-end gap-1">
+          <button onClick={editing ? () => setEditing(false) : startEdit} title={t('projectDetail.env.edit')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: editing ? 'var(--accent)' : 'var(--fg-muted)', padding: 6 }}>
+            <Pencil size={14} />
+          </button>
+          <button onClick={onDelete} title={t('projectDetail.env.delete')}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', padding: 6 }}>
             <Trash2 size={14} />
           </button>
         </div>
       </div>
+
+      {editing && (
+        <div className="flex flex-col gap-2" style={{ padding: '0 1.25rem 1rem' }}>
+          <div className="flex flex-wrap gap-2">
+            <input className="form-input" style={{ fontFamily: MONO, fontSize: '0.875rem', width: 260 }} value={key} onChange={e => setKey(e.target.value)} />
+            <textarea
+              className="form-input" rows={value.includes('\n') ? 4 : 1}
+              style={{ fontFamily: MONO, fontSize: '0.875rem', flex: '1 1 320px' }}
+              placeholder={envVar.sensitive ? t('projectDetail.env.newValuePlaceholder') : ''}
+              value={value} onChange={e => setValue(e.target.value)} autoComplete="off" spellCheck={false}
+            />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="flex items-center gap-2" style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', cursor: envVar.sensitive ? 'default' : 'pointer' }}
+              title={envVar.sensitive ? t('projectDetail.env.sensitiveLocked') : undefined}>
+              <input type="checkbox" checked={sensitive} disabled={envVar.sensitive} onChange={() => setSensitive(!sensitive)} style={{ accentColor: 'var(--accent)' }} />
+              {t('projectDetail.env.sensitive')}
+              {envVar.sensitive && <span>（{t('projectDetail.env.sensitiveLocked')}）</span>}
+            </label>
+            <div className="flex gap-2">
+              <button className="btn-secondary" style={{ padding: '4px 10px' }} onClick={() => setEditing(false)}>{t('projectDetail.env.cancel')}</button>
+              <button className="btn-primary" style={{ padding: '4px 10px' }} disabled={saving} onClick={saveEdit}>{t('projectDetail.env.save')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {error && <div style={{ fontSize: '0.8125rem', color: 'var(--danger)', padding: '0 1.25rem 0.75rem' }}>{error}</div>}
+    </div>
+  )
+}
+
+// ─── Git credential (Config tab) ─────────────────────────────────────────────
+
+function GitCredentialPanel({ projectId }: { projectId: string }) {
+  const { t } = useTranslation()
+  const [cred, setCred] = useState<GitCredential | null>(null)
+  const [type, setType] = useState<GitAuthType>('none')
+  const [username, setUsername] = useState('')
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const load = (c: GitCredential) => {
+    setCred(c)
+    setType(c.type)
+    setUsername(c.username || 'x-access-token')
+    setValue('')
+  }
+
+  useEffect(() => {
+    api.projects.gitCredential(projectId).then(load).catch(() => {})
+  }, [projectId])
+
+  if (!cred) return null
+  const typeChanged = type !== cred.type
+  const needsValue = type !== 'none' && (typeChanged || cred.value_status !== 'set')
+  const dirty = typeChanged || value !== '' || (type === 'https_token' && username !== (cred.username || 'x-access-token'))
+
+  const save = async () => {
+    setSaving(true)
+    setError(null)
+    setSaved(false)
+    try {
+      load(await api.projects.setGitCredential(projectId, { type, username: type === 'https_token' ? username : '', value }))
+      setSaved(true)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <label className="form-label">{t('projectDetail.gitCred.label').toUpperCase()}</label>
+      <div className="flex flex-wrap items-center gap-4 mb-2" style={{ fontSize: '0.875rem' }}>
+        {(['none', 'https_token', 'ssh_key'] as GitAuthType[]).map(ty => (
+          <label key={ty} className="flex items-center gap-2" style={{ cursor: 'pointer' }}>
+            <input type="radio" checked={type === ty} onChange={() => { setType(ty); setValue(''); setSaved(false) }} style={{ accentColor: 'var(--accent)' }} />
+            {t(`projectDetail.gitCred.${ty}`)}
+          </label>
+        ))}
+        {!typeChanged && cred.type !== 'none' && (
+          <SecretValueStatus status={cred.value_status} length={cred.value_length} preview="" />
+        )}
+      </div>
+      {type === 'https_token' && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          <input className="form-input" style={{ fontFamily: MONO, width: 200 }} placeholder="x-access-token"
+            value={username} onChange={e => setUsername(e.target.value)} />
+          <input className="form-input" style={{ fontFamily: MONO, flex: '1 1 260px' }} type="password" autoComplete="new-password"
+            placeholder={needsValue ? t('projectDetail.gitCred.tokenPlaceholder') : t('projectDetail.gitCred.keepPlaceholder')}
+            value={value} onChange={e => setValue(e.target.value)} />
+        </div>
+      )}
+      {type === 'ssh_key' && (
+        <textarea className="form-input w-full mb-2" rows={4} style={{ fontFamily: MONO, fontSize: '0.8125rem' }}
+          placeholder={needsValue ? '-----BEGIN OPENSSH PRIVATE KEY-----' : t('projectDetail.gitCred.keepPlaceholder')}
+          value={value} onChange={e => setValue(e.target.value)} spellCheck={false} />
+      )}
+      <div className="flex items-center gap-3">
+        <button type="button" className="btn-secondary" style={{ padding: '4px 12px' }} disabled={saving || !dirty || (needsValue && !value)} onClick={save}>
+          {t('projectDetail.gitCred.save')}
+        </button>
+        {saved && !dirty && <span style={{ fontSize: '0.8125rem', color: 'var(--success)' }}>{t('projectDetail.gitCred.saved')}</span>}
+        {error && <span style={{ fontSize: '0.8125rem', color: 'var(--danger)' }}>{error}</span>}
+      </div>
+      <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>{t('projectDetail.gitCred.hint')}</p>
     </div>
   )
 }

@@ -5814,20 +5814,46 @@ func (s *Server) getProjectGitCredential(w http.ResponseWriter, r *http.Request)
 // An empty value keeps the stored one, which is only allowed when the type is
 // unchanged (e.g. editing just the HTTPS username).
 func (s *Server) setProjectGitCredential(w http.ResponseWriter, r *http.Request) {
-	projectID, _, ok := s.projectMemberAccess(w, r)
+	projectID, user, ok := s.projectMemberAccess(w, r)
 	if !ok {
 		return
 	}
 	var body struct {
-		Type     string `json:"type"`
-		Username string `json:"username"`
-		Value    string `json:"value"`
+		Type         string `json:"type"`
+		Username     string `json:"username"`
+		Value        string `json:"value"`
+		FromSecretID string `json:"from_secret_id"` // copy one of the caller's personal secrets
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
 	username := strings.TrimSpace(body.Username)
+	if body.FromSecretID != "" {
+		srcID, err := uuid.Parse(body.FromSecretID)
+		if err != nil {
+			jsonErr(w, fmt.Errorf("invalid from_secret_id"), 400)
+			return
+		}
+		src, err := s.store.GetSecret(r.Context(), srcID, user.ID)
+		if err != nil {
+			jsonErr(w, fmt.Errorf("personal secret not found"), 404)
+			return
+		}
+		if src.Type != store.SecretTypePassword && src.Type != store.SecretTypeSSHKey {
+			jsonErr(w, fmt.Errorf("only password or ssh_key secrets can be used as a git credential"), 400)
+			return
+		}
+		if username == "" {
+			username = "x-access-token"
+		}
+		if err := s.store.CopySecretToProjectGitCredential(r.Context(), projectID, src, username); err != nil {
+			jsonErr(w, err, 500)
+			return
+		}
+		s.respondGitCredential(w, r, projectID)
+		return
+	}
 	switch body.Type {
 	case store.GitAuthNone:
 		username = ""

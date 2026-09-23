@@ -3156,3 +3156,15 @@ func (s *Store) GetProjectByAliasHost(ctx context.Context, host string) (*Projec
 	}
 	return &p, nil
 }
+
+// CopySecretToProjectGitCredential sets the project's git clone credential to a
+// copy of the personal secret src (ssh_key → ssh_key, anything else →
+// https_token with username). The caller checks src belongs to the acting user.
+func (s *Store) CopySecretToProjectGitCredential(ctx context.Context, projectID uuid.UUID, src *Secret, username string) error {
+	typ := GitAuthHTTPSToken
+	if src.Type == SecretTypeSSHKey {
+		typ, username = GitAuthSSHKey, ""
+	}
+	_, err := s.db.Exec(ctx, `UPDATE projects SET git_auth_type=$2, git_auth_username=$3, git_auth_encrypted=$4 WHERE id=$1`, projectID, typ, username, src.EncryptedValue)
+	return err
+}
