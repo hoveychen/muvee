@@ -102,12 +102,59 @@ actually on:
 
 - **DNS:** point `<base>` (A record) and `*.<base>` (wildcard A record) at this
   server's IP, same as the canonical domain.
-- **TLS:** there is **no wildcard cert** for the extra base domains — every
+- **TLS:** there is **no wildcard cert** for the extra base domains (unless the domain is a [Cloudflare Tunnel domain](#cloudflare-tunnel-domains)) — every
   project subdomain obtains its own Let's Encrypt HTTP-01 certificate, so the
   domain must be publicly reachable on port 80 for the ACME challenge.
 - **OAuth provider dashboards:** register each domain's callback URLs with every
   provider you use, e.g. `https://app.<base>/auth/google/callback` (control-panel
   login) and `https://app.<base>/_oauth/google` (per-project ForwardAuth).
+
+### Cloudflare Tunnel domains
+
+A base domain can instead be served through a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/),
+alongside the ACME domains. Cloudflare holds the TLS certificate at its edge.
+The `cloudflared` container dials out to Cloudflare, so this domain needs no
+open ports and no Let's Encrypt. The other base domains keep working as before
+(DNS → public `:80`/`:443` → HTTP-01).
+
+```bash
+BASE_DOMAINS=muveeai.com,example.net
+CF_TUNNEL_DOMAINS=example.net      # must be one of BASE_DOMAINS
+CF_TUNNEL_TOKEN=eyJhIjoi...        # the tunnel's connector token; starts cloudflared
+```
+
+1. In the Cloudflare dashboard, create a tunnel (Zero Trust → Networks →
+   Tunnels) and copy its token into `CF_TUNNEL_TOKEN`.
+2. Add two public hostnames to the tunnel, `example.net` and `*.example.net`,
+   both with the service `http://localhost:8000`. Cloudflare creates the apex
+   CNAME for you; add the wildcard `*` CNAME to `<tunnel-id>.cfargotunnel.com`
+   yourself if the dashboard doesn't.
+3. Set SSL/TLS → Edge Certificates → **Always Use HTTPS** on.
+4. Pull the updated `traefik/traefik.yml` (it adds the internal `cftunnel`
+   entrypoint) and run `docker compose up -d`.
+
+How it works: `cloudflared` shares Traefik's network namespace and forwards to
+Traefik's `cftunnel` entrypoint (`:8000`). That entrypoint is plain HTTP and
+never published on the host. It trusts `X-Forwarded-*` only from loopback, so
+apps see the real client IP and `X-Forwarded-Proto: https`. muvee-server serves
+every host under a tunnel domain on that entrypoint, with no certificate
+resolver. It also adds panel routers for `<base>` and `app.<base>`, plus a
+`/_oauth` router, so no extra compose labels are needed. The admin
+Certificates panel lists these hosts as **Cloudflare**.
+
+Limits on tunnel domains:
+
+- **TCP routes** are not available. They depend on SNI passthrough on
+  `:443`, which the tunnel doesn't carry. They stay reachable on the ACME
+  domains.
+- **Uploads**: Cloudflare caps a request body at 100 MB on the Free and Pro
+  plans. Use an ACME domain for large `muveectl dataset push` uploads.
+  `registry.<base>` and `traefik.<base>` are not served on tunnel domains.
+- **Nested subdomains** such as `a.b.example.net` aren't covered by
+  Cloudflare's free Universal SSL certificate.
+- Register the tunnel domain's OAuth callbacks with each provider, the same as
+  for any extra base domain.
 
 ## Runtime settings (admin UI)
 

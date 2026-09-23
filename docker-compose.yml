@@ -100,6 +100,8 @@ services:
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY}
       BASE_DOMAIN: ${BASE_DOMAIN}
       BASE_DOMAINS: ${BASE_DOMAINS}
+      # Subset of BASE_DOMAINS served through the cloudflared tunnel (no ACME).
+      CF_TUNNEL_DOMAINS: ${CF_TUNNEL_DOMAINS}
       AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://muvee-authservice:4181}
       AGENT_SECRET: ${AGENT_SECRET}
       REGISTRY_ADDR: ${REGISTRY_ADDR}
@@ -333,6 +335,31 @@ services:
   # image, so watchtower recreating it on a new digest reloads the embed-bridge
   # plugin. Postgres and registry are left alone — they pin specific versions
   # and need manual upgrade review.
+  # ── Cloudflare Tunnel (optional) ───────────────────────────────────────────
+  # Serves the base domains listed in CF_TUNNEL_DOMAINS through a Cloudflare
+  # Tunnel instead of public :80/:443 + Let's Encrypt. Shares Traefik's network
+  # namespace, so in the Cloudflare dashboard point the tunnel's public
+  # hostnames (<base>, *.<base>) at http://localhost:8000 — Traefik's internal
+  # cftunnel entrypoint, which trusts forwarded headers only from loopback.
+  # Enabled by setting CF_TUNNEL_TOKEN in .env. Without a token the command and
+  # restart policy interpolate to empty, so the container just prints its
+  # version and exits 0 once (the image is distroless — no shell for an `if`).
+  # See docs/configuration.md "Cloudflare Tunnel".
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: ${CF_TUNNEL_TOKEN:+tunnel --no-autoupdate run}
+    restart: ${CF_TUNNEL_TOKEN:+unless-stopped}
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+    network_mode: "service:traefik"
+    depends_on:
+      - traefik
+    labels:
+      # Watchtower recreates Traefik on release; enabling it here too lets it
+      # restart this container along with it (network_mode dependency), so the
+      # tunnel doesn't keep a dead network namespace.
+      - "com.centurylinklabs.watchtower.enable=true"
+
   # Uses the nickfedor fork because the original containrrr/watchtower image
   # has been unmaintained since 2024 and its embedded Docker client (API 1.25)
   # is rejected by modern dockerd (MinAPI 1.40+).

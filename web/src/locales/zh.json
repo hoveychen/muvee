@@ -790,7 +790,8 @@
       "status": {
         "issued": "已签发",
         "pending": "待处理",
-        "unknown": "未知"
+        "unknown": "未知",
+        "cloudflare": "Cloudflare 托管"
       },
       "kind": {
         "base": "控制面",

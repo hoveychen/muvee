@@ -11,6 +11,7 @@
 package domains
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 )
@@ -39,6 +40,26 @@ func Parse(baseDomain, baseDomains string) []string {
 		add(d)
 	}
 	return out
+}
+
+// ParseSubset parses a comma-separated list of base domains that must each be
+// one of bases (e.g. CF_TUNNEL_DOMAINS, which marks some of the BASE_DOMAINS
+// as reached through a Cloudflare Tunnel). Entries are normalised like Parse;
+// empty entries and duplicates drop. An entry outside bases is an error, so a
+// typo fails loudly at startup instead of silently routing nothing.
+func ParseSubset(raw string, bases []string) ([]string, error) {
+	known := make(map[string]struct{}, len(bases))
+	for _, b := range bases {
+		known[strings.ToLower(strings.TrimSpace(b))] = struct{}{}
+	}
+	var out []string
+	for _, d := range Parse("", raw) {
+		if _, ok := known[d]; !ok {
+			return nil, fmt.Errorf("%q is not one of the configured base domains (%s)", d, strings.Join(bases, ", "))
+		}
+		out = append(out, d)
+	}
+	return out, nil
 }
 
 // Match returns the configured base domain that host belongs to — either host

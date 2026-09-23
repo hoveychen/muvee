@@ -17,7 +17,7 @@ import (
 type CertStatus struct {
 	Domain   string     `json:"domain"`
 	Kind     string     `json:"kind"`   // base|registry|traefik|project|alias|tunnel
-	Status   string     `json:"status"` // issued|pending|unknown
+	Status   string     `json:"status"` // issued|pending|unknown|cloudflare
 	NotAfter *time.Time `json:"not_after,omitempty"`
 	DaysLeft *int       `json:"days_left,omitempty"`
 	Issuer   string     `json:"issuer,omitempty"`
@@ -127,8 +127,13 @@ func (s *Server) expectedDomains(ctx context.Context) []CertStatus {
 		bases = []string{s.baseDomain}
 	}
 	for _, b := range bases {
+		items = append(items, CertStatus{Domain: b, Kind: "base"})
+		// registry/traefik are compose-label routers on the ACME entrypoint
+		// only; they aren't served under a Cloudflare Tunnel base.
+		if s.isCFTunnelHost(b) {
+			continue
+		}
 		items = append(items,
-			CertStatus{Domain: b, Kind: "base"},
 			CertStatus{Domain: "registry." + b, Kind: "registry"},
 			CertStatus{Domain: "traefik." + b, Kind: "traefik"},
 		)
@@ -190,6 +195,13 @@ func (s *Server) handleGetCertificateStatus(w http.ResponseWriter, r *http.Reque
 	items := s.expectedDomains(r.Context())
 	now := time.Now()
 	for i := range items {
+		// CF_TUNNEL_DOMAINS hosts never get an ACME cert: Cloudflare's edge
+		// terminates TLS, so there is nothing in acme.json to report.
+		if s.isCFTunnelHost(items[i].Domain) {
+			items[i].Status = "cloudflare"
+			items[i].Message = "served through the Cloudflare Tunnel — TLS is terminated by Cloudflare"
+			continue
+		}
 		if report.StoreError != "" {
 			items[i].Status = "unknown"
 			items[i].Message = "acme.json unreadable — check the volume mount"
@@ -242,8 +254,10 @@ func statusRank(s string) int {
 		return 1
 	case "issued":
 		return 2
+	case "cloudflare":
+		return 3
 	}
-	return 3
+	return 4
 }
 
 func kindRank(k string) int {

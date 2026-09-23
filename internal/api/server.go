@@ -49,6 +49,7 @@ type Server struct {
 	monitor            *monitor.Monitor
 	baseDomain         string
 	baseDomains        []string // all configured platform base domains (canonical first); see internal/domains
+	cfTunnelDomains    []string // subset of baseDomains reached through a Cloudflare Tunnel; see cftunnel.go
 	authServiceURL     string   // base URL of muvee-authservice, e.g. http://muvee-authservice:4181
 	agentSecret        string   // shared secret for agent ↔ server authentication
 	registryAddr       string   // address of the Docker registry distributed to agents
@@ -89,6 +90,7 @@ type Server struct {
 type ServerConfig struct {
 	BaseDomain         string
 	BaseDomains        []string // full set of platform base domains, canonical first (see internal/domains.Parse)
+	CFTunnelDomains    []string // subset of BaseDomains served via cloudflared instead of ACME (CF_TUNNEL_DOMAINS)
 	AuthServiceURL     string
 	AgentSecret        string
 	RegistryAddr       string
@@ -121,6 +123,7 @@ func NewServer(st *store.Store, authSvc *auth.Service, sched *scheduler.Schedule
 		monitor:            mon,
 		baseDomain:         cfg.BaseDomain,
 		baseDomains:        cfg.BaseDomains,
+		cfTunnelDomains:    cfg.CFTunnelDomains,
 		authServiceURL:     cfg.AuthServiceURL,
 		agentSecret:        cfg.AgentSecret,
 		registryAddr:       cfg.RegistryAddr,
@@ -5131,6 +5134,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Hosts under CF_TUNNEL_DOMAINS move to the cftunnel entrypoint — see cftunnel.go.
+	s.applyCFTunnelDomains(&cfg)
 
 	// Empty maps make Traefik reject the entire document — see pruneEmpty.
 	cfg.pruneEmpty()

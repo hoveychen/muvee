@@ -193,13 +193,16 @@ function HealthRow({ check }: { check: import('../lib/types').HealthCheck }) {
 // ─── Certificate row ──────────────────────────────────────────────────────────
 
 function CertRow({ cert, t }: { cert: CertStatus; t: (key: string, opts?: Record<string, unknown>) => string }) {
-  const badgeClass = cert.status === 'issued'
+  // 'cloudflare' = a CF_TUNNEL_DOMAINS host: Cloudflare holds the cert, so it
+  // renders like an issued one.
+  const ok = cert.status === 'issued' || cert.status === 'cloudflare'
+  const badgeClass = ok
     ? 'badge badge-success'
     : cert.status === 'pending'
     ? 'badge badge-warning'
     : 'badge badge-danger'
 
-  const icon = cert.status === 'issued'
+  const icon = ok
     ? <CheckCircle size={14} color="var(--success)" />
     : cert.status === 'pending'
     ? <AlertCircle size={14} color="var(--warning)" />

@@ -790,7 +790,8 @@
       "status": {
         "issued": "Issued",
         "pending": "Pending",
-        "unknown": "Unknown"
+        "unknown": "Unknown",
+        "cloudflare": "Cloudflare"
       },
       "kind": {
         "base": "Control plane",

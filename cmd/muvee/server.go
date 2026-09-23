@@ -84,6 +84,16 @@ func runServer() {
 	if len(baseDomains) > 1 {
 		log.Printf("Serving multiple base domains: %s", strings.Join(baseDomains, ", "))
 	}
+	// CF_TUNNEL_DOMAINS marks some of those base domains as reached through a
+	// Cloudflare Tunnel: Traefik serves them on the internal plain-HTTP
+	// cftunnel entrypoint and never requests ACME certs for them.
+	cfTunnelDomains, err := domains.ParseSubset(os.Getenv("CF_TUNNEL_DOMAINS"), baseDomains)
+	if err != nil {
+		log.Fatalf("CF_TUNNEL_DOMAINS: %v", err)
+	}
+	if len(cfTunnelDomains) > 0 {
+		log.Printf("Cloudflare Tunnel base domains: %s", strings.Join(cfTunnelDomains, ", "))
+	}
 	authServiceURL := os.Getenv("AUTH_SERVICE_URL")
 	registryAddr := os.Getenv("REGISTRY_ADDR")
 	if registryAddr == "" {
@@ -122,6 +132,7 @@ func runServer() {
 	srv := api.NewServer(st, authSvc, sched, mon, api.ServerConfig{
 		BaseDomain:         baseDomain,
 		BaseDomains:        baseDomains,
+		CFTunnelDomains:    cfTunnelDomains,
 		AuthServiceURL:     authServiceURL,
 		AgentSecret:        agentSecret,
 		RegistryAddr:       registryAddr,
