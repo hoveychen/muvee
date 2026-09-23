@@ -270,15 +270,16 @@ services:
   # namespace, so in the Cloudflare dashboard point the tunnel's public
   # hostnames (<base>, *.<base>) at http://localhost:8000 — Traefik's internal
   # cftunnel entrypoint, which trusts forwarded headers only from loopback.
-  # Opt-in via the `cftunnel` Compose profile (COMPOSE_PROFILES=cftunnel) and
-  # set CF_TUNNEL_TOKEN in .env. See docs/configuration.md "Cloudflare Tunnel".
+  # Enabled by setting CF_TUNNEL_TOKEN in .env. Without a token the command and
+  # restart policy interpolate to empty, so the container just prints its
+  # version and exits 0 once (the image is distroless — no shell for an `if`).
+  # See docs/configuration.md "Cloudflare Tunnel".
   cloudflared:
     image: cloudflare/cloudflared:latest
-    profiles: ["cftunnel"]
-    command: ["tunnel", "--no-autoupdate", "run"]
-    restart: unless-stopped
+    command: ${CF_TUNNEL_TOKEN:+tunnel --no-autoupdate run}
+    restart: ${CF_TUNNEL_TOKEN:+unless-stopped}
     environment:
-      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
     network_mode: "service:traefik"
     depends_on:
       - traefik

@@ -98,8 +98,7 @@ BASE_DOMAINS=muveeai.com,muvee.ai
 ```bash
 BASE_DOMAINS=muveeai.com,example.net
 CF_TUNNEL_DOMAINS=example.net      # 必须是 BASE_DOMAINS 中的一个
-CF_TUNNEL_TOKEN=eyJhIjoi...        # 隧道的 connector token
-COMPOSE_PROFILES=cftunnel          # 同时启用 watchtower 时写 auto-update,cftunnel
+CF_TUNNEL_TOKEN=eyJhIjoi...        # 隧道的 connector token；填了就会启动 cloudflared
 ```
 
 1. 在 Cloudflare 后台（Zero Trust → Networks → Tunnels）创建隧道，把 token 填进 `CF_TUNNEL_TOKEN`。

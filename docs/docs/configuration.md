@@ -121,8 +121,7 @@ open ports and no Let's Encrypt. The other base domains keep working as before
 ```bash
 BASE_DOMAINS=muveeai.com,example.net
 CF_TUNNEL_DOMAINS=example.net      # must be one of BASE_DOMAINS
-CF_TUNNEL_TOKEN=eyJhIjoi...        # the tunnel's connector token
-COMPOSE_PROFILES=cftunnel          # e.g. auto-update,cftunnel with watchtower
+CF_TUNNEL_TOKEN=eyJhIjoi...        # the tunnel's connector token; starts cloudflared
 ```
 
 1. In the Cloudflare dashboard, create a tunnel (Zero Trust → Networks →
