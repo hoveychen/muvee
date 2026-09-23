@@ -38,7 +38,7 @@ func init() {
 	projectsCmd.AddCommand(projectsUnbindSecretCmd)
 
 	// bind-secret flags
-	projectsBindSecretCmd.Flags().String("secret-id", "", "Secret ID to bind (required)")
+	projectsBindSecretCmd.Flags().String("secret-id", "", "Personal secret ID to copy into the project (required)")
 	projectsBindSecretCmd.Flags().String("env-var", "", "Environment variable name to inject")
 	projectsBindSecretCmd.Flags().Bool("use-for-git", false, "Use this secret for git clone during build")
 	projectsBindSecretCmd.Flags().Bool("use-for-build", false, "Use this secret for docker buildx --secret during image build")
@@ -155,7 +155,7 @@ var secretsDeleteCmd = &cobra.Command{
 
 var projectsSecretsCmd = &cobra.Command{
 	Use:   "secrets PROJECT-ID-OR-NAME",
-	Short: "List secrets bound to a project",
+	Short: "List a project's secrets (values are never returned)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
@@ -174,17 +174,17 @@ var projectsSecretsCmd = &cobra.Command{
 			return nil
 		}
 		if len(items) == 0 {
-			fmt.Println("No secrets bound to this project.")
+			fmt.Println("This project has no secrets.")
 			return nil
 		}
-		printTable(items, []string{"secret_id", "secret_name", "secret_type", "env_var_name", "use_for_git", "use_for_build", "build_secret_id"})
+		printTable(items, []string{"id", "name", "type", "value_status", "value_length", "value_preview", "env_var_name", "use_for_git", "use_for_build", "build_secret_id"})
 		return nil
 	},
 }
 
 var projectsBindSecretCmd = &cobra.Command{
 	Use:   "bind-secret PROJECT-ID-OR-NAME",
-	Short: "Attach a secret to a project",
+	Short: "Copy a personal secret into a project (an independent copy)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
@@ -229,35 +229,15 @@ var projectsBindSecretCmd = &cobra.Command{
 			}
 		}
 
-		// Fetch current bindings, replace or add the target one, and PUT.
-		current, err := cl.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
-		if err != nil {
-			return err
-		}
-		bindings := []map[string]interface{}{}
-		for _, item := range current {
-			m, _ := item.(map[string]interface{})
-			if m == nil || str(m, "secret_id") == secretID {
-				continue
-			}
-			bindings = append(bindings, map[string]interface{}{
-				"secret_id":       str(m, "secret_id"),
-				"env_var_name":    str(m, "env_var_name"),
-				"use_for_git":     m["use_for_git"],
-				"use_for_build":   m["use_for_build"],
-				"build_secret_id": str(m, "build_secret_id"),
-				"git_username":    str(m, "git_username"),
-			})
-		}
-		bindings = append(bindings, map[string]interface{}{
-			"secret_id":       secretID,
+		body := map[string]interface{}{
+			"from_secret_id":  secretID,
 			"env_var_name":    envVar,
 			"use_for_git":     useForGit,
 			"use_for_build":   useForBuild,
 			"build_secret_id": buildSecretID,
 			"git_username":    gitUsername,
-		})
-		result, err := cl.do("PUT", "/api/projects/"+projectID+"/secrets", bindings)
+		}
+		result, err := cl.do("POST", "/api/projects/"+projectID+"/secrets", body)
 		if err != nil {
 			return err
 		}
@@ -265,15 +245,15 @@ var projectsBindSecretCmd = &cobra.Command{
 			printJSON(result)
 			return nil
 		}
-		fmt.Printf("Secret %s bound to project %s (env_var: %q, use_for_git: %v, use_for_build: %v, build_secret_id: %q, git_username: %q)\n",
-			secretID, projectID, envVar, useForGit, useForBuild, buildSecretID, gitUsername)
+		fmt.Printf("Secret %s copied into project %s as project secret %s (env_var: %q, use_for_git: %v, use_for_build: %v, build_secret_id: %q, git_username: %q)\n",
+			secretID, projectID, str(result, "id"), envVar, useForGit, useForBuild, buildSecretID, gitUsername)
 		return nil
 	},
 }
 
 var projectsUnbindSecretCmd = &cobra.Command{
-	Use:   "unbind-secret PROJECT-ID-OR-NAME SECRET_ID",
-	Short: "Detach a secret from a project",
+	Use:   "unbind-secret PROJECT-ID-OR-NAME PROJECT-SECRET-ID",
+	Short: "Delete a secret from a project (IDs from `projects secrets`)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireAuth(); err != nil {
@@ -283,30 +263,10 @@ var projectsUnbindSecretCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		secretID := args[1]
-		current, err := cl.doArray("GET", "/api/projects/"+projectID+"/secrets", nil)
-		if err != nil {
+		if _, err := cl.do("DELETE", "/api/projects/"+projectID+"/secrets/"+args[1], nil); err != nil {
 			return err
 		}
-		bindings := []map[string]interface{}{}
-		for _, item := range current {
-			m, _ := item.(map[string]interface{})
-			if m == nil || str(m, "secret_id") == secretID {
-				continue
-			}
-			bindings = append(bindings, map[string]interface{}{
-				"secret_id":       str(m, "secret_id"),
-				"env_var_name":    str(m, "env_var_name"),
-				"use_for_git":     m["use_for_git"],
-				"use_for_build":   m["use_for_build"],
-				"build_secret_id": str(m, "build_secret_id"),
-				"git_username":    str(m, "git_username"),
-			})
-		}
-		if _, err := cl.do("PUT", "/api/projects/"+projectID+"/secrets", bindings); err != nil {
-			return err
-		}
-		fmt.Printf("Secret %s unbound from project %s\n", secretID, projectID)
+		fmt.Printf("Secret %s removed from project %s\n", args[1], projectID)
 		return nil
 	},
 }

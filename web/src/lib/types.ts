@@ -282,10 +282,18 @@ export interface Secret {
   updated_at: string
 }
 
-export interface ProjectSecretBinding {
-  secret_id: string
-  secret_name: string
-  secret_type: SecretType
+// ProjectSecret is owned by the project; the value itself is never returned.
+// value_status tells whether a value is present.
+export interface ProjectSecret {
+  id: string
+  name: string
+  type: SecretType
+  value_status: 'set' | 'empty' | 'undecryptable'
+  value_length: number
+  // Same rules as Secret.value_preview: masked for api_key, plaintext for env_var, empty otherwise.
+  value_preview: string
+  // Personal secret this was copied from, if any. The copy is independent of it.
+  source_secret_id: string | null
   env_var_name: string
   use_for_git: boolean
   use_for_build: boolean
@@ -293,7 +301,20 @@ export interface ProjectSecretBinding {
   // git_username is used with password-type secrets for HTTPS git authentication.
   // e.g. "x-access-token" for GitHub fine-grained PATs.
   git_username: string
+  created_at: string
+  updated_at: string
 }
+
+export type ProjectSecretUsage = Pick<ProjectSecret, 'env_var_name' | 'use_for_git' | 'use_for_build' | 'build_secret_id' | 'git_username'>
+
+// Create either directly (name/type/value) or by copying a personal secret (from_secret_id).
+export type ProjectSecretCreate = Partial<ProjectSecretUsage> & (
+  | { name: string; type: SecretType; value: string; from_secret_id?: undefined }
+  | { from_secret_id: string }
+)
+
+// A non-empty value replaces the stored value; omitted fields are unchanged.
+export type ProjectSecretPatch = Partial<ProjectSecretUsage & { name: string; value: string }>
 
 export interface NodeMetric {
   node_id: string

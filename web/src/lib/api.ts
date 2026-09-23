@@ -36,9 +36,13 @@ export const api = {
     delete: (id: string) => request(`/api/projects/${id}`, { method: 'DELETE' }),
     datasets: (id: string) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`),
     setDatasets: (id: string, data: import('./types').ProjectDataset[]) => request<import('./types').ProjectDataset[]>(`/api/projects/${id}/datasets`, { method: 'PUT', body: JSON.stringify(data) }),
-    secrets: (id: string) => request<import('./types').ProjectSecretBinding[]>(`/api/projects/${id}/secrets`),
-    setSecrets: (id: string, data: Omit<import('./types').ProjectSecretBinding, 'secret_name' | 'secret_type'>[]) =>
-      request(`/api/projects/${id}/secrets`, { method: 'PUT', body: JSON.stringify(data) }),
+    secrets: (id: string) => request<import('./types').ProjectSecret[]>(`/api/projects/${id}/secrets`),
+    createSecret: (id: string, data: import('./types').ProjectSecretCreate) =>
+      request<import('./types').ProjectSecret>(`/api/projects/${id}/secrets`, { method: 'POST', body: JSON.stringify(data) }),
+    updateSecret: (id: string, secretId: string, patch: import('./types').ProjectSecretPatch) =>
+      request<import('./types').ProjectSecret>(`/api/projects/${id}/secrets/${secretId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    deleteSecret: (id: string, secretId: string) =>
+      request(`/api/projects/${id}/secrets/${secretId}`, { method: 'DELETE' }),
     deploy: (id: string) => request<import('./types').Deployment>(`/api/projects/${id}/deploy`, { method: 'POST' }),
     pause: (id: string) => request<{ status: string; task_id?: string; deployment_id?: string }>(`/api/projects/${id}/pause`, { method: 'POST' }),
     resume: (id: string) => request<{ status: string; task_id?: string; deployment_id?: string }>(`/api/projects/${id}/resume`, { method: 'POST' }),

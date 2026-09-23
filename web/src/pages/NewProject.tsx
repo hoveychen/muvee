@@ -61,7 +61,7 @@ function PrivateRepoSection({
   // Load existing secrets when user opens the panel
   useEffect(() => {
     if (open && secrets.length === 0) {
-      api.secrets.list().then(setSecrets).catch(() => {})
+      api.secrets.list().then(list => setSecrets(list.filter(s => s.type === 'password' || s.type === 'ssh_key'))).catch(() => {})
     }
   }, [open])
 
@@ -472,38 +472,27 @@ export default function NewProject() {
 
       // Step 2: create + bind credential (if any, for external repos)
       if (cred.mode === 'new_pat') {
-        const secretName = `${form.name || 'project'} Git Token`
-        const sec = await api.secrets.create({ name: secretName, type: 'password', value: cred.patValue.trim() })
-        await api.projects.setSecrets(project.id, [{
-          secret_id: sec.id,
-          env_var_name: '',
+        await api.projects.createSecret(project.id, {
+          name: `${form.name || 'project'} Git Token`,
+          type: 'password',
+          value: cred.patValue.trim(),
           use_for_git: true,
-          use_for_build: false,
-          build_secret_id: '',
           git_username: cred.patGitUsername || 'x-access-token',
-        }])
+        })
       } else if (cred.mode === 'new_ssh') {
-        const secretName = `${form.name || 'project'} Deploy Key`
-        const sec = await api.secrets.create({ name: secretName, type: 'ssh_key', value: cred.sshKeyValue.trim() })
-        await api.projects.setSecrets(project.id, [{
-          secret_id: sec.id,
-          env_var_name: '',
+        await api.projects.createSecret(project.id, {
+          name: `${form.name || 'project'} Deploy Key`,
+          type: 'ssh_key',
+          value: cred.sshKeyValue.trim(),
           use_for_git: true,
-          use_for_build: false,
-          build_secret_id: '',
-          git_username: '',
-        }])
+        })
       } else if (cred.mode === 'existing' && cred.existingSecretId) {
-        const allSecrets = await api.secrets.list()
-        const sec = allSecrets.find(s => s.id === cred.existingSecretId)
-        await api.projects.setSecrets(project.id, [{
-          secret_id: cred.existingSecretId,
-          env_var_name: '',
+        const sec = (await api.secrets.list()).find(s => s.id === cred.existingSecretId)
+        await api.projects.createSecret(project.id, {
+          from_secret_id: cred.existingSecretId,
           use_for_git: true,
-          use_for_build: false,
-          build_secret_id: '',
           git_username: sec?.type === 'password' ? (cred.patGitUsername || 'x-access-token') : '',
-        }])
+        })
       }
 
       navigate(`/projects/${project.id}`)
