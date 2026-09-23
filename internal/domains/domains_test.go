@@ -81,3 +81,23 @@ func TestMatchLongestWins(t *testing.T) {
 		t.Fatalf("Match longest = (%q,%v), want (muvee.ai,true)", base, ok)
 	}
 }
+
+func TestParseSubset(t *testing.T) {
+	bases := []string{"muveeai.com", "eternizedlab.com", "cfdemo.com"}
+
+	got, err := ParseSubset(" CFDEMO.com, cfdemo.com ,", bases)
+	if err != nil {
+		t.Fatalf("ParseSubset: unexpected error %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"cfdemo.com"}) {
+		t.Errorf("ParseSubset = %v, want [cfdemo.com]", got)
+	}
+
+	if got, err := ParseSubset("", bases); err != nil || got != nil {
+		t.Errorf("ParseSubset(empty) = %v, %v; want nil, nil", got, err)
+	}
+
+	if _, err := ParseSubset("cfdemo.com,typo.com", bases); err == nil {
+		t.Error("ParseSubset accepted a domain outside BASE_DOMAINS")
+	}
+}
