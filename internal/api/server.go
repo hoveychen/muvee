@@ -5135,6 +5135,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Hosts under CF_TUNNEL_DOMAINS move to the cftunnel entrypoint — see cftunnel.go.
+	s.applyCFTunnelDomains(&cfg)
+
 	// Empty maps make Traefik reject the entire document — see pruneEmpty.
 	cfg.pruneEmpty()
 
