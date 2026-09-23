@@ -25,6 +25,21 @@ entryPoints:
     transport:
       respondingTimeouts:
         readTimeout: "0s"
+  # Plain-HTTP entrypoint for base domains listed in CF_TUNNEL_DOMAINS.
+  # Cloudflare terminates TLS at its edge and the cloudflared container
+  # forwards requests here, so it is never published on the host. Only
+  # cloudflared's dedicated network is trusted for X-Forwarded-* (so apps see
+  # X-Forwarded-Proto: https); anything else reaching :8000 over muvee-net
+  # gets those headers overwritten. Keep trustedIPs in sync with the
+  # cf-tunnel-net subnet in docker-compose.yml.
+  cftunnel:
+    address: ":8000"
+    forwardedHeaders:
+      trustedIPs:
+        - "172.31.253.0/24"
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
 
 certificatesResolvers:
   letsencrypt:
