@@ -135,3 +135,19 @@ func TestApplyCFTunnelDomainsPanelRouters(t *testing.T) {
 		t.Errorf("authservice backend not declared: %+v", svc)
 	}
 }
+
+func TestIsCFTunnelHost(t *testing.T) {
+	s := cfTunnelTestServer()
+	for host, want := range map[string]bool{
+		"cfdemo.com":         true,
+		"foo.cfdemo.com":     true,
+		"APP.cfdemo.com:443": true,
+		"foo.muveeai.com":    false,
+		"notcfdemo.com":      false,
+		"shop.example.org":   false,
+	} {
+		if got := s.isCFTunnelHost(host); got != want {
+			t.Errorf("isCFTunnelHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}

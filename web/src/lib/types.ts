@@ -523,7 +523,7 @@ export interface HealthReport {
 }
 
 export type CertKind = 'base' | 'registry' | 'traefik' | 'project' | 'tunnel'
-export type CertStatusKind = 'issued' | 'pending' | 'unknown'
+export type CertStatusKind = 'issued' | 'pending' | 'unknown' | 'cloudflare'
 
 export interface CertStatus {
   domain: string
