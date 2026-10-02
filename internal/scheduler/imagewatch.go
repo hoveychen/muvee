@@ -427,7 +427,7 @@ func (s *Scheduler) fetchImageDigest(ctx context.Context, image string, ownerAut
 
 // ownerRegistryAuths loads the project owner's type=registry secrets. They are
 // tenant-level (every project the owner has gets all of them), matching how
-// the compose deploy path already injects them — see buildRegistryAuthsPayload
+// the compose and image deploy paths inject them — see buildRegistryAuthsPayload
 // in scheduler.go. A lookup failure is not fatal: we fall back to anonymous,
 // which is still right for every public image in the file.
 func (s *Scheduler) ownerRegistryAuths(ctx context.Context, p *store.Project) []store.RegistryAuth {
