@@ -779,23 +779,12 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 
 	envVars := s.projectRuntimeEnv(ctx, project.ID)
 
-	inlineCompose := buildInlineComposeYAML(project.ImageRef, project.ContainerPort)
+	// Same tenant-level registry credentials as the compose path: image_ref may
+	// point at a private external registry (e.g. a private ghcr.io package), and
+	// the agent pulls it via `docker compose pull` on the synthesised compose file.
+	ownerAuths, _ := s.store.GetUserRegistrySecretsDecrypted(ctx, project.OwnerID)
 
-	payload := map[string]interface{}{
-		"mode":                "compose",
-		"deployment_id":       deployment.ID.String(),
-		"project_id":          project.ID.String(),
-		"domain_prefix":       project.DomainPrefix,
-		"inline_compose_yaml": inlineCompose,
-		"expose_service":      "app",
-		"expose_port":         project.ContainerPort,
-		"volume_mount_path":   project.VolumeMountPath,
-		"memory_limit":        project.MemoryLimit,
-		"env_vars":            envVars,
-	}
-	if project.FixedHostPort != nil {
-		payload["fixed_host_port"] = *project.FixedHostPort
-	}
+	payload := buildImageDeployPayload(deployment, project, envVars, buildRegistryAuthsPayload(ownerAuths))
 
 	task := &store.Task{
 		Type:         store.TaskTypeDeploy,
@@ -805,6 +794,30 @@ func (s *Scheduler) dispatchImageDeploy(ctx context.Context, deployment *store.D
 	}
 	_, err = s.store.CreateTask(ctx, task)
 	return err
+}
+
+// buildImageDeployPayload assembles the agent task payload for an image-only
+// project. registry_auths is omitted when the owner has no registry secrets.
+func buildImageDeployPayload(deployment *store.Deployment, project *store.Project, envVars map[string]string, registryAuths []map[string]string) map[string]interface{} {
+	payload := map[string]interface{}{
+		"mode":                "compose",
+		"deployment_id":       deployment.ID.String(),
+		"project_id":          project.ID.String(),
+		"domain_prefix":       project.DomainPrefix,
+		"inline_compose_yaml": buildInlineComposeYAML(project.ImageRef, project.ContainerPort),
+		"expose_service":      "app",
+		"expose_port":         project.ContainerPort,
+		"volume_mount_path":   project.VolumeMountPath,
+		"memory_limit":        project.MemoryLimit,
+		"env_vars":            envVars,
+	}
+	if project.FixedHostPort != nil {
+		payload["fixed_host_port"] = *project.FixedHostPort
+	}
+	if len(registryAuths) > 0 {
+		payload["registry_auths"] = registryAuths
+	}
+	return payload
 }
 
 // buildInlineComposeYAML returns a minimal docker-compose.yml for an image-only

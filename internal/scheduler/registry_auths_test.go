@@ -1,8 +1,10 @@
 package scheduler
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/hoveychen/muvee/internal/store"
 )
 
@@ -45,6 +47,33 @@ func TestBuildRegistryAuthsPayload(t *testing.T) {
 		}
 		if len(got) != 0 {
 			t.Errorf("len = %d, want 0", len(got))
+		}
+	})
+}
+
+func TestBuildImageDeployPayloadRegistryAuths(t *testing.T) {
+	dep := &store.Deployment{ID: uuid.New()}
+	proj := &store.Project{ID: uuid.New(), ImageRef: "ghcr.io/acme/private-web:latest", ContainerPort: 8080}
+
+	t.Run("carries owner registry auths for private image pulls", func(t *testing.T) {
+		auths := buildRegistryAuthsPayload([]store.RegistryAuth{{Addr: "ghcr.io", Username: "alice", Password: "pw1"}})
+		payload := buildImageDeployPayload(dep, proj, nil, auths)
+		got, ok := payload["registry_auths"].([]map[string]string)
+		if !ok || len(got) != 1 || got[0]["addr"] != "ghcr.io" || got[0]["username"] != "alice" || got[0]["password"] != "pw1" {
+			t.Fatalf("registry_auths = %#v", payload["registry_auths"])
+		}
+		if payload["mode"] != "compose" || payload["expose_service"] != "app" || payload["expose_port"] != 8080 {
+			t.Errorf("payload = %#v", payload)
+		}
+		if yaml, _ := payload["inline_compose_yaml"].(string); !strings.Contains(yaml, "image: ghcr.io/acme/private-web:latest") {
+			t.Errorf("inline_compose_yaml = %q", yaml)
+		}
+	})
+
+	t.Run("omits registry_auths when owner has none", func(t *testing.T) {
+		payload := buildImageDeployPayload(dep, proj, nil, buildRegistryAuthsPayload(nil))
+		if _, ok := payload["registry_auths"]; ok {
+			t.Errorf("registry_auths present: %#v", payload["registry_auths"])
 		}
 	})
 }

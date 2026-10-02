@@ -6,7 +6,7 @@ sidebar_position: 4
 
 # Secrets & Environment Variables
 
-Muvee provides a built-in **Secrets** store for safely managing passwords, API tokens, and SSH private keys, encrypted at rest using AES-256-GCM. A personal secret does nothing on its own — it's a source you **copy** into a project's own **environment variables**, or into a project's **git credential** (used to clone a private repository). The one exception is the `registry` type, which is never copied and instead applies automatically to all of your compose projects.
+Muvee provides a built-in **Secrets** store for safely managing passwords, API tokens, and SSH private keys, encrypted at rest using AES-256-GCM. A personal secret does nothing on its own — it's a source you **copy** into a project's own **environment variables**, or into a project's **git credential** (used to clone a private repository). The one exception is the `registry` type, which is never copied and instead applies automatically to all of your compose and image projects.
 
 ## How It Works
 
@@ -20,7 +20,7 @@ On deploy / restart:
   • Runtime variables → injected as docker run -e KEY=VALUE
   • Build variables → passed to docker buildx as --secret id=KEY
   • Project's git credential (https_token / ssh_key) → builder uses it to clone
-  • registry secrets → applied automatically to all of the owner's compose projects (no copy step)
+  • registry secrets → applied automatically to all of the owner's compose and image projects (no copy step)
 ```
 
 Secrets are **write-only** — their values cannot be retrieved after creation. Because a copy is independent of its source, deleting or rotating the personal secret later does **not** change any project that already copied it.
@@ -50,7 +50,7 @@ If `SECRET_ENCRYPTION_KEY` is not set, secret creation will be disabled. Back up
 | `ssh_key` | PEM-format SSH private keys for cloning private git repositories | Write-only (value never shown) |
 | `api_key` | API keys / provider tokens where a masked fingerprint helps identify which key is which | Shows first 4 + last 4 characters (e.g. `sk-1****wxyz`) |
 | `env_var` | Non-sensitive configuration (public endpoints, feature flags) that benefits from central management | Shows full plaintext in the secrets list |
-| `registry` | Pull credentials for a private container registry (e.g. `ghcr.io`) so compose projects can pull private images | Write-only (token never shown); registry address + username are shown |
+| `registry` | Pull credentials for a private container registry (e.g. `ghcr.io`) so compose and image projects can pull private images | Write-only (token never shown); registry address + username are shown |
 
 :::warning
 Only use `env_var` for values that are safe to view in the UI. Anything sensitive should use `password` or `api_key`.
@@ -61,10 +61,10 @@ The type mostly matters for how the value defaults when it's copied into a proje
 ### Private registry credentials
 
 A `registry` secret holds a login for a private container registry. Unlike other
-secret types it is **not** copied per-project: every compose project you own
+secret types it is **not** copied per-project: every compose or image project you own
 automatically uses **all** of your `registry` secrets when pulling images at
-deploy time. This is how a `docker-compose` project pulls a private image such as
-`ghcr.io/your-org/your-app:latest`.
+deploy time. This is how a `docker-compose` project — or an image project created
+with `--image-ref` — pulls a private image such as `ghcr.io/your-org/your-app:latest`.
 
 The secret's **value** is the registry password / token; **registry address**
 (e.g. `ghcr.io`) and **login username** are stored alongside it. At deploy time
@@ -72,8 +72,9 @@ the agent writes a temporary, per-deploy docker config with these credentials �
 they never land in the shared agent docker config and never leak across tenants.
 
 :::note
-Only the **compose** deploy path uses registry credentials. Single-container
-(Dockerfile/image) projects are built by Muvee and pulled from Muvee's own
+Registry credentials are used by the **compose** and **image** deploy paths
+(image projects also use them when auto-deploy polls the image digest).
+Dockerfile-built projects are built by Muvee and pulled from Muvee's own
 registry, which is already authenticated.
 :::
 
@@ -131,7 +132,7 @@ muveectl secrets create --name GITHUB_TOKEN --type password --value ghp_xxxxx
 # Create an SSH key from a file
 muveectl secrets create --name DEPLOY_KEY --type ssh_key --value-file ~/.ssh/id_ed25519
 
-# Create a private registry pull credential (applies to all your compose projects)
+# Create a private registry pull credential (applies to all your compose and image projects)
 muveectl secrets create --name GHCR_PULL --type registry \
   --registry-addr ghcr.io --registry-username my-gh-user --value ghp_xxxxx
 
