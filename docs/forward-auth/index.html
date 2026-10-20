@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.7.0">
 <title data-rh="true">ForwardAuth &amp; Project Access Control | muvee</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://hoveychen.github.io/muvee/docs/forward-auth"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" property="og:locale:alternate" content="zh"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="ForwardAuth &amp; Project Access Control | muvee"><meta data-rh="true" name="description" content="muvee supports per-project authentication for deployed applications. When enabled, any visitor to .domain.com is first redirected to sign in via whichever OAuth provider you have configured (Google, Feishu, WeCom, DingTalk, etc.)."><meta data-rh="true" property="og:description" content="muvee supports per-project authentication for deployed applications. When enabled, any visitor to .domain.com is first redirected to sign in via whichever OAuth provider you have configured (Google, Feishu, WeCom, DingTalk, etc.)."><link data-rh="true" rel="icon" href="/muvee/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://hoveychen.github.io/muvee/docs/forward-auth"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/forward-auth" hreflang="en"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/zh/docs/forward-auth" hreflang="zh"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/forward-auth" hreflang="x-default"><link rel="stylesheet" href="/muvee/assets/css/styles.57b27fd8.css">
-<script src="/muvee/assets/js/runtime~main.b1baa4cb.js" defer="defer"></script>
+<script src="/muvee/assets/js/runtime~main.076ad09a.js" defer="defer"></script>
 <script src="/muvee/assets/js/main.c3e80161.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
@@ -31,6 +31,20 @@
 <li>After login: set JWT cookie (domain-wide, shared across all <code>*.BASE_DOMAIN</code> subdomains), redirect back to original URL</li>
 <li>On subsequent requests: validate JWT, check email domain, return <code>200</code></li>
 </ol>
+<p>Sessions last 7 days and slide: once a session is a day old, the next request
+that passes ForwardAuth re-issues the cookie with a fresh 7-day expiry, so a
+user who keeps coming back stays signed in. Only expiry after 7 days of
+inactivity sends them back through login. Demo-account (password) and SMS
+sessions are the exception: they keep a fixed 7-day lifetime, because nothing
+re-checks the account or phone grant behind them on each request.</p>
+<p>When a session is missing or expired, a page load (step 4) is redirected to the
+login page, but a <code>fetch</code> / XHR call from page script gets
+<code>401 Unauthorized</code> with an <code>X-Muvee-Auth: login-required</code> header and a JSON body
+<code>{&quot;error&quot;:&quot;login_required&quot;,&quot;login_url&quot;:&quot;…&quot;}</code>. Following a redirect to an HTML
+login page would leave an SPA parsing HTML as JSON; the 401 is something it can
+act on. Every project page already handles it through the injected
+<a href="/muvee/docs/embed-bridge#auth-guard">auth-guard</a>, which reloads the page so the user
+goes through login and lands back where they were.</p>
 <div class="theme-admonition theme-admonition-info admonition_zXND alert alert--info"><div class="admonitionHeading_u97s"><span class="admonitionIcon_sztC"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>How the OAuth callback is routed</div><div class="admonitionContent_UCFT"><p>The <code>/_oauth</code> path on <code>BASE_DOMAIN</code> is routed by Traefik directly to <code>muvee-authservice</code> (not to the main web UI). This is configured via Traefik labels on the <code>muvee-authservice</code> container in <code>docker-compose.yml</code>. Because Traefik gives higher priority to the more specific <code>Host + Path</code> rule, <code>BASE_DOMAIN/_oauth</code> is correctly handled by the auth sidecar while all other <code>BASE_DOMAIN</code> paths continue to reach <code>muvee-server</code>.</p></div></div>
 <h2 class="anchor anchorWithStickyNavbar_pE4O" id="auth-bypass-paths">Auth Bypass Paths<a href="#auth-bypass-paths" class="hash-link" aria-label="Direct link to Auth Bypass Paths" title="Direct link to Auth Bypass Paths">​</a></h2>
 <p>When auth is enabled on a project you can exempt specific paths from authentication. This is useful for health checks, public APIs, or webhook endpoints that need to be reachable without a session.</p>
