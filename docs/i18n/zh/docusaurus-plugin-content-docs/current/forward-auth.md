@@ -38,7 +38,7 @@ traefik.http.middlewares.{proj}-auth.forwardauth.authResponseHeaders=X-Forwarded
 traefik.http.routers.{proj}.middlewares={proj}-auth
 ```
 
-## 会话流程
+## 会话流程 {#session-flow}
 
 1. 用户访问 `{project}.domain.com`
 2. Traefik 携带请求头调用 ForwardAuth 边车服务
@@ -46,6 +46,16 @@ traefik.http.routers.{proj}.middlewares={proj}-auth
 4. 若 Cookie 缺失或已过期：重定向到配置的 OAuth 提供商（回调地址为 `BASE_DOMAIN/_oauth`）
 5. 登录完成后：设置域级 JWT Cookie（在所有 `*.BASE_DOMAIN` 子域名间共享），重定向回原始访问地址
 6. 后续请求：验证 JWT，检查邮箱域名，返回 `200`
+
+会话有效期 7 天，并且滑动续期：会话签发满一天后，下一次通过 ForwardAuth 的请求会重新签发
+cookie，有效期重置为 7 天。只要用户持续访问就一直保持登录，连续 7 天不访问才需要重新登录。演示账号（密码）和短信登录的会话
+例外，仍是固定 7 天：每次请求都不会重新校验它们背后的账号或手机号授权，固定有效期是收回授权的唯一手段。
+
+会话缺失或过期时，页面加载（第 4 步）会被重定向到登录页；而页面脚本发起的 `fetch` / XHR
+请求会收到 `401 Unauthorized`，带 `X-Muvee-Auth: login-required` 头和 JSON 响应体
+`{"error":"login_required","login_url":"…"}`。如果把接口请求也重定向到 HTML 登录页，SPA
+只会把 HTML 当 JSON 解析然后报错；401 则可以被识别和处理。每个项目页面都已经由注入的
+[auth-guard](./embed-bridge#auth-guard) 处理它：自动刷新页面，让用户走一遍登录后回到原页面。
 
 :::info OAuth 回调的路由方式
 `BASE_DOMAIN/_oauth` 路径由 Traefik 直接路由至 `muvee-authservice`，而非 Web UI。这通过 `docker-compose.yml` 中 `muvee-authservice` 容器的 Traefik labels 实现。由于 Traefik 会优先匹配更精确的 `Host + Path` 规则，`BASE_DOMAIN/_oauth` 由 Auth 边车服务处理，其余 `BASE_DOMAIN` 路径仍正常路由至 `muvee-server`。

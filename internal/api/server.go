@@ -4676,6 +4676,21 @@ type traefikForwardAuth struct {
 	Address             string   `json:"address"`
 	AuthResponseHeaders []string `json:"authResponseHeaders"`
 	TrustForwardHeader  bool     `json:"trustForwardHeader"`
+	// AddAuthCookiesToResponse lists cookies Traefik copies from a 2xx auth
+	// response onto the proxied response. authservice renews the session
+	// cookie there (sliding session); without this Traefik drops it.
+	AddAuthCookiesToResponse []string `json:"addAuthCookiesToResponse,omitempty"`
+}
+
+// projectForwardAuth builds the per-project ForwardAuth middleware pointing
+// at verifyURL.
+func projectForwardAuth(verifyURL string) *traefikForwardAuth {
+	return &traefikForwardAuth{
+		Address:                  verifyURL,
+		AuthResponseHeaders:      []string{"X-Forwarded-User", "X-Forwarded-User-Name", "X-Forwarded-User-Avatar", "X-Forwarded-User-Provider"},
+		TrustForwardHeader:       true,
+		AddAuthCookiesToResponse: []string{"muvee_fwd_session"},
+	}
 }
 
 // handleTraefikConfig generates a Traefik dynamic configuration for all running deployments.
@@ -4946,11 +4961,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				verifyURL += "&domains=" + dep.AuthAllowedDomains
 			}
 			cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
-				ForwardAuth: &traefikForwardAuth{
-					Address:             verifyURL,
-					AuthResponseHeaders: []string{"X-Forwarded-User", "X-Forwarded-User-Name", "X-Forwarded-User-Avatar", "X-Forwarded-User-Provider"},
-					TrustForwardHeader:  true,
-				},
+				ForwardAuth: projectForwardAuth(verifyURL),
 			}
 			httpsRouter.Middlewares = []string{mwName}
 
@@ -5047,11 +5058,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
-					ForwardAuth: &traefikForwardAuth{
-						Address:             verifyURL,
-						AuthResponseHeaders: []string{"X-Forwarded-User", "X-Forwarded-User-Name", "X-Forwarded-User-Avatar", "X-Forwarded-User-Provider"},
-						TrustForwardHeader:  true,
-					},
+					ForwardAuth: projectForwardAuth(verifyURL),
 				}
 				router.Middlewares = []string{mwName}
 
@@ -5114,11 +5121,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 					verifyURL += "&domains=" + p.AuthAllowedDomains
 				}
 				cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
-					ForwardAuth: &traefikForwardAuth{
-						Address:             verifyURL,
-						AuthResponseHeaders: []string{"X-Forwarded-User", "X-Forwarded-User-Name", "X-Forwarded-User-Avatar", "X-Forwarded-User-Provider"},
-						TrustForwardHeader:  true,
-					},
+					ForwardAuth: projectForwardAuth(verifyURL),
 				}
 				domainRouter.Middlewares = []string{mwName}
 

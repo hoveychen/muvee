@@ -27,7 +27,10 @@ Two pieces:
    router; if the response is `text/html`, it splices a
    `<script src="/_embed-bridge.js" defer></script>` tag immediately
    before `</head>`. Non-HTML responses (assets, JSON APIs, image bytes,
-   …) are streamed through unchanged.
+   …) are streamed through unchanged. Page loads are forwarded without
+   `Accept-Encoding` so the upstream returns a body that can be spliced; an
+   upstream that gzips anyway is decompressed first. Other encodings
+   (brotli, zstd) sent despite that pass through without the script.
 2. **Auto-attach in `muvee-server`** — `handleTraefikConfig` (in
    `internal/api/server.go`) appends `embed-bridge@file` to the middleware
    chain of every user-facing project router (deployments, live tunnels,
@@ -62,8 +65,25 @@ title and URL. Hosts must verify `event.origin` against the iframe's
 - It does not send any payload other than title + URL. There is no auth
   token, cookie, or DOM content.
 - It does not call any API. Pure browser-side, ~30 lines of vanilla JS.
-- It is a no-op when the page is not iframed (`window.parent === window`),
-  so it costs nothing for direct visitors.
+- The bridge messages are a no-op when the page is not iframed
+  (`window.parent === window`), so they cost nothing for direct visitors.
+  The [auth-guard](#auth-guard) below is the one part that runs on
+  top-level pages too.
+
+## Auth-guard
+
+The same SDK carries a small guard for projects behind muvee login. When the
+user's session expires, ForwardAuth answers the page's `fetch` / XHR calls with
+`401` + `X-Muvee-Auth: login-required` (see
+[ForwardAuth](./forward-auth#session-flow)). On that response the guard
+reloads the page; the reload is a normal page load, so ForwardAuth sends the
+user to sign in and back to the same URL. When a hidden tab becomes visible
+again it also sends a `HEAD` for the current URL (at most once a minute) to
+catch an expired session before the user starts clicking.
+
+It only reacts to that header, so projects without muvee login and an app's
+own `401`s are unaffected. A second reload within 30 seconds is skipped, so it
+cannot loop.
 
 ## Verifying
 

@@ -398,8 +398,55 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	renewSessionCookie(w, r)
 	setUserHeaders(w, claims)
 	w.WriteHeader(http.StatusOK)
+}
+
+// sessionLifetime is how long a muvee_fwd_session cookie (and the JWT inside
+// it) stays valid after it was issued or last renewed.
+const sessionLifetime = 7 * 24 * time.Hour
+
+// sessionRenewAfter is how old a session has to be before an authenticated
+// request renews it. Renewing at most about once a day keeps Set-Cookie off
+// nearly every proxied response while still letting a user who comes back
+// within the lifetime stay signed in indefinitely.
+const sessionRenewAfter = 24 * time.Hour
+
+// renewSessionCookie re-signs the request's muvee_fwd_session with a fresh
+// expiry once it is older than sessionRenewAfter (sliding session). Only the
+// cookie session slides: a Bearer JWT (CLI device flow) has its own fixed
+// lifetime and is left alone. So do password / phone sessions: verify never
+// re-checks the demo account or phone grant behind them, so the fixed expiry
+// is the only thing that retires one after the grant is removed. Roaming
+// OAuth sessions are safe to slide because every verify re-runs the project
+// access check. Traefik copies the cookie onto the proxied
+// response because the project forwardAuth middlewares list it in
+// addAuthCookiesToResponse.
+func renewSessionCookie(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("muvee_fwd_session")
+	if err != nil {
+		return
+	}
+	claims, err := parseForwardJWT(cookie.Value)
+	if err != nil || claims.ExpiresAt == nil || claims.ProjectID != "" {
+		return
+	}
+	if time.Until(claims.ExpiresAt.Time) > sessionLifetime-sessionRenewAfter {
+		return
+	}
+	renewed := *claims
+	renewed.ExpiresAt = jwt.NewNumericDate(time.Now().Add(sessionLifetime))
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, renewed).SignedString(jwtSecret)
+	if err != nil {
+		log.Printf("authservice: renew session (%s): %v", claimsSubjectForLog(claims), err)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "muvee_fwd_session", Value: signed,
+		MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, Path: "/",
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // upsertUserUpstream syncs an OAuth-verified identity into muvee-server's
@@ -2003,7 +2050,40 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	if host != "" {
 		loginBase = proto + "://" + host
 	}
-	http.Redirect(w, r, loginBase+"/_oauth/login", http.StatusFound)
+	loginURL := loginBase + "/_oauth/login"
+	// A fetch/XHR from an SPA whose session expired must not be 302'd to the
+	// login page: the browser follows the redirect transparently, the app gets
+	// a 200 HTML login page where it expected JSON, and it just keeps erroring
+	// instead of sending the user to sign in. Answer with a 401 the app (and
+	// the auth-guard the embed-bridge plugin injects into every project page)
+	// can recognise by the X-Muvee-Auth header.
+	if isAPIRequest(r) {
+		w.Header().Set("X-Muvee-Auth", "login-required")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":     "login_required",
+			"login_url": loginURL,
+		})
+		return
+	}
+	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
+// isAPIRequest reports whether the forward-auth request was issued by page
+// script (fetch / XHR) rather than by the browser loading a document or a
+// sub-resource. Browsers mark fetch/XHR with Sec-Fetch-Dest: empty. Without
+// that header we treat anything that does not ask for HTML as an API call;
+// header-less clients keep the navigation behaviour (see isNavigationRequest).
+func isAPIRequest(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Dest") {
+	case "empty":
+		return true
+	case "":
+		return !isNavigationRequest(r)
+	default:
+		return false
+	}
 }
 
 // isNavigationRequest reports whether the forward-auth request looks like a
@@ -2020,7 +2100,7 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 // keep the pre-fix behaviour.
 func isNavigationRequest(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Dest") {
-	case "document", "frame", "nested-document":
+	case "document", "iframe", "frame", "nested-document":
 		return true
 	case "": // header absent — fall through to Accept-based heuristic
 	default:

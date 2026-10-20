@@ -48,6 +48,22 @@ traefik.http.routers.{proj}.middlewares={proj}-auth
 5. After login: set JWT cookie (domain-wide, shared across all `*.BASE_DOMAIN` subdomains), redirect back to original URL
 6. On subsequent requests: validate JWT, check email domain, return `200`
 
+Sessions last 7 days and slide: once a session is a day old, the next request
+that passes ForwardAuth re-issues the cookie with a fresh 7-day expiry, so a
+user who keeps coming back stays signed in. Only expiry after 7 days of
+inactivity sends them back through login. Demo-account (password) and SMS
+sessions are the exception: they keep a fixed 7-day lifetime, because nothing
+re-checks the account or phone grant behind them on each request.
+
+When a session is missing or expired, a page load (step 4) is redirected to the
+login page, but a `fetch` / XHR call from page script gets
+`401 Unauthorized` with an `X-Muvee-Auth: login-required` header and a JSON body
+`{"error":"login_required","login_url":"…"}`. Following a redirect to an HTML
+login page would leave an SPA parsing HTML as JSON; the 401 is something it can
+act on. Every project page already handles it through the injected
+[auth-guard](./embed-bridge#auth-guard), which reloads the page so the user
+goes through login and lands back where they were.
+
 :::info How the OAuth callback is routed
 The `/_oauth` path on `BASE_DOMAIN` is routed by Traefik directly to `muvee-authservice` (not to the main web UI). This is configured via Traefik labels on the `muvee-authservice` container in `docker-compose.yml`. Because Traefik gives higher priority to the more specific `Host + Path` rule, `BASE_DOMAIN/_oauth` is correctly handled by the auth sidecar while all other `BASE_DOMAIN` paths continue to reach `muvee-server`.
 :::

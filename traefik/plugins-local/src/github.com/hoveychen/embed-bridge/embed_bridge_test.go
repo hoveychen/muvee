@@ -2,6 +2,8 @@ package embed_bridge
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"net"
@@ -460,4 +462,88 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestGzipHTMLIsSpliced: an upstream that gzips HTML anyway must still get the
+// script injected; the result goes out decompressed with no Content-Encoding.
+func TestGzipHTMLIsSpliced(t *testing.T) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	io.WriteString(zw, "<html><head><title>x</title></head><body>hi</body></html>")
+	zw.Close()
+	next := &fakeNext{
+		contentType: "text/html; charset=utf-8",
+		body:        buf.String(),
+		extraHdr:    map[string]string{"Content-Encoding": "gzip"},
+	}
+	rr := httptest.NewRecorder()
+	newPlugin(t, next).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if ce := rr.Header().Get("Content-Encoding"); ce != "" {
+		t.Fatalf("Content-Encoding = %q, want none after splicing", ce)
+	}
+	if !strings.Contains(rr.Body.String(), `<script src="/_embed-bridge.js" defer></script></head>`) {
+		t.Fatalf("gzip HTML not spliced: %q", rr.Body.String())
+	}
+}
+
+// TestBrotliHTMLPassesThrough: encodings we cannot decode are left untouched
+// rather than corrupted.
+func TestBrotliHTMLPassesThrough(t *testing.T) {
+	next := &fakeNext{
+		contentType: "text/html",
+		body:        "\x8b\x02\x80opaque-brotli",
+		extraHdr:    map[string]string{"Content-Encoding": "br"},
+	}
+	rr := httptest.NewRecorder()
+	newPlugin(t, next).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rr.Header().Get("Content-Encoding") != "br" || rr.Body.String() != next.body {
+		t.Fatalf("brotli body altered: enc=%q body=%q", rr.Header().Get("Content-Encoding"), rr.Body.String())
+	}
+}
+
+// TestDocumentRequestDropsAcceptEncoding: page loads ask the upstream for an
+// identity body (so it can be spliced); API calls and assets keep compression.
+func TestDocumentRequestDropsAcceptEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		hdr    map[string]string
+		strips bool
+	}{
+		{"top-level nav", map[string]string{"Sec-Fetch-Dest": "document"}, true},
+		{"iframe nav", map[string]string{"Sec-Fetch-Dest": "iframe"}, true},
+		{"no fetch metadata, html accept", map[string]string{"Accept": "text/html,*/*"}, true},
+		{"fetch", map[string]string{"Sec-Fetch-Dest": "empty"}, false},
+		{"script asset", map[string]string{"Sec-Fetch-Dest": "script"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Get("Accept-Encoding")
+			})
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Accept-Encoding", "gzip, br")
+			for k, v := range tc.hdr {
+				req.Header.Set(k, v)
+			}
+			newPlugin(t, next).ServeHTTP(httptest.NewRecorder(), req)
+			if stripped := got == ""; stripped != tc.strips {
+				t.Fatalf("Accept-Encoding upstream = %q, want stripped=%v", got, tc.strips)
+			}
+		})
+	}
+}
+
+// TestSDKIncludesAuthGuard: the served SDK carries the relogin guard keyed on
+// the authservice's X-Muvee-Auth signal.
+func TestSDKIncludesAuthGuard(t *testing.T) {
+	rr := httptest.NewRecorder()
+	newPlugin(t, &fakeNext{}).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/_embed-bridge.js", nil))
+	body := rr.Body.String()
+	for _, want := range []string{"__muveeAuthGuard", "'login-required'", "X-Muvee-Auth"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("SDK missing %q", want)
+		}
+	}
 }
