@@ -2003,7 +2003,40 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	if host != "" {
 		loginBase = proto + "://" + host
 	}
-	http.Redirect(w, r, loginBase+"/_oauth/login", http.StatusFound)
+	loginURL := loginBase + "/_oauth/login"
+	// A fetch/XHR from an SPA whose session expired must not be 302'd to the
+	// login page: the browser follows the redirect transparently, the app gets
+	// a 200 HTML login page where it expected JSON, and it just keeps erroring
+	// instead of sending the user to sign in. Answer with a 401 the app (and
+	// the auth-guard the embed-bridge plugin injects into every project page)
+	// can recognise by the X-Muvee-Auth header.
+	if isAPIRequest(r) {
+		w.Header().Set("X-Muvee-Auth", "login-required")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":     "login_required",
+			"login_url": loginURL,
+		})
+		return
+	}
+	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
+// isAPIRequest reports whether the forward-auth request was issued by page
+// script (fetch / XHR) rather than by the browser loading a document or a
+// sub-resource. Browsers mark fetch/XHR with Sec-Fetch-Dest: empty. Without
+// that header we treat anything that does not ask for HTML as an API call;
+// header-less clients keep the navigation behaviour (see isNavigationRequest).
+func isAPIRequest(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Dest") {
+	case "empty":
+		return true
+	case "":
+		return !isNavigationRequest(r)
+	default:
+		return false
+	}
 }
 
 // isNavigationRequest reports whether the forward-auth request looks like a

@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -144,5 +145,56 @@ func TestRedirectToLogin_NoForwardedHostFallsBackToBase(t *testing.T) {
 	want := "https://example.com/_oauth/login"
 	if got != want {
 		t.Fatalf("fallback redirect:\n  got:  %s\n  want: %s", got, want)
+	}
+}
+
+// TestRedirectToLogin_APIRequestGets401 covers the expired-session SPA case: a
+// fetch/XHR (Sec-Fetch-Dest: empty) must get a recognisable 401 instead of a
+// 302 the browser would silently follow to the HTML login page.
+func TestRedirectToLogin_APIRequestGets401(t *testing.T) {
+	prevBase := forwardAuthBase
+	prevCookieDomain := cookieDomain
+	forwardAuthBase = "https://example.com"
+	cookieDomain = "example.com"
+	t.Cleanup(func() {
+		forwardAuthBase = prevBase
+		cookieDomain = prevCookieDomain
+	})
+
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"fetch", map[string]string{"Sec-Fetch-Dest": "empty", "Accept": "*/*"}},
+		{"no fetch metadata, json accept", map[string]string{"Accept": "application/json"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/verify", nil)
+			r.Header.Set("X-Forwarded-Host", "myproj.example.com")
+			r.Header.Set("X-Forwarded-Proto", "https")
+			r.Header.Set("X-Forwarded-Uri", "/api/items")
+			for k, v := range tc.headers {
+				r.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+
+			redirectToLogin(w, r)
+
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401, got %d", w.Code)
+			}
+			if got := w.Header().Get("X-Muvee-Auth"); got != "login-required" {
+				t.Fatalf("X-Muvee-Auth = %q, want login-required", got)
+			}
+			if loc := w.Header().Get("Location"); loc != "" {
+				t.Fatalf("API request must not be redirected, got Location %q", loc)
+			}
+			if val, ok := redirectCookieValue(w); ok {
+				t.Fatalf("API request must not set fwd_oauth_redirect, got %q", val)
+			}
+			if body := w.Body.String(); !strings.Contains(body, `"login_url":"https://myproj.example.com/_oauth/login"`) {
+				t.Fatalf("body missing login_url: %s", body)
+			}
+		})
 	}
 }
