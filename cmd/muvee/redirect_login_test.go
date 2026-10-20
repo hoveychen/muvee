@@ -198,3 +198,33 @@ func TestRedirectToLogin_APIRequestGets401(t *testing.T) {
 		})
 	}
 }
+
+// TestRedirectToLogin_IframeNavSetsRedirectCookie: an iframed page load (the
+// auth-guard reloading an embedded project) is a navigation too, so it must
+// record the return URL like a top-level one.
+func TestRedirectToLogin_IframeNavSetsRedirectCookie(t *testing.T) {
+	prevBase := forwardAuthBase
+	prevCookieDomain := cookieDomain
+	forwardAuthBase = "https://example.com"
+	cookieDomain = "example.com"
+	t.Cleanup(func() {
+		forwardAuthBase = prevBase
+		cookieDomain = prevCookieDomain
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Uri", "/dashboard")
+	r.Header.Set("Sec-Fetch-Dest", "iframe")
+	w := httptest.NewRecorder()
+
+	redirectToLogin(w, r)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	if val, ok := redirectCookieValue(w); !ok || val != "https://myproj.example.com/dashboard" {
+		t.Fatalf("iframe navigation redirect cookie = %q (set=%v)", val, ok)
+	}
+}

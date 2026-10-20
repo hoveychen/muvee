@@ -331,7 +331,6 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	// login page.
 	if claims.Provider == "password" || claims.Provider == "phone" {
 		if projectID := r.URL.Query().Get("project_id"); projectID != "" && projectID == claims.ProjectID {
-			renewSessionCookie(w, r)
 			setUserHeaders(w, claims)
 			w.WriteHeader(http.StatusOK)
 			return
@@ -417,7 +416,11 @@ const sessionRenewAfter = 24 * time.Hour
 // renewSessionCookie re-signs the request's muvee_fwd_session with a fresh
 // expiry once it is older than sessionRenewAfter (sliding session). Only the
 // cookie session slides: a Bearer JWT (CLI device flow) has its own fixed
-// lifetime and is left alone. Traefik copies the cookie onto the proxied
+// lifetime and is left alone. So do password / phone sessions: verify never
+// re-checks the demo account or phone grant behind them, so the fixed expiry
+// is the only thing that retires one after the grant is removed. Roaming
+// OAuth sessions are safe to slide because every verify re-runs the project
+// access check. Traefik copies the cookie onto the proxied
 // response because the project forwardAuth middlewares list it in
 // addAuthCookiesToResponse.
 func renewSessionCookie(w http.ResponseWriter, r *http.Request) {
@@ -426,7 +429,7 @@ func renewSessionCookie(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, err := parseForwardJWT(cookie.Value)
-	if err != nil || claims.ExpiresAt == nil {
+	if err != nil || claims.ExpiresAt == nil || claims.ProjectID != "" {
 		return
 	}
 	if time.Until(claims.ExpiresAt.Time) > sessionLifetime-sessionRenewAfter {
@@ -2097,7 +2100,7 @@ func isAPIRequest(r *http.Request) bool {
 // keep the pre-fix behaviour.
 func isNavigationRequest(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Dest") {
-	case "document", "frame", "nested-document":
+	case "document", "iframe", "frame", "nested-document":
 		return true
 	case "": // header absent — fall through to Accept-based heuristic
 	default:

@@ -51,7 +51,9 @@ traefik.http.routers.{proj}.middlewares={proj}-auth
 Sessions last 7 days and slide: once a session is a day old, the next request
 that passes ForwardAuth re-issues the cookie with a fresh 7-day expiry, so a
 user who keeps coming back stays signed in. Only expiry after 7 days of
-inactivity sends them back through login.
+inactivity sends them back through login. Demo-account (password) and SMS
+sessions are the exception: they keep a fixed 7-day lifetime, because nothing
+re-checks the account or phone grant behind them on each request.
 
 When a session is missing or expired, a page load (step 4) is redirected to the
 login page, but a `fetch` / XHR call from page script gets

@@ -74,10 +74,10 @@ func TestHandleVerify_FreshSessionNotRenewed(t *testing.T) {
 	}
 }
 
-// TestHandleVerify_RenewKeepsProjectBinding covers the project-scoped
-// (password / phone) sessions: the renewed token must stay bound to the same
-// project, or renewal would turn a demo account into a roaming session.
-func TestHandleVerify_RenewKeepsProjectBinding(t *testing.T) {
+// TestHandleVerify_ProjectSessionNotRenewed: password / phone sessions keep
+// their fixed lifetime. verify never re-checks the demo account or phone grant
+// behind them, so sliding would keep a removed grant alive forever.
+func TestHandleVerify_ProjectSessionNotRenewed(t *testing.T) {
 	verifyEnv(t, true)
 
 	const projectID = "11111111-1111-1111-1111-111111111111"
@@ -85,7 +85,7 @@ func TestHandleVerify_RenewKeepsProjectBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign session: %v", err)
 	}
-	// Age it past the renew threshold by re-signing with a short expiry.
+	// Age it well past the renew threshold.
 	claims, _ := parseForwardJWT(session)
 	claims.ExpiresAt.Time = time.Now().Add(2 * 24 * time.Hour)
 	session = mustSign(t, claims)
@@ -95,16 +95,8 @@ func TestHandleVerify_RenewKeepsProjectBinding(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("verify status = %d, want 200", w.Code)
 	}
-	c := sessionCookieFrom(w)
-	if c == nil {
-		t.Fatalf("aging password session was not renewed")
-	}
-	renewed, err := parseForwardJWT(c.Value)
-	if err != nil {
-		t.Fatalf("renewed session does not parse: %v", err)
-	}
-	if renewed.ProjectID != projectID || renewed.Provider != "password" {
-		t.Errorf("renewal lost project binding: project %q provider %q", renewed.ProjectID, renewed.Provider)
+	if c := sessionCookieFrom(w); c != nil {
+		t.Errorf("project-scoped session must not slide, got renewed cookie")
 	}
 }
 
