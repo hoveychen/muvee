@@ -13,6 +13,10 @@
 //     the closing `</head>`. Non-HTML responses (assets, JSON APIs, image
 //     bytes, etc.) are streamed through unchanged.
 //
+// Besides the iframe bridge, the SDK carries the auth-guard (sdkAuthGuardScript),
+// which runs on top-level pages too: it sends the user back through login when
+// the project's muvee session expires under a long-lived SPA.
+//
 // The SDK body is compiled in as a constant (sdkScript) so the plugin has
 // no runtime file dependencies — yaegi-friendly, no os.ReadFile.
 package embed_bridge
@@ -20,7 +24,9 @@ package embed_bridge
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -81,6 +87,13 @@ func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// A compressed HTML body cannot be spliced, so ask the upstream for an
+	// identity-encoded document. Only page loads are touched — assets and API
+	// calls keep their compression.
+	if isDocumentRequest(req) {
+		req.Header.Del("Accept-Encoding")
+	}
+
 	// 2. All other requests: capture downstream response and, if HTML,
 	//    splice in the script tag. The recorder only buffers once it has seen
 	//    a text/html Content-Type; anything else streams straight through (see
@@ -112,6 +125,23 @@ func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	body := rec.body.Bytes()
+	// Upstreams that compress regardless of Accept-Encoding: gzip is the only
+	// encoding we can undo here (no brotli/zstd in the stdlib); anything else
+	// passes through unspliced.
+	switch strings.ToLower(rec.Header().Get("Content-Encoding")) {
+	case "", "identity":
+	case "gzip":
+		decoded, err := gunzip(body)
+		if err != nil {
+			rec.flush(rw)
+			return
+		}
+		body = decoded
+		rec.Header().Del("Content-Encoding")
+	default:
+		rec.flush(rw)
+		return
+	}
 	idx := bytes.Index(body, []byte("</head>"))
 	if idx < 0 {
 		// No </head> — not a complete HTML document we can splice safely.
@@ -144,6 +174,28 @@ func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	rw.WriteHeader(status)
 	rw.Write(out)
+}
+
+// isDocumentRequest reports whether req is a browser page load (top-level or
+// iframe) — the only kind of request whose response we may splice into.
+func isDocumentRequest(req *http.Request) bool {
+	switch req.Header.Get("Sec-Fetch-Dest") {
+	case "document", "iframe", "frame", "nested-document":
+		return true
+	case "":
+		return strings.Contains(req.Header.Get("Accept"), "text/html")
+	default:
+		return false
+	}
+}
+
+func gunzip(b []byte) ([]byte, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	return io.ReadAll(zr)
 }
 
 // responseRecorder buffers the downstream response so the middleware can
@@ -289,6 +341,8 @@ func (r *responseRecorder) flush(rw http.ResponseWriter) {
 //      needed by v2; defines the global `html2canvas` function.
 //   3. sdkSelectionScripts (below) — v1 `embed:selection` text fallback
 //      plus v2 `embed:selection-screenshot` viewport raster.
+//   4. sdkAnnotateScript — shell-driven element annotation.
+//   5. sdkAuthGuardScript — expired-session relogin, top-level pages too.
 const sdkScript = `// _embed-bridge.js — bridge SDK injected by muvee traefik plugin so any
 // muvee-deployed app surfaces its real <title> + URL to a host page that
 // iframes it (e.g. agent-workspace ` + "`/embed`" + ` page).
@@ -343,7 +397,7 @@ const sdkScript = `// _embed-bridge.js — bridge SDK injected by muvee traefik 
   window.addEventListener("popstate", function () { setTimeout(send, 0); });
   window.addEventListener("hashchange", function () { setTimeout(send, 0); });
 })();
-` + html2canvasBundle + sdkSelectionScripts + sdkAnnotateScript
+` + html2canvasBundle + sdkSelectionScripts + sdkAnnotateScript + sdkAuthGuardScript
 
 // sdkSelectionScripts is the v1 + v2 selection-upstream blocks concatenated
 // onto sdkScript after html2canvasBundle. v1 sends `embed:selection` (plain
@@ -669,6 +723,81 @@ const sdkAnnotateScript = `
     var t = e.data && e.data.type;
     if (t === 'embed:annotate-start') start();
     else if (t === 'embed:annotate-stop') stop();
+  });
+})();
+`
+
+// sdkAuthGuardScript sends the user back through login when the project's
+// muvee session expires. muvee-authservice answers an expired session's
+// fetch / XHR with 401 + `X-Muvee-Auth: login-required` (a page load still
+// gets the 302 to the login page), so an SPA that stays open past its session
+// would otherwise just keep failing its API calls. On that signal the guard
+// reloads the page: the reload is a navigation, ForwardAuth records it as the
+// post-login return URL and redirects to sign-in, and the user lands back on
+// the same page. Coming back to a hidden tab also probes the session, so a
+// stale tab re-logs-in before the user starts clicking.
+//
+// Unlike the blocks above it runs on top-level pages as well as iframes. It is
+// inert on projects without muvee login: their responses never carry the
+// header.
+const sdkAuthGuardScript = `
+// muvee auth-guard — relogin when the muvee session expires.
+(function () {
+  if (window.__muveeAuthGuard) return;
+  window.__muveeAuthGuard = true;
+
+  var origFetch = window.fetch;
+  var RELOAD_KEY = '__muvee_auth_reload_at';
+
+  function expired(status, header) {
+    return status === 401 && header === 'login-required';
+  }
+
+  function relogin() {
+    // Never reload in a loop: if a reload did not fix it, leave the page be.
+    try {
+      var last = Number(sessionStorage.getItem(RELOAD_KEY)) || 0;
+      if (Date.now() - last < 30000) return;
+      sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+    } catch (e) {}
+    location.reload();
+  }
+
+  if (typeof origFetch === 'function') {
+    window.fetch = function () {
+      return origFetch.apply(window, arguments).then(function (res) {
+        try {
+          if (expired(res.status, res.headers.get('X-Muvee-Auth'))) relogin();
+        } catch (e) {}
+        return res;
+      });
+    };
+  }
+
+  if (window.XMLHttpRequest) {
+    var origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function () {
+      var xhr = this;
+      xhr.addEventListener('loadend', function () {
+        try {
+          if (expired(xhr.status, xhr.getResponseHeader('X-Muvee-Auth'))) relogin();
+        } catch (e) {}
+      });
+      return origSend.apply(xhr, arguments);
+    };
+  }
+
+  var lastProbe = 0;
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible' || typeof origFetch !== 'function') return;
+    var now = Date.now();
+    if (now - lastProbe < 60000) return;
+    lastProbe = now;
+    origFetch(location.href, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
+      .then(function (res) {
+        if (expired(res.status, res.headers.get('X-Muvee-Auth'))) relogin();
+      })
+      .catch(function () {});
   });
 })();
 `
