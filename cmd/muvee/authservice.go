@@ -331,6 +331,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	// login page.
 	if claims.Provider == "password" || claims.Provider == "phone" {
 		if projectID := r.URL.Query().Get("project_id"); projectID != "" && projectID == claims.ProjectID {
+			renewSessionCookie(w, r)
 			setUserHeaders(w, claims)
 			w.WriteHeader(http.StatusOK)
 			return
@@ -398,8 +399,51 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	renewSessionCookie(w, r)
 	setUserHeaders(w, claims)
 	w.WriteHeader(http.StatusOK)
+}
+
+// sessionLifetime is how long a muvee_fwd_session cookie (and the JWT inside
+// it) stays valid after it was issued or last renewed.
+const sessionLifetime = 7 * 24 * time.Hour
+
+// sessionRenewAfter is how old a session has to be before an authenticated
+// request renews it. Renewing at most about once a day keeps Set-Cookie off
+// nearly every proxied response while still letting a user who comes back
+// within the lifetime stay signed in indefinitely.
+const sessionRenewAfter = 24 * time.Hour
+
+// renewSessionCookie re-signs the request's muvee_fwd_session with a fresh
+// expiry once it is older than sessionRenewAfter (sliding session). Only the
+// cookie session slides: a Bearer JWT (CLI device flow) has its own fixed
+// lifetime and is left alone. Traefik copies the cookie onto the proxied
+// response because the project forwardAuth middlewares list it in
+// addAuthCookiesToResponse.
+func renewSessionCookie(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("muvee_fwd_session")
+	if err != nil {
+		return
+	}
+	claims, err := parseForwardJWT(cookie.Value)
+	if err != nil || claims.ExpiresAt == nil {
+		return
+	}
+	if time.Until(claims.ExpiresAt.Time) > sessionLifetime-sessionRenewAfter {
+		return
+	}
+	renewed := *claims
+	renewed.ExpiresAt = jwt.NewNumericDate(time.Now().Add(sessionLifetime))
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, renewed).SignedString(jwtSecret)
+	if err != nil {
+		log.Printf("authservice: renew session (%s): %v", claimsSubjectForLog(claims), err)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "muvee_fwd_session", Value: signed,
+		MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, Path: "/",
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // upsertUserUpstream syncs an OAuth-verified identity into muvee-server's
