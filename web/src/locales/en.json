@@ -172,7 +172,7 @@
       "autoDeployLastSha": "Last tracked commit",
       "autoDeployNever": "(none yet — will be recorded after the first auto-deploy)",
       "allowProjectAccess": "Allow access from other projects",
-      "allowProjectAccessHint": "Other projects you own can call this project from inside their containers over plain HTTP at the address below, without signing in. The request carries X-Muvee-Caller-Project / X-Muvee-Caller-Project-Id so this project can tell which project is calling. Projects of other owners are always refused.",
+      "allowProjectAccessHint": "Other projects you own can call this project from inside their containers over plain HTTP at the address below, without signing in. The request carries X-Muvee-Caller-Project / X-Muvee-Caller-Project-Id so this project can tell which project is calling. Projects of other owners are refused at this address; this is not network isolation, see the known limitations in the docs.",
       "owner": "Owner",
       "ownerHint": "Admin only — selecting a different user reassigns this project to them.",
       "ownerSaving": "Reassigning owner...",
