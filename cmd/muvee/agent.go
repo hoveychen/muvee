@@ -19,6 +19,7 @@ import (
 	"github.com/hoveychen/muvee/internal/builder"
 	"github.com/hoveychen/muvee/internal/datacache"
 	"github.com/hoveychen/muvee/internal/deployer"
+	"github.com/hoveychen/muvee/internal/mesh"
 	"github.com/hoveychen/muvee/internal/store"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
@@ -93,9 +94,14 @@ func runAgent() {
 	}
 
 	var cache *datacache.Cache
+	var meshGW *mesh.Gateway
 	if nodeRole == "deploy" {
 		cache = datacache.New(nil, nodeID, baseDir)
 		go runContainerStatusReporter(ctx, controlPlaneURL, agentSecret)
+		// muvee-mesh gateway for project-to-project calls. Starts in the
+		// background and stays disabled (deploys skip the mesh) when it can't
+		// come up, so it never blocks the agent.
+		meshGW = mesh.Start(ctx, mesh.ConfigFromEnv(controlPlaneURL, agentSecret))
 	}
 	go runNodeMetricsReporter(ctx, controlPlaneURL, agentSecret, nodeID, baseDir)
 	go runAgentHealthReporter(ctx, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, volumeNFSBasePath, datasetNFSBasePath)
@@ -114,7 +120,7 @@ func runAgent() {
 		case <-ticker.C:
 			tasks := pollTasks(ctx, controlPlaneURL, agentSecret, nodeID)
 			for _, task := range tasks {
-				go handleTask(ctx, task, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, baseDir, baseDomain, volumeNFSBasePath, datasetNFSBasePath, cache)
+				go handleTask(ctx, task, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, baseDir, baseDomain, volumeNFSBasePath, datasetNFSBasePath, cache, meshGW)
 			}
 		}
 	}
@@ -248,7 +254,7 @@ func pollTasks(ctx context.Context, baseURL, secret string, nodeID uuid.UUID) []
 	return tasks
 }
 
-func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, baseDir, baseDomain, volumeNFSBasePath, datasetNFSBasePath string, cache *datacache.Cache) {
+func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, nodeID uuid.UUID, role, registryAddr, baseDir, baseDomain, volumeNFSBasePath, datasetNFSBasePath string, cache *datacache.Cache, meshGW *mesh.Gateway) {
 	log.Printf("Handling task %s (type=%s)", task.ID, task.Type)
 	completeTask(ctx, baseURL, secret, task.ID, store.TaskStatusRunning, nil)
 
@@ -271,11 +277,11 @@ func handleTask(ctx context.Context, task *store.Task, baseURL, secret string, n
 		var hostPort int
 		var err error
 		if str(task.Payload, "mode") == "compose" {
-			hostPort, err = runComposeDeploy(ctx, task, volumeNFSBasePath, baseURL, func(line string) {
+			hostPort, err = runComposeDeploy(ctx, task, volumeNFSBasePath, baseURL, meshSpec(meshGW), func(line string) {
 				appendLog(ctx, baseURL, secret, task.DeploymentID, line)
 			})
 		} else {
-			hostPort, err = runDeploy(ctx, task, cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath, func(line string) {
+			hostPort, err = runDeploy(ctx, task, cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath, meshSpec(meshGW), func(line string) {
 				appendLog(ctx, baseURL, secret, task.DeploymentID, line)
 			})
 		}
@@ -358,7 +364,17 @@ func runBuild(ctx context.Context, task *store.Task, registryAddr, controlPlaneU
 	return map[string]interface{}{"image_tag": imageTag}, nil
 }
 
-func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath string, logFn func(string)) (int, error) {
+// meshSpec converts the gateway's current state into the deployer's attachment
+// spec; nil (no mesh) while the gateway is down or on non-deploy nodes.
+func meshSpec(g *mesh.Gateway) *deployer.MeshSpec {
+	s := g.Spec()
+	if s == nil {
+		return nil
+	}
+	return &deployer.MeshSpec{Network: s.Network, GatewayIP: s.GatewayIP, FallbackDNS: s.FallbackDNS}
+}
+
+func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, baseDomain, volumeNFSBasePath, datasetNFSBasePath string, meshSpec *deployer.MeshSpec, logFn func(string)) (int, error) {
 	p := task.Payload
 	var datasets []deployer.DatasetSpec
 	if dsRaw, ok := p["datasets"].([]interface{}); ok {
@@ -402,11 +418,12 @@ func runDeploy(ctx context.Context, task *store.Task, cache *datacache.Cache, ba
 		BaseDomain:         baseDomain,
 		EnvVars:            envVars,
 		FixedHostPort:      intVal(p, "fixed_host_port"),
+		Mesh:               meshSpec,
 	}
 	return deployer.Deploy(ctx, cfg, cache, nil, logFn)
 }
 
-func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath, controlPlaneURL string, logFn func(string)) (int, error) {
+func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath, controlPlaneURL string, meshSpec *deployer.MeshSpec, logFn func(string)) (int, error) {
 	p := task.Payload
 	envVars := make(map[string]string)
 	if evRaw, ok := p["env_vars"].(map[string]interface{}); ok {
@@ -441,6 +458,7 @@ func runComposeDeploy(ctx context.Context, task *store.Task, volumeNFSBasePath, 
 		EnvVars:           envVars,
 		RegistryAuths:     parseRegistryAuths(p),
 		FixedHostPort:     intVal(p, "fixed_host_port"),
+		Mesh:              meshSpec,
 	}
 	return deployer.DeployCompose(ctx, cfg, logFn)
 }
