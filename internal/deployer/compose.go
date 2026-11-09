@@ -313,13 +313,7 @@ func CleanupCompose(ctx context.Context, projectID, domainPrefix, composeFilePat
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
 	projectName := composeProjectName(domainPrefix)
 
-	args := []string{
-		"compose", "-p", projectName,
-		"-f", composePath, "-f", overridePath,
-		"--project-directory", workDir,
-		"down", "-v", "--remove-orphans",
-	}
-	if err := runCmdCompose(ctx, logFn, "docker", args...); err != nil {
+	if err := composeDown(ctx, logFn, projectName, composePath, overridePath, workDir, "-v"); err != nil {
 		// down failures are not fatal — the project may already be gone.
 		logFn(fmt.Sprintf("compose down warning: %v", err))
 	}
@@ -345,13 +339,38 @@ func StopCompose(ctx context.Context, projectID, domainPrefix, composeFilePath, 
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
 	projectName := composeProjectName(domainPrefix)
 
-	args := []string{
-		"compose", "-p", projectName,
-		"-f", composePath, "-f", overridePath,
-		"--project-directory", workDir,
-		"down", "--remove-orphans",
+	return composeDown(ctx, logFn, projectName, composePath, overridePath, workDir)
+}
+
+// composeDown runs `docker compose down --remove-orphans` for a muvee compose
+// project. The work dir lives inside the agent container (not on a volume), so
+// it is gone after the agent is recreated (e.g. a watchtower upgrade); `down -f`
+// against the missing files then fails and the containers are orphaned, still
+// holding their host ports. Compose can tear a project down from its container
+// labels alone, so when the files are missing — or the file-based down fails —
+// fall back to `down -p <name>` without any -f.
+func composeDown(ctx context.Context, logFn func(string), projectName, composePath, overridePath, workDir string, extra ...string) error {
+	downArgs := append([]string{"down", "--remove-orphans"}, extra...)
+	if fileExists(composePath) && fileExists(overridePath) {
+		args := append([]string{
+			"compose", "-p", projectName,
+			"-f", composePath, "-f", overridePath,
+			"--project-directory", workDir,
+		}, downArgs...)
+		err := runCmdCompose(ctx, logFn, "docker", args...)
+		if err == nil {
+			return nil
+		}
+		logFn(fmt.Sprintf("compose down with project files failed (%v); retrying by project name %s", err, projectName))
+	} else {
+		logFn(fmt.Sprintf("compose files for %s missing (agent recreated?); tearing down by project name", projectName))
 	}
-	return runCmdCompose(ctx, logFn, "docker", args...)
+	return runCmdCompose(ctx, logFn, "docker", append([]string{"compose", "-p", projectName}, downArgs...)...)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // composeProjectName mirrors the convention used for single-container deploys
