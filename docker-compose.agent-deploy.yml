@@ -23,6 +23,14 @@ services:
       # NODE_NAME pins the agent's identity across restarts/upgrades.
       # Override in .env if you run multiple deploy agents on different hosts.
       NODE_NAME: ${NODE_NAME:-muvee-agent-deploy}
+      # muvee-mesh (project-to-project access, docs/docs/project-mesh.md): the
+      # agent joins the docker network muvee-mesh at a fixed IP and serves DNS
+      # + an HTTP gateway for http://<prefix>.muvee.internal. Defaults work;
+      # override only when needed:
+      #   MESH_SUBNET: "10.213.0.0/16"        # subnet if the agent creates muvee-mesh (clash with LAN/VPN)
+      #   MESH_GATEWAY_IP: "10.213.0.2"       # agent's fixed IP on muvee-mesh, inside MESH_SUBNET
+      #   MESH_FALLBACK_DNS: "1.1.1.1,8.8.8.8" # 2nd resolver for project containers while the agent is down (auto-detected)
+      #   MESH_SELF_CONTAINER: "muvee-agent-deploy" # agent's own container, if /proc/self/mountinfo detection fails
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent_data:/muvee/data

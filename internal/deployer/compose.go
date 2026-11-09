@@ -69,6 +69,9 @@ type ComposeConfig struct {
 	// runs a pre-flight `ss -ltn` probe and fails fast if the port is already
 	// bound by another process on this node.
 	FixedHostPort int
+	// Mesh, when non-nil, joins the expose service to the muvee-mesh network
+	// (other services stay off it).
+	Mesh *MeshSpec
 }
 
 // composeFile captures the subset of a docker-compose file we need to inspect
@@ -82,8 +85,11 @@ type composeService struct {
 	// the `build:` key (string or mapping form).
 	Build *yaml.Node `yaml:"build,omitempty"`
 	// Image is required for all services in muvee compose deploys.
-	Image string     `yaml:"image,omitempty"`
+	Image string      `yaml:"image,omitempty"`
 	Ports []yaml.Node `yaml:"ports,omitempty"`
+	// NetworkMode (host / service:x / container:x) cannot be combined with
+	// extra networks, so such a service is kept off the mesh.
+	NetworkMode string `yaml:"network_mode,omitempty"`
 }
 
 // DeployCompose clones the compose source on the deploy node, validates that
@@ -202,7 +208,12 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	// agent can find it again after a restart reassigns the host port. Compose
 	// merges this on top of the user's compose file.
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
-	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, cfg.FixedHostPort, workspaceMount, cfg.MemoryLimit)
+	mesh := cfg.Mesh
+	if mesh != nil && parsed.Services[cfg.ExposeService].NetworkMode != "" {
+		logFn(fmt.Sprintf("Service %q sets network_mode; not joining it to %s", cfg.ExposeService, mesh.Network))
+		mesh = nil
+	}
+	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, cfg.FixedHostPort, workspaceMount, cfg.MemoryLimit, mesh)
 	if err := os.WriteFile(overridePath, []byte(override), 0644); err != nil {
 		return 0, fmt.Errorf("write override file: %w", err)
 	}
@@ -407,9 +418,8 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 		gitEnv = append(gitEnv,
 			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", keyFile.Name()))
 		cleanup = func() { os.Remove(keyFile.Name()) }
-	} else if cfg.GitUsername != "" && cfg.GitToken != "" && strings.HasPrefix(gitURL, "https://") {
-		// Inline credentials into the URL: https://user:token@host/...
-		gitURL = "https://" + cfg.GitUsername + ":" + cfg.GitToken + "@" + strings.TrimPrefix(gitURL, "https://")
+	} else if cfg.GitUsername != "" && cfg.GitToken != "" {
+		gitURL = withGitCredentials(gitURL, cfg.GitUsername, cfg.GitToken)
 	}
 	defer cleanup()
 
@@ -436,8 +446,9 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 // image-only projects whose workspace volume is bind-mounted from NFS,
 // appends a volumes entry. When fixedHostPort is non-zero, the published
 // host port is locked to that exact value instead of "0" (Docker-assigned
-// ephemeral). Pure function so all branches are unit-testable.
-func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fixedHostPort int, workspaceMount, memoryLimit string) string {
+// ephemeral). A non-nil mesh joins the expose service to the mesh network.
+// Pure function so all branches are unit-testable.
+func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fixedHostPort int, workspaceMount, memoryLimit string, mesh *MeshSpec) string {
 	hostSpec := "0"
 	if fixedHostPort > 0 {
 		hostSpec = strconv.Itoa(fixedHostPort)
@@ -468,6 +479,9 @@ func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fi
 				"    memswap_limit: \"%s\"\n",
 			memoryLimit, memoryLimit,
 		)
+	}
+	if mesh != nil {
+		out += meshComposeServiceYAML(mesh) + meshComposeNetworksYAML(mesh)
 	}
 	return out
 }
@@ -544,13 +558,29 @@ func probePortAvailable(ctx context.Context, port int) error {
 
 // redactGitURL strips inline HTTPS credentials so they don't end up in logs.
 func redactGitURL(url string) string {
-	if !strings.HasPrefix(url, "https://") {
-		return url
+	for _, scheme := range []string{"https://", "http://"} {
+		rest, ok := strings.CutPrefix(url, scheme)
+		if !ok {
+			continue
+		}
+		at := strings.Index(rest, "@")
+		if at < 0 {
+			return url
+		}
+		return scheme + "***@" + rest[at+1:]
 	}
-	rest := strings.TrimPrefix(url, "https://")
-	at := strings.Index(rest, "@")
-	if at < 0 {
-		return url
+	return url
+}
+
+// withGitCredentials inlines user:token into an http(s) clone URL. Plain
+// http matters for hosted repos in standalone mode, where the agent clones
+// from CONTROL_PLANE_URL=http://muvee-server:8080 with the agent secret.
+// Other URL forms (ssh, scp-like) are returned unchanged.
+func withGitCredentials(gitURL, user, token string) string {
+	for _, scheme := range []string{"https://", "http://"} {
+		if rest, ok := strings.CutPrefix(gitURL, scheme); ok {
+			return scheme + user + ":" + token + "@" + rest
+		}
 	}
-	return "https://***@" + rest[at+1:]
+	return gitURL
 }

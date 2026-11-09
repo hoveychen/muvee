@@ -119,6 +119,17 @@ userEmail := r.Header.Get("X-Forwarded-User")
 const userEmail = req.headers["x-forwarded-user"]
 ```
 
+### 项目互访（`--allow-project-access`）
+
+同一 owner 的项目可以在容器内通过 `http://<域名前缀>.muvee.internal/` 免凭据互相调用，目标项目会收到 `X-Muvee-Caller-Project` / `X-Muvee-Caller-Project-Id`。开关在被调用方，**默认开启**：
+
+```bash
+muveectl projects update PROJECT_ID --allow-project-access=false   # 拒绝其他项目调用
+muveectl projects update PROJECT_ID --allow-project-access=true    # 重新允许
+```
+
+`projects create` 也支持同一参数。详见 [项目互访](./project-mesh)。
+
 ### 容器资源指标
 
 部署 Agent 每隔约 15 秒通过 `docker stats` 采集容器的资源用量并上报给控制平面。使用 `projects metrics` 查看正在运行的容器状态：

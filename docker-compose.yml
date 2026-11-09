@@ -14,10 +14,12 @@
 # then follow the agent setup guide in README.md.
 #
 # NOTE: The deploy agent mounts the host Docker socket so it can start
-# deployed-app containers on this machine. Those containers are attached to
-# muvee-net, which Traefik (also on muvee-net) uses to route traffic.
-# HOST_IP is auto-detected via a UDP probe toward muvee-server; override it
-# with HOST_IP=<ip> in .env if Traefik picks the wrong interface.
+# deployed-app containers on this machine. Those containers publish a host
+# port, and Traefik routes to them via HOST_IP:<host port> (HOST_IP is the
+# docker host's gateway address on muvee-net, auto-detected by the agent;
+# override it with HOST_IP=<ip> in .env if Traefik picks the wrong interface).
+# Project containers also join the muvee-mesh network created by the deploy
+# agent, for project-to-project access (docs/docs/project-mesh.md).
 
 services:
   postgres:
@@ -312,6 +314,14 @@ services:
       # HOST_IP is auto-detected (UDP probe toward muvee-server).
       # Override if Traefik cannot reach deployed containers:
       #   HOST_IP: "10.0.0.1"
+      # muvee-mesh (project-to-project access, docs/docs/project-mesh.md): the
+      # agent joins the docker network muvee-mesh at a fixed IP and serves DNS
+      # + an HTTP gateway for http://<prefix>.muvee.internal. Defaults work;
+      # override only when needed:
+      #   MESH_SUBNET: "10.213.0.0/16"        # subnet if the agent creates muvee-mesh (clash with LAN/VPN)
+      #   MESH_GATEWAY_IP: "10.213.0.2"       # agent's fixed IP on muvee-mesh, inside MESH_SUBNET
+      #   MESH_FALLBACK_DNS: "1.1.1.1,8.8.8.8" # 2nd resolver for project containers while the agent is down (auto-detected)
+      #   MESH_SELF_CONTAINER: "muvee-agent-deploy" # agent's own container, if /proc/self/mountinfo detection fails
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - muvee_data:/muvee/data

@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildComposeOverrideYAMLNoWorkspace(t *testing.T) {
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "", nil)
 
 	mustContain(t, got, "services:")
 	mustContain(t, got, "  app:")
@@ -25,7 +25,7 @@ func TestBuildComposeOverrideYAMLNoWorkspace(t *testing.T) {
 
 func TestBuildComposeOverrideYAMLWithWorkspace(t *testing.T) {
 	mount := "/srv/muvee/volumes/abc-123:/workspace:rw"
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, mount, "")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, mount, "", nil)
 
 	mustContain(t, got, "    volumes:")
 	mustContain(t, got, `      - "`+mount+`"`)
@@ -38,7 +38,7 @@ func TestBuildComposeOverrideYAMLWithWorkspace(t *testing.T) {
 }
 
 func TestBuildComposeOverrideYAMLMemoryLimit(t *testing.T) {
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "1600m")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "1600m", nil)
 
 	// Limit is injected on the expose service; memswap == mem disables swap
 	// (mirrors the single-container deployer convention).
@@ -52,7 +52,7 @@ func TestBuildComposeOverrideYAMLMemoryLimit(t *testing.T) {
 }
 
 func TestBuildComposeOverrideYAMLNoMemoryLimit(t *testing.T) {
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 0, "", "", nil)
 
 	if strings.Contains(got, "mem_limit") {
 		t.Fatalf("override must not declare mem_limit when memoryLimit is empty:\n%s", got)
@@ -60,7 +60,7 @@ func TestBuildComposeOverrideYAMLNoMemoryLimit(t *testing.T) {
 }
 
 func TestBuildComposeOverrideYAMLFixedHostPort(t *testing.T) {
-	got := buildComposeOverrideYAML("app", "foxy", 8080, 13000, "", "")
+	got := buildComposeOverrideYAML("app", "foxy", 8080, 13000, "", "", nil)
 
 	mustContain(t, got, `      - "13000:8080"`)
 	if strings.Contains(got, `"0:8080"`) {
@@ -123,13 +123,31 @@ func TestIsEmptyDir(t *testing.T) {
 
 func TestRedactGitURL(t *testing.T) {
 	cases := map[string]string{
-		"https://user:token@github.com/owner/repo.git": "https://***@github.com/owner/repo.git",
-		"https://github.com/owner/repo.git":            "https://github.com/owner/repo.git",
-		"git@github.com:owner/repo.git":                "git@github.com:owner/repo.git",
+		"https://user:token@github.com/owner/repo.git":    "https://***@github.com/owner/repo.git",
+		"https://github.com/owner/repo.git":               "https://github.com/owner/repo.git",
+		"git@github.com:owner/repo.git":                   "git@github.com:owner/repo.git",
+		"http://agent:secret@muvee-server:8080/git/x.git": "http://***@muvee-server:8080/git/x.git",
 	}
 	for in, want := range cases {
 		if got := redactGitURL(in); got != want {
 			t.Errorf("redactGitURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Hosted repos in standalone mode are cloned from CONTROL_PLANE_URL, which is
+// plain http (http://muvee-server:8080); credentials must be inlined there too
+// or git prompts for a username and the compose deploy fails.
+func TestWithGitCredentials(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/owner/repo.git":   "https://u:t@github.com/owner/repo.git",
+		"http://muvee-server:8080/git/x.git":  "http://u:t@muvee-server:8080/git/x.git",
+		"git@github.com:owner/repo.git":       "git@github.com:owner/repo.git",
+		"ssh://git@github.com/owner/repo.git": "ssh://git@github.com/owner/repo.git",
+	}
+	for in, want := range cases {
+		if got := withGitCredentials(in, "u", "t"); got != want {
+			t.Errorf("withGitCredentials(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

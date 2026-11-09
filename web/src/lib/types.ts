@@ -84,6 +84,10 @@ export interface Project {
   // verification-code sign-in. Off by default (anyone with the phone can sign
   // in, unlike the owner-provisioned demo accounts).
   sms_login_enabled: boolean
+  // When true (the default), other projects of the same owner may call this
+  // one from inside their containers at http://<domain_prefix>.muvee.internal
+  // without credentials.
+  allow_project_access: boolean
   // Per-project branding for the forward-auth login page served on this
   // project's downstream subdomain. Empty = fall back to platform settings,
   // then built-in defaults.
