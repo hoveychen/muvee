@@ -42,6 +42,8 @@ type Config struct {
 	// instead of letting Docker pick an ephemeral. The deploy step probes the
 	// port first and fails fast if it is already bound.
 	FixedHostPort int
+	// Mesh, when non-nil, attaches the container to the muvee-mesh network.
+	Mesh *MeshSpec
 }
 
 type DatasetSpec struct {
@@ -143,6 +145,7 @@ func Deploy(ctx context.Context, cfg Config, cache *datacache.Cache, st *store.S
 		"--label", "muvee.domain_prefix=" + cfg.DomainPrefix,
 		"--label", "muvee.expose_port=" + strconv.Itoa(containerPort),
 	}
+	dockerArgs = append(dockerArgs, meshRunArgs(cfg.Mesh)...)
 	if cfg.MemoryLimit != "" {
 		dockerArgs = append(dockerArgs, "--memory", cfg.MemoryLimit)
 		dockerArgs = append(dockerArgs, "--memory-swap", cfg.MemoryLimit) // disable swap

@@ -69,6 +69,9 @@ type ComposeConfig struct {
 	// runs a pre-flight `ss -ltn` probe and fails fast if the port is already
 	// bound by another process on this node.
 	FixedHostPort int
+	// Mesh, when non-nil, joins the expose service to the muvee-mesh network
+	// (other services stay off it).
+	Mesh *MeshSpec
 }
 
 // composeFile captures the subset of a docker-compose file we need to inspect
@@ -84,6 +87,9 @@ type composeService struct {
 	// Image is required for all services in muvee compose deploys.
 	Image string     `yaml:"image,omitempty"`
 	Ports []yaml.Node `yaml:"ports,omitempty"`
+	// NetworkMode (host / service:x / container:x) cannot be combined with
+	// extra networks, so such a service is kept off the mesh.
+	NetworkMode string `yaml:"network_mode,omitempty"`
 }
 
 // DeployCompose clones the compose source on the deploy node, validates that
@@ -202,7 +208,12 @@ func DeployCompose(ctx context.Context, cfg ComposeConfig, logFn func(string)) (
 	// agent can find it again after a restart reassigns the host port. Compose
 	// merges this on top of the user's compose file.
 	overridePath := filepath.Join(workDir, "muvee.override.yml")
-	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, cfg.FixedHostPort, workspaceMount, cfg.MemoryLimit)
+	mesh := cfg.Mesh
+	if mesh != nil && parsed.Services[cfg.ExposeService].NetworkMode != "" {
+		logFn(fmt.Sprintf("Service %q sets network_mode; not joining it to %s", cfg.ExposeService, mesh.Network))
+		mesh = nil
+	}
+	override := buildComposeOverrideYAML(cfg.ExposeService, cfg.DomainPrefix, cfg.ExposePort, cfg.FixedHostPort, workspaceMount, cfg.MemoryLimit, mesh)
 	if err := os.WriteFile(overridePath, []byte(override), 0644); err != nil {
 		return 0, fmt.Errorf("write override file: %w", err)
 	}
@@ -436,8 +447,9 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 // image-only projects whose workspace volume is bind-mounted from NFS,
 // appends a volumes entry. When fixedHostPort is non-zero, the published
 // host port is locked to that exact value instead of "0" (Docker-assigned
-// ephemeral). Pure function so all branches are unit-testable.
-func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fixedHostPort int, workspaceMount, memoryLimit string) string {
+// ephemeral). A non-nil mesh joins the expose service to the mesh network.
+// Pure function so all branches are unit-testable.
+func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fixedHostPort int, workspaceMount, memoryLimit string, mesh *MeshSpec) string {
 	hostSpec := "0"
 	if fixedHostPort > 0 {
 		hostSpec = strconv.Itoa(fixedHostPort)
@@ -468,6 +480,9 @@ func buildComposeOverrideYAML(exposeService, domainPrefix string, exposePort, fi
 				"    memswap_limit: \"%s\"\n",
 			memoryLimit, memoryLimit,
 		)
+	}
+	if mesh != nil {
+		out += meshComposeServiceYAML(mesh) + meshComposeNetworksYAML(mesh)
 	}
 	return out
 }
