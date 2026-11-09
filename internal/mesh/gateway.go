@@ -80,9 +80,11 @@ func (g *Gateway) run(ctx context.Context) {
 		log.Printf("mesh: could not determine a fallback DNS for project containers (set MESH_FALLBACK_DNS); they will depend on the gateway for all DNS")
 	}
 
+	callers := newDockerCallers()
+	go callers.watch(ctx)
 	l := &listeners{
 		dns:   func(ip string) dns.Handler { return newDNSHandler(ip, upstreams) },
-		proxy: newProxy(newDockerCallers(), newCachedResolver(newHTTPResolver(g.cfg.ControlPlaneURL, g.cfg.AgentSecret), 5*time.Second)),
+		proxy: newProxy(callers, newCachedResolver(newHTTPResolver(g.cfg.ControlPlaneURL, g.cfg.AgentSecret), 5*time.Second)),
 	}
 	ticker := time.NewTicker(reconcileInterval)
 	defer ticker.Stop()

@@ -287,3 +287,38 @@ func TestDockerCallersRefresh(t *testing.T) {
 		t.Fatal("miss should refresh and find the new container")
 	}
 }
+
+func TestDockerCallersInvalidate(t *testing.T) {
+	table := map[string]string{"10.0.0.3": "a"}
+	d := &dockerCallers{ttl: time.Hour, minMissInterval: time.Hour, list: func(context.Context) (map[string]string, error) {
+		cp := map[string]string{}
+		for k, v := range table {
+			cp[k] = v
+		}
+		return cp, nil
+	}}
+	if d.Lookup(context.Background(), "10.0.0.3") != "a" {
+		t.Fatal("initial lookup")
+	}
+	// Container a stops; an unlabelled container takes over its IP.
+	delete(table, "10.0.0.3")
+	d.invalidate() // network disconnect event
+	if got := d.Lookup(context.Background(), "10.0.0.3"); got != "" {
+		t.Fatalf("stale identity after invalidate: %q", got)
+	}
+}
+
+func TestDockerCallersListErrorDropsTable(t *testing.T) {
+	fail := false
+	d := &dockerCallers{ttl: 0, minMissInterval: 0, list: func(context.Context) (map[string]string, error) {
+		if fail {
+			return nil, errors.New("docker down")
+		}
+		return map[string]string{"10.0.0.3": "a"}, nil
+	}}
+	d.Lookup(context.Background(), "10.0.0.3")
+	fail = true
+	if got := d.Lookup(context.Background(), "10.0.0.3"); got != "" {
+		t.Fatalf("must not answer from an unrefreshable table, got %q", got)
+	}
+}
