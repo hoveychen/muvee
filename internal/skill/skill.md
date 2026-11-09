@@ -174,7 +174,7 @@ muveectl projects create --name NAME --image-ref REF \
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
   [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2] \
-  [--auto-deploy] [--no-auto-deploy] \
+  [--auto-deploy] [--no-auto-deploy] [--allow-project-access=true|false] \
   [--branding-site-name NAME] [--branding-logo-url URL] [--branding-favicon-url URL] \
   [--branding-primary-color HEX] [--branding-sidebar-bg HEX] [--branding-tagline TAG] \
   [--branding-description DESC] [--branding-footer-text TEXT] [--branding-trust-text "a,b,c"] \
@@ -274,6 +274,17 @@ muveectl projects update PROJECT_ID --no-auto-deploy   # disable
 ```
 
 Not supported for `--domain-only` (tunnel) projects.
+
+### Project-to-Project Access (`--allow-project-access`)
+
+Projects of the same owner can call each other from inside their containers over plain HTTP, with no credentials: `curl http://<target domain>.muvee.internal/...`. The target receives `X-Muvee-Caller-Project` (caller project name) and `X-Muvee-Caller-Project-Id` (caller UUID) to tell which project is calling. Projects of other owners are refused.
+
+This is the target-side switch "may other projects of mine reach this one". It is **on by default**.
+
+```bash
+muveectl projects update PROJECT_ID --allow-project-access=false   # refuse calls from other projects
+muveectl projects update PROJECT_ID --allow-project-access=true    # allow again
+```
 
 ### Sign-in Page Branding (`--branding-*`)
 

@@ -156,6 +156,7 @@ func addProjectFlags(cmd *cobra.Command) {
 	cmd.Flags().String("description", "", "Project description")
 	cmd.Flags().String("icon", "", "Project icon (inline SVG or URL)")
 	cmd.Flags().String("tags", "", "Comma-separated project tags")
+	cmd.Flags().Bool("allow-project-access", true, "Let other projects of the same owner call this one at http://<domain>.muvee.internal without credentials (default on; --allow-project-access=false to turn off)")
 	cmd.Flags().Int("fixed-port", 0, "Admin only: fix the published host port (1024-65535); requires --fixed-node")
 	cmd.Flags().String("fixed-node", "", "Admin only: pin the project to a deployer node UUID; requires --fixed-port")
 	cmd.Flags().Bool("clear-fixed-port", false, "Admin only: remove the fixed-port binding (clears both fixed_host_port and fixed_node_id)")
@@ -294,6 +295,10 @@ func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 	if cmd.Flags().Changed("tags") {
 		v, _ := cmd.Flags().GetString("tags")
 		p["tags"] = v
+	}
+	if cmd.Flags().Changed("allow-project-access") {
+		v, _ := cmd.Flags().GetBool("allow-project-access")
+		p["allow_project_access"] = v
 	}
 	if v, _ := cmd.Flags().GetBool("clear-fixed-port"); v {
 		p["fixed_host_port"] = nil

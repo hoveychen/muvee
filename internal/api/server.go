@@ -1114,6 +1114,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/agent/tasks/{id}/complete", s.completeTask)
 		r.Post("/api/agent/register", s.registerNode)
 		r.Get("/api/agent/config", s.handleAgentConfig)
+		r.Get("/api/agent/mesh/resolve", s.handleAgentMeshResolve)
 		r.Post("/api/agent/container-statuses", s.handleContainerStatuses)
 		r.Post("/api/agent/container-metrics", s.handleContainerMetrics)
 		r.Post("/api/agent/node-metrics", s.handleNodeMetrics)
@@ -2313,7 +2314,9 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
-	var p store.Project
+	// allow_project_access defaults to ON (migration 056); a body that omits
+	// it must not silently opt the new project out of the mesh.
+	p := store.Project{AllowProjectAccess: true}
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		jsonErr(w, err, 400)
 		return

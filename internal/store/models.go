@@ -203,6 +203,13 @@ type Project struct {
 	// sign in, so the owner must opt in explicitly. Orthogonal to
 	// EnabledProviders (OAuth) and to the implicit password-login flag.
 	SMSLoginEnabled bool `db:"sms_login_enabled" json:"sms_login_enabled"`
+	// AllowProjectAccess lets other projects of the same owner call this one
+	// through the mesh gateway (http://<domain_prefix>.muvee.internal) without
+	// credentials. ON by default (migration 056). The column default only
+	// covers rows inserted without it; CreateProject writes this field
+	// verbatim, so Go callers that want the default must set it to true
+	// (the createProject handler does).
+	AllowProjectAccess bool `db:"allow_project_access" json:"allow_project_access"`
 	// Branding fields drive the visual of the forward-auth login page served
 	// on this project's downstream subdomain. Empty = fall back to the
 	// platform-wide system_settings (and then to built-in defaults). See

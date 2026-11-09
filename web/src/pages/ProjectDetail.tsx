@@ -1012,6 +1012,43 @@ function ConfigTab({ form, onChange, onSave, onDelete, saving, saveError, isAdmi
         </>
       ))}
 
+      {!isTunnelType && !isBuildType && renderSection('mesh', t('projectDetail.config.sections.mesh'), (
+        <div>
+          <label className="form-label">
+            {t('projectDetail.config.allowProjectAccess').toUpperCase()}
+          </label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <div
+              onClick={() => onChange({ ...form, allow_project_access: !form.allow_project_access })}
+              className="relative rounded-full transition-colors duration-200"
+              style={{
+                width: '36px', height: '20px',
+                background: form.allow_project_access ? 'var(--accent)' : 'var(--border)',
+                cursor: 'pointer',
+              }}
+            >
+              <div
+                className="absolute top-1 rounded-full transition-transform duration-200"
+                style={{
+                  width: '12px', height: '12px',
+                  background: '#ffffff',
+                  left: form.allow_project_access ? '18px' : '4px',
+                }}
+              />
+            </div>
+            <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+              {form.allow_project_access ? t('projectDetail.config.enabled') : t('projectDetail.config.disabled')}
+            </span>
+          </label>
+          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)' }}>
+            {t('projectDetail.config.allowProjectAccessHint')}
+          </p>
+          <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)', fontFamily: MONO }}>
+            http://{form.domain_prefix || form.name || '<domain>'}.muvee.internal
+          </p>
+        </div>
+      ))}
+
       {renderSection('admin', t('projectDetail.config.sections.admin'), (
         <>
           <div>
