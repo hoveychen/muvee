@@ -3493,7 +3493,7 @@ func (s *Server) triggerDescribe(w http.ResponseWriter, r *http.Request) {
 }
 
 // getTaskStatus is the CLI-side polling endpoint for tasks the user has
-// dispatched (runtime_logs, restart, env, describe). Returns 404 for unknown
+// dispatched (runtime_logs, restart, env, describe, pause, unpause). Returns 404 for unknown
 // tasks and 403 when the caller doesn't have access to the task's underlying
 // project. Only user-dispatched task types are exposed via this endpoint —
 // build/deploy/cleanup status is still surfaced through the deployment-centric
@@ -3509,8 +3509,9 @@ func (s *Server) getTaskStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch task.Type {
-	case store.TaskTypeRuntimeLogs, store.TaskTypeRestart, store.TaskTypeEnv, store.TaskTypeDescribe:
-		// allowed
+	case store.TaskTypeRuntimeLogs, store.TaskTypeRestart, store.TaskTypeEnv, store.TaskTypeDescribe,
+		store.TaskTypePause, store.TaskTypeUnpause:
+		// allowed; muveectl projects pause/resume poll these
 	default:
 		jsonErr(w, fmt.Errorf("task not accessible"), 403)
 		return
