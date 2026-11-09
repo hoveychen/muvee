@@ -31,6 +31,7 @@ const sidebars = {
         'scheduler',
         'dataset-monitor',
         'forward-auth',
+        'project-mesh',
         'service-auth-integration',
       ],
     },

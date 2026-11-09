@@ -66,6 +66,10 @@ All configuration is via environment variables.
 | `AGENT_SECRET` | — | Must match the value set on the control plane |
 | `DATA_DIR` | `/muvee/data` | Local dataset cache root (deploy nodes) |
 | `HOST_IP` | _(auto-detect)_ | IP address Traefik uses to reach containers on this node. Auto-detected from the network interface used to reach `CONTROL_PLANE_URL`. Override if auto-detection selects the wrong interface (e.g. on multi-NIC hosts). |
+| `MESH_SUBNET` | `10.213.0.0/16` | Deploy nodes: subnet of the `muvee-mesh` network for [project-to-project access](./project-mesh). Change only on a clash with your LAN/VPN. |
+| `MESH_GATEWAY_IP` | `10.213.0.2` | Deploy nodes: the agent's fixed IP on `muvee-mesh` (DNS + HTTP gateway). |
+| `MESH_FALLBACK_DNS` | _(auto-detect)_ | Deploy nodes: comma-separated fallback resolvers for project containers while the gateway is down. |
+| `MESH_SELF_CONTAINER` | _(auto-detect)_ | Deploy nodes: the agent's own container name/ID, if auto-detection fails. |
 
 :::info Registry credentials and BASE_DOMAIN are distributed automatically
 Agents fetch `REGISTRY_ADDR`, `REGISTRY_USER`, `REGISTRY_PASSWORD`, and `BASE_DOMAIN` from the control plane via `GET /api/agent/config` on startup. You only need to set these on the control plane — there is no need to configure them on individual agent nodes.

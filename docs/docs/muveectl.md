@@ -188,6 +188,17 @@ userEmail := r.Header.Get("X-Forwarded-User")
 const userEmail = req.headers["x-forwarded-user"]
 ```
 
+### Project-to-Project Access (`--allow-project-access`)
+
+Projects of the same owner can call each other from inside their containers at `http://<domain prefix>.muvee.internal/` without credentials; the target receives `X-Muvee-Caller-Project` / `X-Muvee-Caller-Project-Id`. The switch is on the target and is **on by default**:
+
+```bash
+muveectl projects update PROJECT_ID --allow-project-access=false   # refuse calls from other projects
+muveectl projects update PROJECT_ID --allow-project-access=true    # allow again
+```
+
+`projects create` accepts the same flag. See [Project-to-Project Access](./project-mesh) for details and limits.
+
 ### Container Metrics
 
 The deploy agent collects resource usage from `docker stats` every ~15 seconds and reports it to the control plane. Use `projects metrics` to inspect a project's running container:
