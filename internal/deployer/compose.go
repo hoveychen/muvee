@@ -85,7 +85,7 @@ type composeService struct {
 	// the `build:` key (string or mapping form).
 	Build *yaml.Node `yaml:"build,omitempty"`
 	// Image is required for all services in muvee compose deploys.
-	Image string     `yaml:"image,omitempty"`
+	Image string      `yaml:"image,omitempty"`
 	Ports []yaml.Node `yaml:"ports,omitempty"`
 	// NetworkMode (host / service:x / container:x) cannot be combined with
 	// extra networks, so such a service is kept off the mesh.
@@ -418,9 +418,8 @@ func cloneCompose(ctx context.Context, cfg ComposeConfig, workDir string, logFn 
 		gitEnv = append(gitEnv,
 			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", keyFile.Name()))
 		cleanup = func() { os.Remove(keyFile.Name()) }
-	} else if cfg.GitUsername != "" && cfg.GitToken != "" && strings.HasPrefix(gitURL, "https://") {
-		// Inline credentials into the URL: https://user:token@host/...
-		gitURL = "https://" + cfg.GitUsername + ":" + cfg.GitToken + "@" + strings.TrimPrefix(gitURL, "https://")
+	} else if cfg.GitUsername != "" && cfg.GitToken != "" {
+		gitURL = withGitCredentials(gitURL, cfg.GitUsername, cfg.GitToken)
 	}
 	defer cleanup()
 
@@ -559,13 +558,29 @@ func probePortAvailable(ctx context.Context, port int) error {
 
 // redactGitURL strips inline HTTPS credentials so they don't end up in logs.
 func redactGitURL(url string) string {
-	if !strings.HasPrefix(url, "https://") {
-		return url
+	for _, scheme := range []string{"https://", "http://"} {
+		rest, ok := strings.CutPrefix(url, scheme)
+		if !ok {
+			continue
+		}
+		at := strings.Index(rest, "@")
+		if at < 0 {
+			return url
+		}
+		return scheme + "***@" + rest[at+1:]
 	}
-	rest := strings.TrimPrefix(url, "https://")
-	at := strings.Index(rest, "@")
-	if at < 0 {
-		return url
+	return url
+}
+
+// withGitCredentials inlines user:token into an http(s) clone URL. Plain
+// http matters for hosted repos in standalone mode, where the agent clones
+// from CONTROL_PLANE_URL=http://muvee-server:8080 with the agent secret.
+// Other URL forms (ssh, scp-like) are returned unchanged.
+func withGitCredentials(gitURL, user, token string) string {
+	for _, scheme := range []string{"https://", "http://"} {
+		if rest, ok := strings.CutPrefix(gitURL, scheme); ok {
+			return scheme + user + ":" + token + "@" + rest
+		}
 	}
-	return "https://***@" + rest[at+1:]
+	return gitURL
 }
