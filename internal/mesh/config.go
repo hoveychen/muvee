@@ -97,6 +97,19 @@ func pickGatewayIP(subnet, explicit string) (string, error) {
 	return ip.String(), nil
 }
 
+// bridgeIP returns the subnet's base address + 1, the conventional address
+// for the host side of the bridge ("" for an unparsable or non-IPv4 subnet).
+func bridgeIP(subnet string) string {
+	_, ipnet, err := net.ParseCIDR(subnet)
+	if err != nil || ipnet.IP.To4() == nil {
+		return ""
+	}
+	ip := make(net.IP, 4)
+	copy(ip, ipnet.IP.To4())
+	ip[3]++
+	return ip.String()
+}
+
 // dynamicIPRange returns the half of subnet that does not contain gatewayIP,
 // passed as --ip-range on network creation so docker never hands the
 // gateway's fixed IP to a project container while the agent is restarting.

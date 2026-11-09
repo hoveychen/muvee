@@ -34,6 +34,11 @@ func ensureNetwork(ctx context.Context, subnet, gatewayIP string) (string, error
 		"--label", "muvee.mesh=1"}
 	if r, err := dynamicIPRange(subnet, gatewayIP); err == nil {
 		args = append(args, "--ip-range", r)
+		// With --ip-range docker would otherwise put the bridge on the first
+		// address of that range (e.g. 10.213.128.0); pin it to base+1.
+		if bridge := bridgeIP(subnet); bridge != "" && bridge != gatewayIP {
+			args = append(args, "--gateway", bridge)
+		}
 	}
 	args = append(args, NetworkName)
 	if _, err := dockerCmd(ctx, args...); err != nil {

@@ -26,6 +26,15 @@ func TestPickGatewayIP(t *testing.T) {
 	}
 }
 
+func TestBridgeIP(t *testing.T) {
+	cases := map[string]string{"10.213.0.0/16": "10.213.0.1", "10.50.4.0/24": "10.50.4.1", "bogus": "", "fd00::/64": ""}
+	for in, want := range cases {
+		if got := bridgeIP(in); got != want {
+			t.Errorf("bridgeIP(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
 func TestDynamicIPRangeExcludesGateway(t *testing.T) {
 	cases := map[[2]string]string{
 		{"10.213.0.0/16", "10.213.0.2"}:       "10.213.128.0/17",
