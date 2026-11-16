@@ -66,13 +66,23 @@ Returns `401` if the user is not authenticated.
 
 ## Logout
 
-To log the user out, redirect them to the auth gateway's logout endpoint:
+The simplest sign-out needs no code: link to `/_oauth/logout` on your app's own host (Traefik routes `/_oauth/*` on every project host to the auth gateway):
+
+```html
+<a href="/_oauth/logout">Sign out</a>
+```
+
+This clears the `muvee_fwd_session` cookie and lands on a branded "You've signed out" page with a **Sign in again** button. It does not send the user back to `/`: for a project with a single OAuth provider that would immediately sign them back in through the provider's still-active session.
+
+To send the user somewhere else after sign-out, pass `redirect`:
 
 ```
-https://{BASE_DOMAIN}/_oauth/logout?redirect=https://myapp.example.com
+https://myapp.example.com/_oauth/logout?redirect=/goodbye
 ```
 
-This clears the `muvee_fwd_session` cookie and redirects the user to the URL specified by `redirect` (defaults to `/` if omitted).
+`redirect` must be a path on the same site (starting with `/`, not `//`) or an `https` URL on this platform's domains. Any other value is ignored and the user lands on the signed-out page.
+
+The session cookie is shared by every project under the same base domain, so signing out of one project signs the user out of all of them. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console.
 
 ## CLI / Headless Access (Device Flow)
 

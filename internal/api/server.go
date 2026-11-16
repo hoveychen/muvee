@@ -1308,11 +1308,18 @@ func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 // safePostLoginRedirect returns dest unchanged if it's a same-origin path
 // (starts with a single "/" and doesn't smuggle a protocol-relative host via
 // "//evil.com"). Anything else returns "" so the caller falls back to the
-// default landing page.
+// default landing page. Backslashes and control characters are refused
+// anywhere: browsers read "/\evil.com" as "//evil.com" and strip tab/CR/LF,
+// so "/\t/evil.com" would otherwise turn protocol-relative after this check.
 func safePostLoginRedirect(dest string) string {
 	dest = strings.TrimSpace(dest)
 	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") {
 		return ""
+	}
+	for i := 0; i < len(dest); i++ {
+		if c := dest[i]; c < 0x20 || c == 0x7f || c == '\\' {
+			return ""
+		}
 	}
 	return dest
 }
