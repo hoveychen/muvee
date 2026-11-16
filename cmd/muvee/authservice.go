@@ -943,6 +943,31 @@ func postLoginRedirect(r *http.Request) string {
 	return "/"
 }
 
+// boundPostLoginRedirect is postLoginRedirect for a login whose signed state
+// says it started on host: the return URL must be on that same host. A
+// relative return URL is kept when the callback itself runs on that host
+// (apex / forward-auth host logins) and rebased onto it otherwise; anything
+// pointing at another host — e.g. a sibling tenant that overwrote the shared
+// fwd_oauth_redirect cookie — is replaced by the starting host's root.
+func boundPostLoginRedirect(r *http.Request, host string) string {
+	redirect := postLoginRedirect(r)
+	scheme := "https"
+	if strings.HasPrefix(forwardAuthBase, "http://") {
+		scheme = "http"
+	}
+	if strings.HasPrefix(redirect, "/") {
+		if domains.NormalizeHost(inboundHost(r)) == host {
+			return redirect
+		}
+		return scheme + "://" + host + redirect
+	}
+	if u, err := url.Parse(redirect); err == nil && domains.NormalizeHost(u.Host) == host {
+		return redirect
+	}
+	log.Printf("authservice: post-login redirect %q is not on the login's starting host %s", redirect, host)
+	return scheme + "://" + host + "/"
+}
+
 // signedOutHintCookie marks a browser whose user explicitly signed out of the
 // forward-auth session. While present, /_oauth/login renders the selection
 // page instead of auto-redirecting a single-provider project into the
@@ -1083,7 +1108,9 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown or disabled provider", http.StatusBadRequest)
 			return
 		}
-		state := fmt.Sprintf("%d", time.Now().UnixNano())
+		// Signed, unpredictable, and bound to the host the login started on
+		// (see signFwdState / boundPostLoginRedirect).
+		state := signFwdState(domains.NormalizeHost(inboundHost(r)))
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_state", Value: state,
 			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -1793,6 +1820,19 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		Name: "fwd_oauth_state", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
+	// The cookie match above only proves the browser holds the state; the
+	// cookie is base-domain wide, so a sibling subdomain could have planted
+	// both. Require a state this service minted: a signed fwd state (which
+	// pins where the user returns to), a live device-flow state, or — only
+	// during the upgrade window — the old unsigned numeric state.
+	boundHost, fwdState := verifyFwdState(queryState)
+	if !fwdState {
+		_, deviceState := devicePending.Load(queryState)
+		if !deviceState && (strings.HasPrefix(queryState, "device-") || time.Now().After(legacyStateDeadline)) {
+			http.Error(w, "invalid state", http.StatusBadRequest)
+			return
+		}
+	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -1902,6 +1942,9 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	issueFwdSession(w, r, signed)
 
 	redirect := postLoginRedirect(r)
+	if fwdState {
+		redirect = boundPostLoginRedirect(r, boundHost)
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -2100,7 +2143,7 @@ func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, provider
 		return
 	}
 
-	state := fmt.Sprintf("device-%d", time.Now().UnixNano())
+	state := "device-" + newStateNonce()
 	devicePending.Store(state, userCode)
 
 	http.SetCookie(w, &http.Cookie{
