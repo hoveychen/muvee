@@ -37,7 +37,7 @@ func TestSafeReturnURL(t *testing.T) {
 		{"https://datamap.sigma-fi.com/after", "datamap.sigma-fi.com", true},
 		{"https://other.opencws.top/", "datamap.sigma-fi.com", true},
 		{"https://sigma-fi.com/", "datamap.sigma-fi.com", true},
-		{"http://proj.opencws.top/", "proj.opencws.top", true},
+		{"http://proj.opencws.top/", "proj.opencws.top", false}, // platform runs on https
 		{"https://tunnel.cfdemo.com/x", "tunnel.cfdemo.com", true}, // same host, outside bases
 		{"", "proj.opencws.top", false},
 		{"//evil.com", "proj.opencws.top", false},
@@ -79,6 +79,17 @@ func doLogout(t *testing.T, host, query string) *http.Response {
 	w := httptest.NewRecorder()
 	handleFwdLogout(w, r)
 	return w.Result()
+}
+
+// Plain-http return URLs are only accepted when the platform itself is served
+// over http (local dev); in production they would hand the fresh session to
+// port 80 in clear text.
+func TestSafeReturnURL_HTTPOnlyOnHTTPPlatform(t *testing.T) {
+	withRedirectDomains(t)
+	forwardAuthBase = "http://opencws.top"
+	if _, ok := safeReturnURL("http://proj.opencws.top/", "proj.opencws.top"); !ok {
+		t.Fatal("http return URL refused on an http platform")
+	}
 }
 
 func TestFwdLogout_RedirectTargets(t *testing.T) {

@@ -883,7 +883,7 @@ const loggedOutPath = "/_oauth/logged-out"
 // fwd_oauth_redirect cookie consumed after sign-in) so it cannot send the user
 // off the platform. Accepted:
 //   - a same-site path: starts with "/" but not "//" (protocol-relative);
-//   - an absolute http(s) URL without userinfo whose host is the inbound host,
+//   - an absolute https URL (http only on an http platform) without userinfo whose host is the inbound host,
 //     or a configured base domain / one of its subdomains.
 //
 // Backslashes and control characters are refused anywhere: browsers treat
@@ -905,7 +905,12 @@ func safeReturnURL(raw, inbound string) (string, bool) {
 		return raw, true
 	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Opaque != "" || u.User != nil || u.Host == "" {
+	if err != nil || u.Opaque != "" || u.User != nil || u.Host == "" {
+		return "", false
+	}
+	// Plain http only when the platform itself runs on http (local dev): in
+	// production it would hand the fresh session to port 80 in clear text.
+	if u.Scheme != "https" && !(u.Scheme == "http" && strings.HasPrefix(forwardAuthBase, "http://")) {
 		return "", false
 	}
 	host := domains.NormalizeHost(u.Host)

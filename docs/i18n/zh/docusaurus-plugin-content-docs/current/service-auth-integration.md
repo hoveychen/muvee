@@ -80,7 +80,7 @@ if (resp.ok) {
 https://myapp.example.com/_oauth/logout?redirect=/goodbye
 ```
 
-`redirect` 只能是本站路径（以 `/` 开头且不以 `//` 开头），或本平台域名下的 `http(s)` 地址；其他值会被忽略，用户落到已退出页。
+`redirect` 只能是本站路径（以 `/` 开头且不以 `//` 开头），或本平台域名下的 `https` 地址；其他值会被忽略，用户落到已退出页。
 
 会话 Cookie 由同一基域下的所有项目共享，因此退出一个项目会同时退出该基域下的所有项目。它不会退出 OAuth 登录方式本身（如 Google），也不会退出 muvee 控制台。
 

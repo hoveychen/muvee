@@ -80,7 +80,7 @@ To send the user somewhere else after sign-out, pass `redirect`:
 https://myapp.example.com/_oauth/logout?redirect=/goodbye
 ```
 
-`redirect` must be a path on the same site (starting with `/`, not `//`) or an `http(s)` URL on this platform's domains. Any other value is ignored and the user lands on the signed-out page.
+`redirect` must be a path on the same site (starting with `/`, not `//`) or an `https` URL on this platform's domains. Any other value is ignored and the user lands on the signed-out page.
 
 The session cookie is shared by every project under the same base domain, so signing out of one project signs the user out of all of them. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console.
 

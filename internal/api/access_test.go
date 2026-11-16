@@ -236,6 +236,12 @@ func TestSafePostLoginRedirect(t *testing.T) {
 		{"https://evil.com/", ""},
 		{"javascript:alert(1)", ""},
 		{"portal", ""},
+		// Browsers read "/\\host" as "//host" and strip tab/CR/LF.
+		{"/\\evil.com", ""},
+		{"/\\/evil.com", ""},
+		{"/\t/evil.com", ""},
+		{"/\n/evil.com", ""},
+		{"/portal\\x", ""},
 	}
 	for _, c := range cases {
 		got := safePostLoginRedirect(c.in)
