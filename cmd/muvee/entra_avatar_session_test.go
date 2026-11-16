@@ -71,10 +71,11 @@ func TestEntraCallbackSessionCookieCarriesStoredURL(t *testing.T) {
 		forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret = prevBase, prevCookie, prevServer, prevSecret
 	})
 
-	const state = "entra-state-nonce"
+	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
 	r := httptest.NewRequest(http.MethodGet, "/_oauth/fakeentra?code=authcode&state="+state, nil)
 	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
 	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
+	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("provider", "fakeentra")
 	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
@@ -132,10 +133,11 @@ func TestEntraCallbackKeepsProviderAvatarWhenServerReturnsNone(t *testing.T) {
 		forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret = prevBase, prevCookie, prevServer, prevSecret
 	})
 
-	const state = "entra-state-nonce-2"
+	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
 	r := httptest.NewRequest(http.MethodGet, "/_oauth/fakeentra?code=authcode&state="+state, nil)
 	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
 	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
+	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("provider", "fakeentra")
 	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))

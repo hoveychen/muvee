@@ -951,6 +951,14 @@ func postLoginRedirect(r *http.Request) string {
 // fwd_oauth_redirect cookie — is replaced by the starting host's root.
 func boundPostLoginRedirect(r *http.Request, host string) string {
 	redirect := postLoginRedirect(r)
+	if _, ok := domains.Match(host, cookieBaseDomains); !ok {
+		// Not a platform host (e.g. a forged X-Forwarded-Host reached the
+		// login start): never build a URL from it.
+		if strings.HasPrefix(redirect, "/") {
+			return redirect
+		}
+		return "/"
+	}
 	scheme := "https"
 	if strings.HasPrefix(forwardAuthBase, "http://") {
 		scheme = "http"
@@ -1110,9 +1118,15 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		}
 		// Signed, unpredictable, and bound to the host the login started on
 		// (see signFwdState / boundPostLoginRedirect).
-		state := signFwdState(domains.NormalizeHost(inboundHost(r)))
+		startHost := domains.NormalizeHost(inboundHost(r))
+		state := signFwdState(startHost)
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_state", Value: state,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
+			SameSite: http.SameSiteLaxMode, Secure: true,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name: fwdHostCookieName, Value: startHost,
 			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
@@ -1185,7 +1199,9 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issueFwdSession(w, r, signed)
-	redirect := postLoginRedirect(r)
+	// The form posts to the host the user is signing in on, so that is the
+	// only host the (sibling-writable) return-URL cookie may send them to.
+	redirect := boundPostLoginRedirect(r, domains.NormalizeHost(inboundHost(r)))
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -1379,7 +1395,9 @@ func handleSMSVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issueFwdSession(w, r, signed)
-	redirect := postLoginRedirect(r)
+	// The form posts to the host the user is signing in on, so that is the
+	// only host the (sibling-writable) return-URL cookie may send them to.
+	redirect := boundPostLoginRedirect(r, domains.NormalizeHost(inboundHost(r)))
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -1823,12 +1841,20 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// The cookie match above only proves the browser holds the state; the
 	// cookie is base-domain wide, so a sibling subdomain could have planted
 	// both. Require a state this service minted: a signed fwd state (which
-	// pins where the user returns to), a live device-flow state, or — only
-	// during the upgrade window — the old unsigned numeric state.
-	boundHost, fwdState := verifyFwdState(queryState)
+	// pins where the user returns to), a live device-flow state, or a fresh
+	// pre-upgrade numeric state (logins in flight across the upgrade).
+	boundHost := ""
+	if c, err := r.Cookie(fwdHostCookieName); err == nil {
+		boundHost = c.Value
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: fwdHostCookieName, Value: "", MaxAge: -1,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
+	})
+	fwdState := verifyFwdState(queryState, boundHost)
 	if !fwdState {
 		_, deviceState := devicePending.Load(queryState)
-		if !deviceState && (strings.HasPrefix(queryState, "device-") || time.Now().After(legacyStateDeadline)) {
+		if !deviceState && !isFreshLegacyState(queryState) {
 			http.Error(w, "invalid state", http.StatusBadRequest)
 			return
 		}

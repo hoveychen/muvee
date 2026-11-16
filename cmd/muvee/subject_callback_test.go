@@ -90,10 +90,11 @@ func TestHandleOAuthCallback_SubjectProviderTakesSubjectPath(t *testing.T) {
 		forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret = prevBase, prevCookie, prevServer, prevSecret
 	})
 
-	const state = "state-nonce-for-pkce"
+	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
 	r := httptest.NewRequest(http.MethodGet, "/_oauth/faketwitter?code=authcode&state="+state, nil)
 	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
 	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
+	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("provider", "faketwitter")
 	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
@@ -201,10 +202,11 @@ func newRecordingUpstream(t *testing.T) *recordingUpstream {
 func callbackWithInvite(t *testing.T, p auth.Provider, inviteToken string) *httptest.ResponseRecorder {
 	t.Helper()
 	installFakeProvider(t, p)
-	const state = "state-nonce-for-pkce"
+	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
 	r := httptest.NewRequest(http.MethodGet, "/_oauth/"+p.Name()+"?code=authcode&state="+state, nil)
 	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
 	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
+	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
 	r.AddCookie(&http.Cookie{Name: inviteTokenCookieName, Value: inviteToken})
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("provider", p.Name())
