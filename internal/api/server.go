@@ -250,6 +250,22 @@ func requestHost(r *http.Request) string {
 	return strings.ToLower(strings.TrimSpace(r.Host))
 }
 
+// projectPrefixForHost splits a lowercased host into its project domain prefix
+// under whichever configured base domain it belongs to (longest match wins,
+// see domains.Match). apex is true when host is a base domain itself;
+// underBase is false when host is under none of them (custom-domain alias).
+func projectPrefixForHost(host string, bases []string) (prefix string, apex, underBase bool) {
+	base, ok := domains.Match(host, bases)
+	if !ok {
+		return "", false, false
+	}
+	h := domains.NormalizeHost(host)
+	if h == base {
+		return "", true, true
+	}
+	return strings.TrimSuffix(h, "."+base), false, true
+}
+
 // oauthRedirectFor returns the per-request OAuth callback URL for a provider:
 // the provider's canonical baked redirect with its host rebased onto the base
 // domain the request arrived on, so a panel login started on app.muvee.ai
@@ -357,7 +373,9 @@ func (s *Server) handleInternalProjectInfo(w http.ResponseWriter, r *http.Reques
 }
 
 // handleInternalProjectByHost resolves a project from an inbound Host header
-// and returns the auth-relevant configuration. Used by authservice for
+// and returns the auth-relevant configuration. A host under any of the
+// configured base domains (BASE_DOMAINS) resolves by its prefix, so
+// `x.<alias-base>` finds the same project as `x.<canonical-base>`. Used by authservice for
 // endpoints that only know the subdomain (e.g. /_oauth/providers,
 // /_oauth/login-token) — the request never carries a project_id.
 func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Request) {
@@ -372,11 +390,10 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, fmt.Errorf("host param required"), http.StatusBadRequest)
 		return
 	}
-	base := strings.ToLower(s.baseDomain)
+	prefix, apex, underBase := projectPrefixForHost(host, s.baseDomains)
 	var p *store.Project
 	switch {
-	case base != "" && strings.HasSuffix(host, "."+base):
-		prefix := strings.TrimSuffix(host, "."+base)
+	case underBase && !apex:
 		var err error
 		p, err = s.store.GetProjectByDomainPrefix(r.Context(), prefix)
 		if err != nil {
@@ -392,7 +409,7 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 				return
 			}
 		}
-	case host == base:
+	case apex:
 		jsonErr(w, fmt.Errorf("apex host carries no project"), http.StatusNotFound)
 		return
 	default:
@@ -1186,8 +1203,15 @@ func (s *Server) handleListDownstreamProviders(w http.ResponseWriter, r *http.Re
 // long enough to absorb a burst of dashboard visitors without staleness that
 // matters — operators updating DNS at the platform level are minutes-scale
 // events, not seconds-scale.
+// Entries are keyed per base domain: with BASE_DOMAINS each request reports
+// the IPs of the base domain it arrived on, and the domains may resolve to
+// different addresses (e.g. one behind a CDN or tunnel).
 type baseDomainIPCache struct {
-	mu       sync.Mutex
+	mu      sync.Mutex
+	entries map[string]baseDomainIPEntry
+}
+
+type baseDomainIPEntry struct {
 	at       time.Time
 	resolved []string
 }
@@ -1195,12 +1219,14 @@ type baseDomainIPCache struct {
 func (c *baseDomainIPCache) get(baseDomain string) []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Since(c.at) < 60*time.Second && c.resolved != nil {
-		return c.resolved
+	if e, ok := c.entries[baseDomain]; ok && time.Since(e.at) < 60*time.Second && e.resolved != nil {
+		return e.resolved
 	}
 	ips := resolveBaseDomainIPs(baseDomain)
-	c.resolved = ips
-	c.at = time.Now()
+	if c.entries == nil {
+		c.entries = make(map[string]baseDomainIPEntry)
+	}
+	c.entries[baseDomain] = baseDomainIPEntry{at: time.Now(), resolved: ips}
 	return ips
 }
 
@@ -1220,10 +1246,14 @@ func resolveBaseDomainIPs(baseDomain string) []string {
 }
 
 func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
+	// base_domain follows the domain the panel was opened on (BASE_DOMAINS),
+	// so every project / invitation link the UI builds from it stays on that
+	// domain instead of jumping to the canonical BASE_DOMAIN.
+	base := s.baseDomainForHost(requestHost(r))
 	jsonOK(w, map[string]any{
 		"dataset_nfs_base_path": s.datasetNFSBasePath,
-		"base_domain":           s.baseDomain,
-		"public_ips":            s.baseIPCache.get(s.baseDomain),
+		"base_domain":           base,
+		"public_ips":            s.baseIPCache.get(base),
 		"secrets_enabled":       s.store.SecretsEnabled(),
 		"server_version":        s.serverVersion,
 		// Project types this platform currently accepts. Always the resolved
@@ -1975,6 +2005,21 @@ func (s *Server) knownProviderIDs(ctx context.Context) map[string]bool {
 	return out
 }
 
+// withExistingProviders returns known extended with every provider ID already
+// stored in a project's enabled_providers, for validating updates.
+func withExistingProviders(known map[string]bool, existing string) map[string]bool {
+	out := make(map[string]bool, len(known))
+	for id := range known {
+		out[id] = true
+	}
+	for _, tok := range strings.Split(existing, ",") {
+		if id := strings.ToLower(strings.TrimSpace(tok)); id != "" && id != EnabledProvidersNone {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 // EnabledProvidersNone is the sentinel value for enabled_providers meaning
 // "no OAuth providers for this project" — distinct from "" (inherit all). Used
 // to make a project password/SMS-only. Honoured by projectEnabledFwdProviders.
@@ -2237,8 +2282,11 @@ func validateProject(p *store.Project) error {
 
 // handlePublicProjects returns all currently running projects with owner info.
 // This endpoint requires no authentication and is used by the community homepage.
-// Each project URL is computed from s.baseDomain so the frontend can build links.
+// Each project URL is built on the base domain the request arrived on (see
+// baseDomainForHost), so a portal opened on an alias base domain links to
+// that domain's project subdomains.
 func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
+	base := s.baseDomainForHost(requestHost(r))
 	projects, err := s.store.ListPublicRunningProjects(r.Context())
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -2286,7 +2334,7 @@ func (s *Server) handlePublicProjects(w http.ResponseWriter, r *http.Request) {
 			Description:    p.Description,
 			Icon:           p.Icon,
 			Tags:           p.Tags,
-			URL:            fmt.Sprintf("https://%s.%s", p.DomainPrefix, s.baseDomain),
+			URL:            fmt.Sprintf("https://%s.%s", p.DomainPrefix, base),
 			AuthRequired:   p.AuthRequired,
 			AccessMode:     p.AccessMode,
 			OwnerName:      p.OwnerName,
@@ -2549,7 +2597,14 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
-	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, s.knownProviderIDs(r.Context())); err != nil {
+	// Providers already stored on the project stay accepted even if an admin
+	// has since disabled them platform-wide: otherwise every later save —
+	// including edits that never touch enabled_providers — is rejected with
+	// "unknown provider". Only newly added values must be currently known.
+	// Stale values are kept as-is (not pruned): knownProviderIDs degrades to
+	// the env-only set on a settings read error, so pruning could silently
+	// drop a DB-enabled provider.
+	if normalised, err := normaliseEnabledProviders(p.EnabledProviders, withExistingProviders(s.knownProviderIDs(r.Context()), existing.EnabledProviders)); err != nil {
 		jsonErr(w, err, 400)
 		return
 	} else {
