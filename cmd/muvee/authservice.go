@@ -943,6 +943,53 @@ func postLoginRedirect(r *http.Request) string {
 	return "/"
 }
 
+// boundPostLoginRedirect is postLoginRedirect for a login whose signed state
+// says it started on host: the return URL must be on that same host. A
+// relative return URL is kept when the callback itself runs on that host
+// (apex / forward-auth host logins) and rebased onto it otherwise; anything
+// pointing at another host — e.g. a sibling tenant that overwrote the shared
+// fwd_oauth_redirect cookie — is replaced by the starting host's root.
+func boundPostLoginRedirect(r *http.Request, host string) string {
+	redirect := postLoginRedirect(r)
+	if _, ok := domains.Match(host, cookieBaseDomains); !ok {
+		// Not a platform host (e.g. a forged X-Forwarded-Host reached the
+		// login start): never build a URL from it.
+		if strings.HasPrefix(redirect, "/") {
+			return redirect
+		}
+		return "/"
+	}
+	scheme := "https"
+	if strings.HasPrefix(forwardAuthBase, "http://") {
+		scheme = "http"
+	}
+	if strings.HasPrefix(redirect, "/") {
+		if domains.NormalizeHost(inboundHost(r)) == host {
+			return redirect
+		}
+		return scheme + "://" + host + redirect
+	}
+	if u, err := url.Parse(redirect); err == nil && domains.NormalizeHost(u.Host) == host {
+		return redirect
+	}
+	log.Printf("authservice: post-login redirect %q is not on the login's starting host %s", redirect, host)
+	return scheme + "://" + host + "/"
+}
+
+// signedOutHintCookie marks a browser whose user explicitly signed out of the
+// forward-auth session. While present, /_oauth/login renders the selection
+// page instead of auto-redirecting a single-provider project into the
+// provider: the provider's own SSO session is still live, so the redirect
+// would sign the user straight back in (a stale tab's auth-guard reload is
+// enough to trigger it). It is a UX hint, not a security boundary — any
+// sibling subdomain can write or delete it, which only changes whether one
+// extra click is needed. Cleared by every completed sign-in (issueFwdSession).
+const signedOutHintCookie = "muvee_fwd_signed_out"
+
+// signedOutHintMaxAge outlives the 7-day session so an old tab reopened days
+// later is still caught.
+const signedOutHintMaxAge = 30 * 24 * 3600
+
 // handleFwdLogout clears the forward-auth session cookie and redirects to
 // ?redirect= when it is a safe same-platform target (see safeReturnURL), else
 // to the logged-out page. Only the downstream (forward-auth) session is
@@ -952,11 +999,41 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 		Name: "muvee_fwd_session", Value: "", MaxAge: -1,
 		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
 	})
+	http.SetCookie(w, &http.Cookie{
+		Name: signedOutHintCookie, Value: "1", MaxAge: signedOutHintMaxAge,
+		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
+		Secure: true, SameSite: http.SameSiteLaxMode,
+	})
 	redirect, ok := safeReturnURL(r.URL.Query().Get("redirect"), inboundHost(r))
 	if !ok {
 		redirect = loggedOutPath
 	}
 	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+// issueFwdSession sets a freshly signed forward-auth session cookie on the
+// request's base domain and clears the signed-out hint. Every completed
+// sign-in goes through here (a drift-guard test enforces it); only the silent
+// renewal of an already-valid session writes the cookie directly.
+func issueFwdSession(w http.ResponseWriter, r *http.Request, signed string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: "muvee_fwd_session", Value: signed,
+		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
+		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
+	})
+	if _, err := r.Cookie(signedOutHintCookie); err == nil {
+		http.SetCookie(w, &http.Cookie{
+			Name: signedOutHintCookie, Value: "", MaxAge: -1,
+			Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
+			Secure: true, SameSite: http.SameSiteLaxMode,
+		})
+	}
+}
+
+// signedOut reports whether the browser carries the signed-out hint.
+func signedOut(r *http.Request) bool {
+	_, err := r.Cookie(signedOutHintCookie)
+	return err == nil
 }
 
 // handleLoggedOutPage renders the "you have signed out" page with the
@@ -1039,9 +1116,17 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown or disabled provider", http.StatusBadRequest)
 			return
 		}
-		state := fmt.Sprintf("%d", time.Now().UnixNano())
+		// Signed, unpredictable, and bound to the host the login started on
+		// (see signFwdState / boundPostLoginRedirect).
+		startHost := domains.NormalizeHost(inboundHost(r))
+		state := signFwdState(startHost)
 		http.SetCookie(w, &http.Cookie{
 			Name: "fwd_oauth_state", Value: state,
+			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
+			SameSite: http.SameSiteLaxMode, Secure: true,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name: fwdHostCookieName, Value: startHost,
 			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
@@ -1051,10 +1136,12 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-redirect when only one provider is configured -- unless the
 	// project also offers password or SMS login, in which case the selection
-	// page must render so those forms stay reachable.
+	// page must render so those forms stay reachable. After an explicit
+	// sign-out the page renders too: auto-redirecting would ride the
+	// provider's still-live SSO session straight back in.
 	passwordLogin := cfg != nil && cfg.PasswordLogin
 	smsLogin := cfg != nil && cfg.SMSLogin
-	if len(allowed) == 1 && !passwordLogin && !smsLogin {
+	if len(allowed) == 1 && !passwordLogin && !smsLogin && !signedOut(r) {
 		for name := range allowed {
 			http.Redirect(w, r, "/_oauth/login?provider="+name, http.StatusFound)
 			return
@@ -1070,6 +1157,7 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		data.SMSError = data.M.BadCode
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_ = loginPageTmpl.Execute(w, data)
 }
 
@@ -1110,12 +1198,10 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "muvee_fwd_session", Value: signed,
-		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
-	})
-	redirect := postLoginRedirect(r)
+	issueFwdSession(w, r, signed)
+	// The form posts to the host the user is signing in on, so that is the
+	// only host the (sibling-writable) return-URL cookie may send them to.
+	redirect := boundPostLoginRedirect(r, domains.NormalizeHost(inboundHost(r)))
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -1308,12 +1394,10 @@ func handleSMSVerify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "muvee_fwd_session", Value: signed,
-		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
-	})
-	redirect := postLoginRedirect(r)
+	issueFwdSession(w, r, signed)
+	// The form posts to the host the user is signing in on, so that is the
+	// only host the (sibling-writable) return-URL cookie may send them to.
+	redirect := boundPostLoginRedirect(r, domains.NormalizeHost(inboundHost(r)))
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -1754,6 +1838,27 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		Name: "fwd_oauth_state", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
 	})
+	// The cookie match above only proves the browser holds the state; the
+	// cookie is base-domain wide, so a sibling subdomain could have planted
+	// both. Require a state this service minted: a signed fwd state (which
+	// pins where the user returns to), a live device-flow state, or a fresh
+	// pre-upgrade numeric state (logins in flight across the upgrade).
+	boundHost := ""
+	if c, err := r.Cookie(fwdHostCookieName); err == nil {
+		boundHost = c.Value
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: fwdHostCookieName, Value: "", MaxAge: -1,
+		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
+	})
+	fwdState := verifyFwdState(queryState, boundHost)
+	if !fwdState {
+		_, deviceState := devicePending.Load(queryState)
+		if !deviceState && !isFreshLegacyState(queryState) {
+			http.Error(w, "invalid state", http.StatusBadRequest)
+			return
+		}
+	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -1860,13 +1965,12 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "muvee_fwd_session", Value: signed,
-		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
-	})
+	issueFwdSession(w, r, signed)
 
 	redirect := postLoginRedirect(r)
+	if fwdState {
+		redirect = boundPostLoginRedirect(r, boundHost)
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -2065,7 +2169,7 @@ func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, provider
 		return
 	}
 
-	state := fmt.Sprintf("device-%d", time.Now().UnixNano())
+	state := "device-" + newStateNonce()
 	devicePending.Store(state, userCode)
 
 	http.SetCookie(w, &http.Cookie{

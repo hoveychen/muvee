@@ -311,15 +311,7 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 	// SPA gets the cookie automatically and onAuthChange listeners on other
 	// tabs of the same project subdomain will fire too.
 	if signed, err := signForwardJWT(userID, email, name, avatarURL, providerName); err == nil {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "muvee_fwd_session",
-			Value:    signed,
-			MaxAge:   7 * 24 * 3600,
-			HttpOnly: true,
-			Path:     "/",
-			Domain:   cookieDomainForRequest(r),
-			SameSite: http.SameSiteLaxMode,
-		})
+		issueFwdSession(w, r, signed)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
