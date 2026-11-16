@@ -249,6 +249,7 @@ func runAuthservice() {
 	r.Post("/_oauth/login-token/poll", handleLoginTokenPoll)
 	r.Options("/_oauth/login-token/poll", handleOAuthOptionsPreflight)
 	r.Get("/_oauth/logout", handleFwdLogout)
+	r.Get("/_oauth/logged-out", handleLoggedOutPage)
 	r.Get("/_oauth/login", handleLoginPage)
 	// Username/password ("demo account") form submission from the login page.
 	// POST-only, so it never collides with the GET {provider} catch-all below.
@@ -871,17 +872,105 @@ func originMatchesBaseDomain(origin, base string) bool {
 	return host == base || strings.HasSuffix(host, "."+base)
 }
 
-// handleFwdLogout clears the forward-auth session cookie and redirects.
+// loggedOutPath is where /_oauth/logout lands by default: a page served on the
+// project's own host that confirms the sign-out and only signs back in when the
+// user clicks. Landing on "/" instead re-enters forward-auth, and a project with
+// a single OAuth provider auto-redirects to it — whose own SSO session is still
+// alive — so the user was silently signed straight back in.
+const loggedOutPath = "/_oauth/logged-out"
+
+// safeReturnURL vets a user-influenced redirect target (logout ?redirect=, the
+// fwd_oauth_redirect cookie consumed after sign-in) so it cannot send the user
+// off the platform. Accepted:
+//   - a same-site path: starts with "/" but not "//" (protocol-relative);
+//   - an absolute http(s) URL without userinfo whose host is the inbound host,
+//     or a configured base domain / one of its subdomains.
+//
+// Backslashes and control characters are refused anywhere: browsers treat
+// "/\evil.com" like "//evil.com" and strip tab/CR/LF, so "/\t/evil.com" would
+// otherwise become protocol-relative after the check passed.
+func safeReturnURL(raw, inbound string) (string, bool) {
+	if raw == "" {
+		return "", false
+	}
+	for i := 0; i < len(raw); i++ {
+		if c := raw[i]; c < 0x20 || c == 0x7f || c == '\\' {
+			return "", false
+		}
+	}
+	if raw[0] == '/' {
+		if len(raw) > 1 && raw[1] == '/' {
+			return "", false
+		}
+		return raw, true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Opaque != "" || u.User != nil || u.Host == "" {
+		return "", false
+	}
+	host := domains.NormalizeHost(u.Host)
+	if in := domains.NormalizeHost(inbound); in != "" && host == in {
+		return raw, true
+	}
+	bases := cookieBaseDomains
+	if cookieDomain != "" {
+		bases = append(append([]string{}, cookieBaseDomains...), cookieDomain)
+	}
+	if _, ok := domains.Match(host, bases); ok {
+		return raw, true
+	}
+	return "", false
+}
+
+// postLoginRedirect returns where to send the user after a completed sign-in:
+// the fwd_oauth_redirect cookie when it passes safeReturnURL, "/" otherwise.
+// The cookie is scoped to the whole base domain, so any project subdomain —
+// i.e. tenant code — can plant its own value; it must never be followed blind.
+func postLoginRedirect(r *http.Request) string {
+	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil {
+		if u, ok := safeReturnURL(c.Value, inboundHost(r)); ok {
+			return u
+		}
+		if c.Value != "" {
+			log.Printf("authservice: refused post-login redirect %q (host=%s)", c.Value, inboundHost(r))
+		}
+	}
+	return "/"
+}
+
+// handleFwdLogout clears the forward-auth session cookie and redirects to
+// ?redirect= when it is a safe same-platform target (see safeReturnURL), else
+// to the logged-out page. Only the downstream (forward-auth) session is
+// touched; the muvee console's own muvee_session is managed by muvee-server.
 func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: "", MaxAge: -1,
 		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
 	})
-	redirect := r.URL.Query().Get("redirect")
-	if redirect == "" {
-		redirect = "/"
+	redirect, ok := safeReturnURL(r.URL.Query().Get("redirect"), inboundHost(r))
+	if !ok {
+		redirect = loggedOutPath
 	}
 	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+// handleLoggedOutPage renders the "you have signed out" page with the
+// project's branding and a single "sign in again" link to /_oauth/login. It
+// deliberately never redirects: Traefik routes /_oauth/* on project hosts
+// straight here (bypassing ForwardAuth), so this page is what keeps a
+// single-provider project from auto-signing the user back in.
+func handleLoggedOutPage(w http.ResponseWriter, r *http.Request) {
+	cfg, err := fetchProjectAuthConfigByHost(r.Context(), inboundHost(r))
+	if err != nil {
+		log.Printf("authservice: logged-out page project-by-host: %v", err)
+		cfg = nil
+	}
+	data := buildLoginPageData(cfg, nil)
+	data.M = loginMessages(acceptLang(r))
+	data.LoggedOut = true
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = loginPageTmpl.Execute(w, data)
 }
 
 // seedLoginReturnURL backfills the post-login return URL when a user reaches a
@@ -894,8 +983,12 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 // project subdomain's root is the natural fallback. The apex itself and the
 // forward-auth host keep the old behaviour (no cookie → "/").
 func seedLoginReturnURL(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
-		return
+	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil {
+		// A value planted by another subdomain is not a real return URL:
+		// overwrite it rather than let postLoginRedirect fall back to "/".
+		if _, ok := safeReturnURL(c.Value, inboundHost(r)); ok {
+			return
+		}
 	}
 	host := inboundHost(r)
 	base, ok := domains.Match(host, cookieBaseDomains)
@@ -1017,10 +1110,7 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
 		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
 	})
-	redirect := "/"
-	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
-		redirect = c.Value
-	}
+	redirect := postLoginRedirect(r)
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -1218,10 +1308,7 @@ func handleSMSVerify(w http.ResponseWriter, r *http.Request) {
 		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
 		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
 	})
-	redirect := "/"
-	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
-		redirect = c.Value
-	}
+	redirect := postLoginRedirect(r)
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -1270,6 +1357,9 @@ type loginPageData struct {
 	// the template shows a "choose a method" sub-heading (and the "or" dividers
 	// are meaningful). Single-method pages skip that copy.
 	MultipleMethods bool
+	// LoggedOut renders the post-logout variant: a "signed out" heading and a
+	// single "sign in again" link instead of the sign-in methods.
+	LoggedOut bool
 	// M holds the localized UI strings (zh/en), chosen per-request from the
 	// Accept-Language header. See loginMessages.
 	M loginMsg
@@ -1284,6 +1374,7 @@ type loginMsg struct {
 	Phone, PhonePH, Code, CodePH, GetCode, Resend           string
 	Sending, CodeSent, SendFailed, NetworkErr, PhoneRequired string
 	BadCredentials, BadCode                                 string
+	SignedOut, SignedOutOf, SignedOutSub, SignInAgain       string
 }
 
 // acceptLang picks "en" or "zh" from the request's Accept-Language header,
@@ -1308,6 +1399,7 @@ func loginMessages(lang string) loginMsg {
 			Phone: "Phone number", PhonePH: "Enter your phone number", Code: "Verification code", CodePH: "6-digit code", GetCode: "Get code", Resend: "Resend",
 			Sending: "Sending…", CodeSent: "Code sent. Check your phone.", SendFailed: "Failed to send code.", NetworkErr: "Network error, please retry.", PhoneRequired: "Enter your phone number first.",
 			BadCredentials: "Invalid username or password.", BadCode: "Invalid or expired verification code.",
+			SignedOut: "You've signed out", SignedOutOf: "You've signed out of", SignedOutSub: "Sign in again to keep using it.", SignInAgain: "Sign in again",
 		}
 	}
 	return loginMsg{
@@ -1316,6 +1408,7 @@ func loginMessages(lang string) loginMsg {
 		Phone: "手机号", PhonePH: "请输入手机号", Code: "验证码", CodePH: "6 位验证码", GetCode: "获取验证码", Resend: "重新获取",
 		Sending: "发送中…", CodeSent: "验证码已发送，请查收短信", SendFailed: "发送失败，请重试", NetworkErr: "网络错误，请重试", PhoneRequired: "请先输入手机号",
 		BadCredentials: "用户名或密码错误", BadCode: "验证码错误或已过期",
+		SignedOut: "已退出登录", SignedOutOf: "你已退出", SignedOutSub: "如需继续使用，请重新登录。", SignInAgain: "重新登录",
 	}
 }
 
@@ -1462,7 +1555,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .SiteName}}{{.SiteName}} · {{end}}{{.M.WelcomeBack}}</title>
+<title>{{if .SiteName}}{{.SiteName}} · {{end}}{{if .LoggedOut}}{{.M.SignedOut}}{{else}}{{.M.WelcomeBack}}{{end}}</title>
 {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}">{{end}}
 <style>
   *{box-sizing:border-box}
@@ -1531,7 +1624,10 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
         {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('mb-brand');if(f)f.style.display='block'">{{end}}
         <div class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}{{.M.Login}}{{end}}</div>
       </div>
-      <h1 class="head">{{.M.WelcomeBack}}</h1>
+      {{if .LoggedOut}}<h1 class="head">{{.M.SignedOut}}</h1>
+      <p class="sub">{{if .SiteName}}{{.M.SignedOutOf}} {{.SiteName}}{{if .M.EN}}.{{else}}。{{end}}{{end}}{{.M.SignedOutSub}}</p>
+      <a class="btn" href="/_oauth/login">{{.M.SignInAgain}}</a>
+      {{else}}<h1 class="head">{{.M.WelcomeBack}}</h1>
       {{if .MultipleMethods}}<p class="sub">{{.M.ChooseMethod}}{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}{{.M.SignInTo}} {{.SiteName}}{{else}}{{.M.YourAccount}}{{end}}</p>{{end}}
       {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{if $.M.EN}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</a>{{end}}
       {{if .PasswordLogin}}{{if .Providers}}<div class="divider">{{.M.Or}}</div>{{end}}
@@ -1576,6 +1672,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
         });
       })();
       </script>{{end}}
+      {{end}}
       {{if .TrustItems}}<div class="trust">
         {{range .TrustItems}}<span><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>{{.}}</span>{{end}}
       </div>{{end}}
@@ -1764,11 +1861,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
 	})
 
-	redirectCookie, err := r.Cookie("fwd_oauth_redirect")
-	redirect := "/"
-	if err == nil && redirectCookie.Value != "" {
-		redirect = redirectCookie.Value
-	}
+	redirect := postLoginRedirect(r)
 	http.SetCookie(w, &http.Cookie{
 		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
 		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
@@ -2409,7 +2502,7 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
     <textarea id="reason" name="reason" maxlength="1000" placeholder="{{if eq .Lang "en"}}What do you need this for?{{else}}你需要用它做什么？{{end}}"></textarea>
     <button type="submit">{{if eq .Lang "en"}}Send request{{else}}发送申请{{end}}</button>
   </form>
-  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Account}}. <a href="/_oauth/logout?redirect=/">Sign out</a>{{else}}已登录为 {{.Account}}。<a href="/_oauth/logout?redirect=/">退出登录</a>{{end}}</p>
+  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Account}}. <a href="/_oauth/logout">Sign out</a>{{else}}已登录为 {{.Account}}。<a href="/_oauth/logout">退出登录</a>{{end}}</p>
 {{else if eq .Phase "submitted"}}
   <h1>{{if eq .Lang "en"}}Request submitted{{else}}申请已提交{{end}}</h1>
   <div class="ok">{{if eq .Lang "en"}}We've notified the owner of <strong>{{.ProjectName}}</strong>. You'll be able to reach this project once they approve.{{else}}已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。{{end}}</div>

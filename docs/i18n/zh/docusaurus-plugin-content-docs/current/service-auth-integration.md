@@ -66,13 +66,23 @@ if (resp.ok) {
 
 ## 登出
 
-将用户重定向到认证网关的登出端点：
+最简单的登出无需写代码：在应用自己的域名下链接到 `/_oauth/logout` 即可（Traefik 会把每个项目域名下的 `/_oauth/*` 交给认证网关）：
+
+```html
+<a href="/_oauth/logout">退出登录</a>
+```
+
+这会清除 `muvee_fwd_session` Cookie，并落到带项目品牌的「已退出登录」页，页上有**重新登录**按钮。它不会跳回 `/`：对只开启了一个 OAuth 登录方式的项目，跳回 `/` 会借助该登录方式仍然有效的会话立即把用户登回去。
+
+如需登出后跳到其他页面，传入 `redirect`：
 
 ```
-https://{BASE_DOMAIN}/_oauth/logout?redirect=https://myapp.example.com
+https://myapp.example.com/_oauth/logout?redirect=/goodbye
 ```
 
-这会清除 `muvee_fwd_session` Cookie，并将用户重定向到 `redirect` 指定的 URL（省略时默认为 `/`）。
+`redirect` 只能是本站路径（以 `/` 开头且不以 `//` 开头），或本平台域名下的 `http(s)` 地址；其他值会被忽略，用户落到已退出页。
+
+会话 Cookie 由同一基域下的所有项目共享，因此退出一个项目会同时退出该基域下的所有项目。它不会退出 OAuth 登录方式本身（如 Google），也不会退出 muvee 控制台。
 
 ## CLI / Headless 访问（Device Flow）
 
