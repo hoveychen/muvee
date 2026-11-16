@@ -82,6 +82,8 @@ https://myapp.example.com/_oauth/logout?redirect=/goodbye
 
 `redirect` must be a path on the same site (starting with `/`, not `//`) or an `https` URL on this platform's domains. Any other value is ignored and the user lands on the signed-out page.
 
+Sign-out also leaves a `muvee_fwd_signed_out` marker cookie. Until the user signs in again, the login page shows the sign-in button instead of jumping straight to a single OAuth provider, so an old tab that reloads after sign-out (e.g. the auth-guard noticing the expired session) does not quietly sign the user back in.
+
 The session cookie is shared by every project under the same base domain, so signing out of one project signs the user out of all of them. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console.
 
 ## CLI / Headless Access (Device Flow)

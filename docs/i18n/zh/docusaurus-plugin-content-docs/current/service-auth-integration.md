@@ -82,6 +82,8 @@ https://myapp.example.com/_oauth/logout?redirect=/goodbye
 
 `redirect` 只能是本站路径（以 `/` 开头且不以 `//` 开头），或本平台域名下的 `https` 地址；其他值会被忽略，用户落到已退出页。
 
+登出还会留下一个 `muvee_fwd_signed_out` 标记 Cookie。在用户重新登录之前，登录页会显示登录按钮，而不是直接跳到唯一的 OAuth 登录方式；因此登出后某个旧标签页自行刷新（例如 auth-guard 发现会话失效）时，不会悄悄把用户登回去。
+
 会话 Cookie 由同一基域下的所有项目共享，因此退出一个项目会同时退出该基域下的所有项目。它不会退出 OAuth 登录方式本身（如 Google），也不会退出 muvee 控制台。
 
 ## CLI / Headless 访问（Device Flow）
