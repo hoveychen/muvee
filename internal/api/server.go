@@ -390,7 +390,11 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, fmt.Errorf("host param required"), http.StatusBadRequest)
 		return
 	}
-	prefix, apex, underBase := projectPrefixForHost(host, s.baseDomains)
+	bases := s.baseDomains
+	if len(bases) == 0 && s.baseDomain != "" {
+		bases = []string{s.baseDomain}
+	}
+	prefix, apex, underBase := projectPrefixForHost(host, bases)
 	var p *store.Project
 	switch {
 	case underBase && !apex:
