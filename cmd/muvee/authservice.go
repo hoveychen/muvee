@@ -884,6 +884,42 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirect, http.StatusFound)
 }
 
+// seedLoginReturnURL backfills the post-login return URL when a user reaches a
+// project subdomain's /_oauth/login without one. redirectToLogin normally sets
+// fwd_oauth_redirect, but it is single-use (cleared by the first completed
+// login) and expires after 5 minutes, so a second attempt — back button, a
+// bookmarked login page, an app linking straight to /_oauth/login — would
+// otherwise land on "/" of the OAuth callback host after sign-in: the platform
+// apex, i.e. the console, which project end-users should never see. The
+// project subdomain's root is the natural fallback. The apex itself and the
+// forward-auth host keep the old behaviour (no cookie → "/").
+func seedLoginReturnURL(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil && c.Value != "" {
+		return
+	}
+	host := inboundHost(r)
+	base, ok := domains.Match(host, cookieBaseDomains)
+	if !ok {
+		return
+	}
+	h := domains.NormalizeHost(host)
+	if h == base {
+		return
+	}
+	if u, err := url.Parse(forwardAuthBaseForHost(host)); err == nil && domains.NormalizeHost(u.Host) == h {
+		return
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		proto = "https"
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "fwd_oauth_redirect", Value: proto + "://" + h + "/",
+		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
+		SameSite: http.SameSiteLaxMode, Secure: true,
+	})
+}
+
 // handleLoginPage either auto-redirects (single provider) or shows a
 // provider-selection page (multiple providers).  When ?provider=X is present
 // it kicks off the OAuth flow for that specific provider. The selection
@@ -891,6 +927,7 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 // fallbacks) so downstream end-users see a coherent visual instead of the
 // generic indigo card the page used to show.
 func handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	seedLoginReturnURL(w, r)
 	providerName := r.URL.Query().Get("provider")
 	// Fetch the project's auth config (providers + branding) for the
 	// inbound host. cfg is nil for hosts that don't map to a project
