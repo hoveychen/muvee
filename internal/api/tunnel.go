@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/hoveychen/muvee/internal/auth"
+	"github.com/hoveychen/muvee/internal/domains"
 	"github.com/hoveychen/muvee/internal/store"
 )
 
@@ -418,18 +419,13 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTunnelTraffic(w http.ResponseWriter, r *http.Request) {
 	rawHost := r.Host
 	xfHost := r.Header.Get("X-Forwarded-Host")
-	host := rawHost
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
-	}
-	suffix := "." + s.baseDomain
-	if !strings.HasSuffix(host, suffix) {
-		log.Printf("tunnel: traffic REJECT_SUFFIX raw_host=%q x_forwarded_host=%q stripped=%q base_domain=%q method=%s path=%q remote=%s",
-			rawHost, xfHost, host, s.baseDomain, r.Method, r.URL.Path, r.RemoteAddr)
+	domain, ok := s.tunnelPrefixForHost(rawHost)
+	if !ok {
+		log.Printf("tunnel: traffic REJECT_SUFFIX raw_host=%q x_forwarded_host=%q base_domains=%q method=%s path=%q remote=%s",
+			rawHost, xfHost, s.tunnelBaseDomains(), r.Method, r.URL.Path, r.RemoteAddr)
 		http.Error(w, "unknown tunnel host", http.StatusBadGateway)
 		return
 	}
-	domain := strings.TrimSuffix(host, suffix)
 	log.Printf("tunnel: traffic in raw_host=%q x_forwarded_host=%q derived_domain=%q method=%s path=%q remote=%s",
 		rawHost, xfHost, domain, r.Method, r.URL.Path, r.RemoteAddr)
 
@@ -607,20 +603,42 @@ func readRequestBody(r *http.Request, max int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r.Body, max))
 }
 
+// tunnelBaseDomains is the set of platform apexes a tunnel prefix may sit
+// under: every configured BASE_DOMAINS entry, or just the canonical baseDomain
+// when no list is configured.
+func (s *Server) tunnelBaseDomains() []string {
+	if len(s.baseDomains) > 0 {
+		return s.baseDomains
+	}
+	return []string{s.baseDomain}
+}
+
+// tunnelPrefixForHost strips whichever served base domain host belongs to and
+// returns the remaining tunnel / domain_only prefix (the tunnel registry key).
+// Tunnels are keyed by prefix alone, so `foo.muveeai.com` and `foo.muvee.ai`
+// reach the same tunnel. host may carry a :port. ok is false when host is not
+// a subdomain of any served base (including the bare apex itself).
+func (s *Server) tunnelPrefixForHost(host string) (string, bool) {
+	base, ok := domains.Match(host, s.tunnelBaseDomains())
+	if !ok {
+		return "", false
+	}
+	h := domains.NormalizeHost(host)
+	if h == base {
+		return "", false
+	}
+	return strings.TrimSuffix(h, "."+base), true
+}
+
 // isTunnelRequest returns true if the Host header matches a tunnel domain pattern.
 // It matches both ephemeral t-* tunnels and registered domain_only projects,
 // so that a request for a reserved prefix is routed through the tunnel handler
 // (and gets either live traffic or the offline placeholder).
 func (s *Server) isTunnelRequest(r *http.Request) bool {
-	host := r.Host
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
-	}
-	suffix := "." + s.baseDomain
-	if !strings.HasSuffix(host, suffix) {
+	prefix, ok := s.tunnelPrefixForHost(r.Host)
+	if !ok {
 		return false
 	}
-	prefix := strings.TrimSuffix(host, suffix)
 	if strings.HasPrefix(prefix, "t-") {
 		return true
 	}
