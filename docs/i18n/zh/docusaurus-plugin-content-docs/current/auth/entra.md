@@ -12,7 +12,7 @@ muvee 支持通过 **OpenID Connect** + **OAuth 2.0 授权码流**接入 Microso
 | 平面 | 谁来登录 | 开关 |
 |---|---|---|
 | 平台 | muvee 控制台用户（`muvee_session`） | `platform_entra_login_enabled` |
-| 项目 | 通过 ForwardAuth 访问项目子域的终端用户（`muvee_fwd_session`） | `entra_enabled` |
+| 项目 | 通过 ForwardAuth 访问项目子域的终端用户（`__Host-muvee_fwd`） | `entra_enabled` |
 
 与 Google / 飞书 / 企业微信 / 钉钉不同，Entra **不用环境变量配置**：所有配置都在
 **后台 → 设置**（存 `system_settings`），改完无需重新部署。`ENTRA_*` 环境变量只作为 UI 里留空字段的兜底。
@@ -34,6 +34,8 @@ muvee 支持通过 **OpenID Connect** + **OAuth 2.0 授权码流**接入 Microso
    https://example.com/_oauth/entra          # 项目子域（ForwardAuth）
    ```
    两个可以挂在同一个应用注册上——只加你要启用的那个平面对应的即可。
+
+   项目会话按子域名隔离，但回调仍在根域名（apex）的 `/_oauth/entra` 上：**不需要**为每个项目注册 URI。登录也只支持基域下的主机，不支持基域之外的自定义域名。详见 [ForwardAuth → 会话流程](../forward-auth#session-flow)。
 
    :::note 多域名
    如果你在多个根域名下服务 muvee（`BASE_DOMAINS`），要为**每个**域名各加**两个** URI ——

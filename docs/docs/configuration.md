@@ -53,7 +53,7 @@ All configuration is via environment variables.
 | `GOOGLE_CLIENT_ID` | — | Same as control plane |
 | `GOOGLE_CLIENT_SECRET` | — | Same as control plane |
 | `FORWARD_AUTH_REDIRECT_URL` | `http://localhost:4181/_oauth` | OAuth2 callback URL for ForwardAuth. In production set to `https://BASE_DOMAIN/_oauth` and register it in Google Cloud Console alongside `GOOGLE_REDIRECT_URL`. |
-| `BASE_DOMAIN` | — | Root domain. Required so the session cookie is shared across all `*.BASE_DOMAIN` subdomains (e.g. `traefik.BASE_DOMAIN`, project subdomains). |
+| `BASE_DOMAIN` | — | Root domain. Required: it decides the central sign-in host (the base domain's apex) and the OAuth callback address. Subsite sessions are host-only cookies on each host (`traefik.BASE_DOMAIN`, each project subdomain) and are not shared across `*.BASE_DOMAIN`. `FORWARD_AUTH_BASE_URL` must be the base domain's apex, because the server only generates the central `/_oauth` route for the apex. |
 | `JWT_SECRET` | — | Must match the control plane value |
 | `ADMIN_EMAILS` | — | Must match the control plane value; used to gate `/verify-admin` (Traefik dashboard) |
 
@@ -92,11 +92,14 @@ none of the configured domains). Per request muvee resolves which base domain
 the host belongs to, so all of the following follow the domain the user is
 actually on:
 
-- **Auth cookies** are scoped to the matching base domain (a login on
-  `muvee.ai` yields a `.muvee.ai` cookie, shared across its subdomains).
+- **Central sign-in host and auth cookies** follow the matching base domain:
+  the central sign-in host is that base domain's apex (`FORWARD_AUTH_BASE_URL`
+  rebased onto it), and subsite sessions are host-only cookies on each host,
+  not shared across subdomains.
 - **OAuth redirect_uri** is rebased onto the matching base domain, kept
-  canonical to a single host per domain (e.g. `https://app.muvee.ai/_oauth/google`)
-  so project subdomains still bounce through the panel/authservice host.
+  canonical to a single host per domain (e.g. `https://muvee.ai/_oauth/google`)
+  so project subdomains still bounce through that base domain's apex (the
+  central sign-in host).
 - **Traefik routers** match every project/tunnel prefix under each base domain
   via a single OR'd `Host()` rule, each with its own TLS cert entry.
 - **CORS / origin** checks accept the canonical origin of every configured base

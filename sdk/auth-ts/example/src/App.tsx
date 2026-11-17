@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MuveeAuth, type MuveeUser, type ProviderInfo } from '@muvee/auth';
+import { AuthError, MuveeAuth, type MuveeUser, type ProviderInfo, type SignInHandle } from '@muvee/auth';
 
 MuveeAuth.configure({});
 
@@ -8,6 +8,8 @@ export function App() {
   const [user, setUser] = useState<MuveeUser | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
+  const [handle, setHandle] = useState<SignInHandle | null>(null);
 
   useEffect(() => {
     MuveeAuth.listProviders().then(setProviders).catch((e: Error) => setError(e.message));
@@ -19,18 +21,27 @@ export function App() {
     setError(null);
     setBusy(true);
     try {
-      const handle = await MuveeAuth.signIn(provider);
-      const popup = window.open(handle.oauthUrl, '_blank');
-      if (!popup) {
-        handle.cancel();
-        setError('Popup blocked — please allow popups for this site and retry.');
-        return;
+      // signIn is synchronous and opens the popup itself: call it directly in
+      // the click handler, before any await, so the browser doesn't block it.
+      const h = MuveeAuth.signIn(provider);
+      setHandle(h);
+      if (!h.popup) {
+        setBlockedUrl(h.url);
+        setError('Popup blocked — open the sign-in link below, or allow popups and retry.');
       }
-      const u = await handle.wait();
+      const u = await h.wait();
+      setError(null);
       setUser(u);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // A user-initiated cancel is not an error worth showing.
+      if (!(e instanceof AuthError && e.code === 'cancelled')) {
+        setError(e instanceof Error ? e.message : String(e));
+      } else {
+        setError(null);
+      }
     } finally {
+      setBlockedUrl(null);
+      setHandle(null);
       setBusy(false);
     }
   };
@@ -49,8 +60,8 @@ export function App() {
       <section style={styles.card}>
         <h1 style={styles.h1}>@muvee/auth demo</h1>
         <p style={styles.muted}>
-          Polled <code>login_token</code> flow — open the provider in a new tab,
-          finish sign-in, close the tab. This page poll-detects success.
+          Popup flow — sign in in the popup window; this page detects success
+          once the popup finishes.
         </p>
 
         {user ? (
@@ -84,6 +95,18 @@ export function App() {
         )}
 
         {error && <p style={styles.error}>{error}</p>}
+        {blockedUrl && (
+          <p style={styles.muted}>
+            <a href={blockedUrl} target="muvee-sign-in">Open sign-in window</a>
+          </p>
+        )}
+        {handle && (
+          <p style={styles.muted}>
+            <button onClick={() => handle.cancel()} style={styles.signOutBtn}>
+              Cancel
+            </button>
+          </p>
+        )}
       </section>
     </main>
   );

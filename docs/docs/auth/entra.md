@@ -13,7 +13,7 @@ single set of credentials:
 | Plane | Who signs in | Toggle |
 |---|---|---|
 | Platform | muvee control-panel users (`muvee_session`) | `platform_entra_login_enabled` |
-| Project | end users of a project subdomain, through ForwardAuth (`muvee_fwd_session`) | `entra_enabled` |
+| Project | end users of a project subdomain, through ForwardAuth (`__Host-muvee_fwd`) | `entra_enabled` |
 
 Unlike Google / Feishu / WeCom / DingTalk, Entra is **not** configured with environment variables:
 everything lives in **Admin → Settings** (stored in `system_settings`), so no redeploy is needed.
@@ -38,6 +38,11 @@ reading is the reference behind it.
    https://example.com/_oauth/entra          # project subdomains (ForwardAuth)
    ```
    Both can live on the same app registration — add only the ones for the planes you enable.
+
+   Project sessions are isolated per subdomain, but the callback stays on the base domain's apex
+   (`/_oauth/entra`): you do **not** register a URI per project. Sign-in also works only on hosts under a
+   base domain, never on a custom domain outside them. See
+   [ForwardAuth → Session Flow](../forward-auth#session-flow).
 
    :::note Multi-domain
    If you serve muvee under multiple base domains (`BASE_DOMAINS`), add **both** URIs for **each**

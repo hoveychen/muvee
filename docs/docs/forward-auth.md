@@ -41,19 +41,41 @@ traefik.http.routers.{proj}.middlewares={proj}-auth
 
 ## Session Flow
 
+Each project subdomain keeps its **own** session. There is no longer a cookie shared across `*.BASE_DOMAIN`: a session obtained on `a.BASE_DOMAIN` is useless on `b.BASE_DOMAIN`, so one deployed app can never replay a visitor's session against another.
+
 1. User visits `{project}.domain.com`
 2. Traefik calls ForwardAuth sidecar with the request headers
-3. Sidecar checks `muvee_fwd_session` cookie (JWT)
-4. If missing/expired: redirect to the configured OAuth provider (`/_oauth` callback on `BASE_DOMAIN`)
-5. After login: set JWT cookie (domain-wide, shared across all `*.BASE_DOMAIN` subdomains), redirect back to original URL
+3. Sidecar checks the subsite session cookie `__Host-muvee_fwd` (JWT, host-only on that subdomain and bound to that project)
+4. If missing/expired: a page load is redirected (302) to `{project}.domain.com/_oauth/login`. That page first asks the **central sign-in host** (the apex, i.e. the host of `FORWARD_AUTH_BASE_URL`) for a silent sign-in (`/_oauth/authorize?prompt=none`):
+   - If the apex already holds a valid SSO session (`__Host-muvee_sso`), it issues a single-use code valid for 60 seconds, the subdomain exchanges it for its own `__Host-muvee_fwd`, and the user lands back on the original URL **without ever seeing a login page**.
+   - Otherwise the login page renders on the subdomain (project branding, the project's provider list, password / SMS forms). Clicking a provider goes through the apex `/_oauth/start` to the provider; the callback still lands on the apex `/_oauth/<provider>`, which signs the SSO session and sends the code back to the subdomain.
+5. Visiting a second project later repeats steps 1–4; with an SSO session at the apex it completes silently, provided the second project has enabled the provider the SSO session was signed in with. Otherwise that project's own sign-in flow runs (its login page, or a direct jump to its only provider).
 6. On subsequent requests: validate JWT, check email domain, return `200`
 
-Sessions last 7 days and slide: once a session is a day old, the next request
-that passes ForwardAuth re-issues the cookie with a fresh 7-day expiry, so a
-user who keeps coming back stays signed in. Only expiry after 7 days of
-inactivity sends them back through login. Demo-account (password) and SMS
-sessions are the exception: they keep a fixed 7-day lifetime, because nothing
-re-checks the account or phone grant behind them on each request.
+Provider redirect URIs are unchanged (`https://BASE_DOMAIN/_oauth/<provider>`); no new URI has to be registered. The apex no longer serves a login page: `BASE_DOMAIN/_oauth/login` returns `400`, because sign-in always starts from the site being visited. If a code exchange fails (for example concurrent tabs) the login page retries; after 2 attempts it shows an error page instead of looping. Sign-ins in progress when this behaviour was released are invalidated; the user just clicks sign in again.
+
+**Upgrade impact.** Session tokens must now carry the project they were issued for (`aud`), so when this release is deployed every existing subsite session is rejected on its next request. Each user goes through the provider once on their first visit to any project; after that the other projects sign in silently from the apex SSO. Device-flow (CLI) tokens issued before this release have no `aud` and are rejected immediately too; CLI users must run the device flow again against the project's host.
+
+| Credential | Cookie (production) | Lifetime |
+|------------|---------------------|----------|
+| Subsite session | `__Host-muvee_fwd` on each project host | OAuth sign-in: 12 hours, sliding (re-issued once less than 6 hours remain). Password / SMS sign-in: fixed 7 days, never renewed |
+| Central SSO session | `__Host-muvee_sso` on the apex only | 7 days, sliding (renewed at most once a day; the original sign-in time is kept) |
+
+`__Host-` cookies are enforced by the browser to be host-only (no `Domain`), `Secure` and `Path=/`. The SSO cookie is never sent to a project. Cookies from earlier releases (`muvee_fwd_session` and friends, set on the base domain) are no longer written and are deleted on sign-out, on a rejected session and when a sign-in completes. On a plain-`http` development platform (`FORWARD_AUTH_BASE_URL` starting with `http://` and `FWD_INSECURE_DEV_COOKIES=1`) the cookies fall back to their names without the `__Host-` prefix; this is not usable in production.
+
+A user who keeps coming back stays signed in through the sliding windows; after a subsite session expires it is silently renewed from the apex SSO while that is still valid, and only when the SSO has also expired does the user see the login page. Demo-account (password) and SMS sessions are the exception: they sign the subdomain in directly and never create an SSO session (so they do not sign the user into other projects). They keep a fixed 7-day lifetime, because nothing re-checks the account or phone grant behind them on each request.
+
+Invitation links work as before: the invite token travels with the return URL and is consumed at verification time, not through a cookie.
+
+### Sign-out
+
+`GET {project}.domain.com/_oauth/logout` (optional `?redirect=`, limited to a path on the same site or an `https` URL on a platform domain; anything else lands on `/_oauth/logged-out`) clears that site's cookies, revokes the session **and the SSO session it was issued from**, and sets a "signed out" hint. Every other project session issued from the same SSO then stops working on its next request and shows the signed-out page, so signing out of one project signs the user out of all of them on that base domain. It does not sign the user out of Google or any other identity provider. While the hint cookie is present the login page shows the signed-out page rather than silently signing the user back in.
+
+If the request carries `Sec-Fetch-Site` and it is not `same-origin` (for example a sign-out link on another project's page or an external site), a confirmation page is shown first and the user has to click to confirm. Typing the URL in the address bar or opening a bookmark (`Sec-Fetch-Site: none`) also shows the confirmation page; a sign-out link on a page of the same project does not. Signing out of the console still invalidates all of that user's project sessions.
+
+### Custom domains and aliases
+
+Sign-in is only supported on hosts under a platform base domain. A custom domain outside every base domain cannot sign in through ForwardAuth, and a base domain's apex cannot be registered as a project alias (the server rejects it).
 
 When a session is missing or expired, a page load (step 4) is redirected to the
 login page, but a `fetch` / XHR call from page script gets
@@ -65,7 +87,7 @@ act on. Every project page already handles it through the injected
 goes through login and lands back where they were.
 
 :::info How the OAuth callback is routed
-The `/_oauth` path on `BASE_DOMAIN` is routed by Traefik directly to `muvee-authservice` (not to the main web UI). This is configured via Traefik labels on the `muvee-authservice` container in `docker-compose.yml`. Because Traefik gives higher priority to the more specific `Host + Path` rule, `BASE_DOMAIN/_oauth` is correctly handled by the auth sidecar while all other `BASE_DOMAIN` paths continue to reach `muvee-server`.
+The `/_oauth` path on `BASE_DOMAIN` is routed by Traefik directly to `muvee-authservice` (not to the main web UI). The apex `/_oauth` is now taken over by a high-priority central route generated by `muvee-server`, which clears any `X-Muvee-Aud`; the Traefik labels on the `muvee-authservice` container in `docker-compose.yml` can stay. Because Traefik gives higher priority to the more specific `Host + Path` rule, `BASE_DOMAIN/_oauth` is correctly handled by the auth sidecar while all other `BASE_DOMAIN` paths continue to reach `muvee-server`. `FORWARD_AUTH_BASE_URL` must be the base domain's apex, because the server only generates the central `/_oauth` route for the apex.
 :::
 
 ## Auth Bypass Paths
@@ -85,6 +107,10 @@ muveectl projects update PROJECT_ID --auth-bypass-paths "/health
 | `/api/public/*` | Any path starting with `/api/public/` |
 
 Each bypass path creates a higher-priority Traefik router that routes directly to the service without the ForwardAuth middleware.
+
+## Traefik Dashboard
+
+The Traefik dashboard (`traefik.BASE_DOMAIN`) is treated as one more subsite with its own independent session. The `docker-compose.yml` / `docker-compose.server.yml` templates route `traefik.BASE_DOMAIN/_oauth` to `muvee-authservice` and inject `X-Muvee-Aud=host:traefik.BASE_DOMAIN`. For project subdomains `muvee-server` injects the trusted `X-Muvee-Aud` itself and overwrites any client-supplied value; on the central host the header is stripped.
 
 ## Public Projects
 

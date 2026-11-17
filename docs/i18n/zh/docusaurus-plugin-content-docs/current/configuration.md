@@ -51,7 +51,7 @@ sidebar_position: 3
 | `GOOGLE_CLIENT_ID` | — | 与控制平面相同 |
 | `GOOGLE_CLIENT_SECRET` | — | 与控制平面相同 |
 | `FORWARD_AUTH_REDIRECT_URL` | `http://localhost:4181/_oauth` | ForwardAuth 的 OAuth2 回调 URL。生产环境设置为 `https://BASE_DOMAIN/_oauth`，并在 Google Cloud Console 中与 `GOOGLE_REDIRECT_URL` 一起注册。 |
-| `BASE_DOMAIN` | — | 根域名。必填，用于将 session cookie 共享给所有 `*.BASE_DOMAIN` 子域名（如 `traefik.BASE_DOMAIN`、各 project 子域名）。 |
+| `BASE_DOMAIN` | — | 根域名。必填：它决定中心登录主机（基域 apex）和 OAuth 回调地址。子站会话是各主机（`traefik.BASE_DOMAIN`、各 project 子域名）上的 host-only cookie，不在 `*.BASE_DOMAIN` 间共享。`FORWARD_AUTH_BASE_URL` 必须是基域 apex，因为 server 只为 apex 生成中心 `/_oauth` 路由。 |
 | `JWT_SECRET` | — | 必须与控制平面的值一致 |
 | `ADMIN_EMAILS` | — | 必须与控制平面的值一致；用于控制 `/verify-admin`（Traefik 控制台）访问权限 |
 
@@ -84,8 +84,8 @@ BASE_DOMAINS=muveeai.com,muvee.ai
 
 `BASE_DOMAIN` 仍是 canonical 回退值（当请求 host 不匹配任何已配置域名时使用）。每个请求 muvee 会解析出 host 所属的根域名，因此以下都跟随用户实际所在的域名：
 
-- **认证 cookie** 按匹配到的根域名设置 Domain（在 `muvee.ai` 登录得到 `.muvee.ai` cookie，在其子域名间共享）。
-- **OAuth redirect_uri** rebase 到匹配的根域名，并保持每个域名单一 canonical host（如 `https://app.muvee.ai/_oauth/google`），使项目子域名仍经面板/authservice host 中转。
+- **中心登录主机与认证 cookie** 跟随匹配到的根域名：中心登录主机是该根域名的 apex（`FORWARD_AUTH_BASE_URL` rebase 到该域名），子站会话是各主机上的 host-only cookie，不在子域名间共享。
+- **OAuth redirect_uri** rebase 到匹配的根域名，并保持每个域名单一 canonical host（如 `https://muvee.ai/_oauth/google`），使项目子域名仍经该根域名 apex（中心登录主机）中转。
 - **Traefik 路由**用单条 OR 的 `Host()` 规则匹配每个项目/隧道前缀在各根域名下的 host，每个 host 各签一张证书。
 - **CORS / 来源**校验接受每个已配置根域名的 canonical 来源及其任一子域名。
 
