@@ -70,7 +70,7 @@ func TestConsoleLogoutRevokesFwdSessions_PG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.New: %v", err)
 	}
-	s := &Server{store: st, auth: authSvc, tunnels: newTunnelRegistry(), baseDomain: "opencws.top"}
+	s := &Server{store: st, auth: authSvc, tunnels: newTunnelRegistry(), baseDomain: "site-a.test"}
 
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO users (email, name, role) VALUES ('revoke-pg@example.com', 'rv', 'member')

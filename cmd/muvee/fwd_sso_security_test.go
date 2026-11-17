@@ -303,8 +303,8 @@ func TestSec_InsecureDevCookiesOnlyOnPlainHTTP(t *testing.T) {
 		wantDev         bool
 		wantName        string
 	}{
-		{"https + FWD_INSECURE_DEV_COOKIES=1 (production)", "https://sigma-fi.com", "1", false, "__Host-muvee_fwd"},
-		{"https, no variable", "https://sigma-fi.com", "", false, "__Host-muvee_fwd"},
+		{"https + FWD_INSECURE_DEV_COOKIES=1 (production)", "https://site-b.test", "1", false, "__Host-muvee_fwd"},
+		{"https, no variable", "https://site-b.test", "", false, "__Host-muvee_fwd"},
 		{"http + variable (local dev)", "http://localhost:8080", "1", true, fwdSessionCookieBase},
 		{"http, no variable", "http://localhost:8080", "", false, "__Host-muvee_fwd"},
 	}

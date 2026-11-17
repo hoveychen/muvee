@@ -11,13 +11,13 @@ import (
 )
 
 // withRedirectDomains pins the platform base domains for a test: two aliases,
-// mirroring a BASE_DOMAINS=opencws.top,sigma-fi.com deployment.
+// mirroring a BASE_DOMAINS=site-a.test,site-b.test deployment.
 func withRedirectDomains(t *testing.T) {
 	t.Helper()
 	prevBase, prevDomain, prevBases := forwardAuthBase, cookieDomain, cookieBaseDomains
-	forwardAuthBase = "https://opencws.top"
-	cookieDomain = "opencws.top"
-	cookieBaseDomains = []string{"opencws.top", "sigma-fi.com"}
+	forwardAuthBase = "https://site-a.test"
+	cookieDomain = "site-a.test"
+	cookieBaseDomains = []string{"site-a.test", "site-b.test"}
 	t.Cleanup(func() {
 		forwardAuthBase, cookieDomain, cookieBaseDomains = prevBase, prevDomain, prevBases
 	})
@@ -33,32 +33,32 @@ func TestSafeReturnURL(t *testing.T) {
 		host string // inbound host
 		ok   bool
 	}{
-		{"/", "datamap.sigma-fi.com", true},
-		{"/deep/link?x=1#f", "datamap.sigma-fi.com", true},
-		{"https://datamap.sigma-fi.com/after", "datamap.sigma-fi.com", true},
-		{"https://other.opencws.top/", "datamap.sigma-fi.com", true},
-		{"https://sigma-fi.com/", "datamap.sigma-fi.com", true},
-		{"http://proj.opencws.top/", "proj.opencws.top", false},    // platform runs on https
+		{"/", "datamap.site-b.test", true},
+		{"/deep/link?x=1#f", "datamap.site-b.test", true},
+		{"https://datamap.site-b.test/after", "datamap.site-b.test", true},
+		{"https://other.site-a.test/", "datamap.site-b.test", true},
+		{"https://site-b.test/", "datamap.site-b.test", true},
+		{"http://proj.site-a.test/", "proj.site-a.test", false},    // platform runs on https
 		{"https://tunnel.cfdemo.com/x", "tunnel.cfdemo.com", true}, // same host, outside bases
-		{"", "proj.opencws.top", false},
-		{"//evil.com", "proj.opencws.top", false},
-		{"//evil.com/path", "proj.opencws.top", false},
-		{"/\\evil.com", "proj.opencws.top", false},
-		{"\\\\evil.com", "proj.opencws.top", false},
-		{"/\t/evil.com", "proj.opencws.top", false},
-		{"/\n/evil.com", "proj.opencws.top", false},
-		{"https://evil.com/", "proj.opencws.top", false},
-		{"https://evilopencws.top/", "proj.opencws.top", false},
-		{"https://opencws.top.evil.com/", "proj.opencws.top", false},
-		{"https://user@evil.com/", "proj.opencws.top", false},
-		{"https://opencws.top@evil.com/", "proj.opencws.top", false},
-		{"https://evil.com\\@proj.opencws.top/", "proj.opencws.top", false},
-		{"javascript:alert(1)", "proj.opencws.top", false},
-		{"data:text/html,x", "proj.opencws.top", false},
-		{"evil.com", "proj.opencws.top", false},
-		{"ftp://proj.opencws.top/", "proj.opencws.top", false},
-		{"https:evil.com", "proj.opencws.top", false},
-		{"https:/evil.com", "proj.opencws.top", false},
+		{"", "proj.site-a.test", false},
+		{"//evil.com", "proj.site-a.test", false},
+		{"//evil.com/path", "proj.site-a.test", false},
+		{"/\\evil.com", "proj.site-a.test", false},
+		{"\\\\evil.com", "proj.site-a.test", false},
+		{"/\t/evil.com", "proj.site-a.test", false},
+		{"/\n/evil.com", "proj.site-a.test", false},
+		{"https://evil.com/", "proj.site-a.test", false},
+		{"https://evilsite-a.test/", "proj.site-a.test", false},
+		{"https://site-a.test.evil.com/", "proj.site-a.test", false},
+		{"https://user@evil.com/", "proj.site-a.test", false},
+		{"https://site-a.test@evil.com/", "proj.site-a.test", false},
+		{"https://evil.com\\@proj.site-a.test/", "proj.site-a.test", false},
+		{"javascript:alert(1)", "proj.site-a.test", false},
+		{"data:text/html,x", "proj.site-a.test", false},
+		{"evil.com", "proj.site-a.test", false},
+		{"ftp://proj.site-a.test/", "proj.site-a.test", false},
+		{"https:evil.com", "proj.site-a.test", false},
+		{"https:/evil.com", "proj.site-a.test", false},
 	}
 	for _, tt := range tests {
 		got, ok := safeReturnURL(tt.raw, tt.host)
@@ -87,8 +87,8 @@ func doLogout(t *testing.T, host, query string) *http.Response {
 // port 80 in clear text.
 func TestSafeReturnURL_HTTPOnlyOnHTTPPlatform(t *testing.T) {
 	withRedirectDomains(t)
-	forwardAuthBase = "http://opencws.top"
-	if _, ok := safeReturnURL("http://proj.opencws.top/", "proj.opencws.top"); !ok {
+	forwardAuthBase = "http://site-a.test"
+	if _, ok := safeReturnURL("http://proj.site-a.test/", "proj.site-a.test"); !ok {
 		t.Fatal("http return URL refused on an http platform")
 	}
 }
@@ -98,13 +98,13 @@ func TestFwdLogout_RedirectTargets(t *testing.T) {
 	tests := []struct {
 		name, host, query, want string
 	}{
-		{"default lands on logged-out page", "datamap.sigma-fi.com", "", "/_oauth/logged-out"},
-		{"relative path kept", "datamap.sigma-fi.com", "?redirect=/bye", "/bye"},
-		{"same-platform absolute kept", "datamap.sigma-fi.com", "?redirect=https://www.opencws.top/", "https://www.opencws.top/"},
-		{"external host refused", "datamap.sigma-fi.com", "?redirect=https://evil.com/", "/_oauth/logged-out"},
-		{"protocol-relative refused", "datamap.sigma-fi.com", "?redirect=//evil.com", "/_oauth/logged-out"},
-		{"backslash trick refused", "datamap.sigma-fi.com", "?redirect=/%5Cevil.com", "/_oauth/logged-out"},
-		{"tab trick refused", "datamap.sigma-fi.com", "?redirect=/%09/evil.com", "/_oauth/logged-out"},
+		{"default lands on logged-out page", "datamap.site-b.test", "", "/_oauth/logged-out"},
+		{"relative path kept", "datamap.site-b.test", "?redirect=/bye", "/bye"},
+		{"same-platform absolute kept", "datamap.site-b.test", "?redirect=https://www.site-a.test/", "https://www.site-a.test/"},
+		{"external host refused", "datamap.site-b.test", "?redirect=https://evil.com/", "/_oauth/logged-out"},
+		{"protocol-relative refused", "datamap.site-b.test", "?redirect=//evil.com", "/_oauth/logged-out"},
+		{"backslash trick refused", "datamap.site-b.test", "?redirect=/%5Cevil.com", "/_oauth/logged-out"},
+		{"tab trick refused", "datamap.site-b.test", "?redirect=/%09/evil.com", "/_oauth/logged-out"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,8 +125,8 @@ func TestFwdLogout_RedirectTargets(t *testing.T) {
 func TestFwdLogout_ClearsSessionHostOnlyAndLegacyOnRequestBaseDomain(t *testing.T) {
 	withRedirectDomains(t)
 	for host, wantLegacyDomain := range map[string]string{
-		"datamap.sigma-fi.com": "sigma-fi.com",
-		"proj.opencws.top":     "opencws.top",
+		"datamap.site-b.test": "site-b.test",
+		"proj.site-a.test":    "site-a.test",
 	} {
 		res := doLogout(t, host, "?redirect=https://evil.com/")
 		got := findCookie(res.Cookies(), "__Host-muvee_fwd")
@@ -153,16 +153,16 @@ func TestPostLoginRedirect(t *testing.T) {
 		name, cookie, want string
 	}{
 		{"no cookie", "", "/"},
-		{"same-host page kept", "https://datamap.sigma-fi.com/deep?x=1", "https://datamap.sigma-fi.com/deep?x=1"},
+		{"same-host page kept", "https://datamap.site-b.test/deep?x=1", "https://datamap.site-b.test/deep?x=1"},
 		{"relative kept", "/deep?x=1", "/deep?x=1"},
-		{"other platform host refused (was: alias base kept)", "https://proj.opencws.top/", "/"},
-		{"sibling refused", "https://evil.sigma-fi.com/phish", "/"},
+		{"other platform host refused (was: alias base kept)", "https://proj.site-a.test/", "/"},
+		{"sibling refused", "https://evil.site-b.test/phish", "/"},
 		{"tossed external refused", "https://evil.com/phish", "/"},
 		{"tossed protocol-relative refused", "//evil.com", "/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := subsiteReq("datamap.sigma-fi.com")
+			r := subsiteReq("datamap.site-b.test")
 			r.URL = &url.URL{Path: "/_oauth/session"}
 			if tt.cookie != "" {
 				r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: tt.cookie})
@@ -174,14 +174,14 @@ func TestPostLoginRedirect(t *testing.T) {
 		})
 	}
 	t.Run("legacy shared cookie name ignored", func(t *testing.T) {
-		r := subsiteReq("datamap.sigma-fi.com")
-		r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://datamap.sigma-fi.com/deep"})
+		r := subsiteReq("datamap.site-b.test")
+		r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://datamap.site-b.test/deep"})
 		if got := takePostLoginRedirect(httptest.NewRecorder(), r); got != "/" {
 			t.Fatalf("legacy cookie followed: %q", got)
 		}
 	})
 	t.Run("single use", func(t *testing.T) {
-		r := subsiteReq("datamap.sigma-fi.com")
+		r := subsiteReq("datamap.site-b.test")
 		r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: "/deep"})
 		w := httptest.NewRecorder()
 		takePostLoginRedirect(w, r)
@@ -214,8 +214,8 @@ func TestPasswordLogin_TossedReturnCookieRefused(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/_oauth/password", strings.NewReader("username=u&password=p"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Host = "datamap.sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
+	r.Host = "datamap.site-b.test"
+	r.Header.Set("X-Forwarded-Host", "datamap.site-b.test")
 	r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: "https://evil.com/phish"})
 	r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.com/phish"})
 	w := httptest.NewRecorder()
@@ -247,8 +247,8 @@ func TestLoggedOutPage(t *testing.T) {
 
 	for _, lang := range []string{"zh-CN", "en-US"} {
 		r := httptest.NewRequest("GET", "/_oauth/logged-out", nil)
-		r.Host = "datamap.sigma-fi.com"
-		r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
+		r.Host = "datamap.site-b.test"
+		r.Header.Set("X-Forwarded-Host", "datamap.site-b.test")
 		r.Header.Set("Accept-Language", lang)
 		w := httptest.NewRecorder()
 		handleLoggedOutPage(w, r)

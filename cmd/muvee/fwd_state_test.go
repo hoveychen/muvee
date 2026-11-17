@@ -73,7 +73,7 @@ func flipByte(s string, i int) string {
 // 子站自己的 host-only __Host-fwd_state 封存 cookie（writeSubsiteState/readSubsiteState）。
 func TestSubsiteState_RoundTrip(t *testing.T) {
 	withStateSecret(t)
-	host := "datamap.sigma-fi.com"
+	host := "datamap.site-b.test"
 	w := httptest.NewRecorder()
 	nonce := writeSubsiteState(w, subsiteReq(host), 1, true)
 	if strings.ContainsAny(nonce, "&=+/ ") || len(nonce) == 0 {
@@ -111,16 +111,16 @@ func TestSubsiteState_RoundTrip(t *testing.T) {
 func TestSubsiteState_BoundToHost(t *testing.T) {
 	withStateSecret(t)
 	w := httptest.NewRecorder()
-	writeSubsiteState(w, subsiteReq("datamap.sigma-fi.com"), 0, false)
-	for _, other := range []string{"evil.sigma-fi.com", "datamap.opencws.top", "sigma-fi.com"} {
+	writeSubsiteState(w, subsiteReq("datamap.site-b.test"), 0, false)
+	for _, other := range []string{"evil.site-b.test", "datamap.site-a.test", "site-b.test"} {
 		r := subsiteReq(other)
 		carryCookies(w, r)
 		if _, ok := readSubsiteState(r); ok {
-			t.Errorf("state minted on datamap.sigma-fi.com accepted on %s", other)
+			t.Errorf("state minted on datamap.site-b.test accepted on %s", other)
 		}
 	}
 	// Host comparison is case-insensitive (NormalizeHost), same host still ok.
-	r := subsiteReq("DataMap.Sigma-Fi.com")
+	r := subsiteReq("DataMap.Site-B.test")
 	carryCookies(w, r)
 	if _, ok := readSubsiteState(r); !ok {
 		t.Error("same host with different case rejected")
@@ -129,7 +129,7 @@ func TestSubsiteState_BoundToHost(t *testing.T) {
 
 func TestSubsiteState_RejectsTamperedExpiredForeign(t *testing.T) {
 	withStateSecret(t)
-	host := "datamap.sigma-fi.com"
+	host := "datamap.site-b.test"
 	good := subsiteState{Host: host, Nonce: "n0nce"}
 	valid := sealValue("fwd-state", good)
 	read := func(cookies ...*http.Cookie) bool {
@@ -159,7 +159,7 @@ func TestSubsiteState_RejectsTamperedExpiredForeign(t *testing.T) {
 		"expired":              sealAt("fwd-state", good, time.Now().Add(-loginStateLifetime-time.Minute)),
 		"issued in future":     sealAt("fwd-state", good, time.Now().Add(10*time.Minute)),
 		"other purpose":        sealValue("apex-state", good),
-		"cookie of other host": sealValue("fwd-state", subsiteState{Host: "evil.sigma-fi.com", Nonce: "n"}),
+		"cookie of other host": sealValue("fwd-state", subsiteState{Host: "evil.site-b.test", Nonce: "n"}),
 	}
 	for label, v := range bad {
 		if read(&http.Cookie{Name: name, Value: v}) {
@@ -187,12 +187,12 @@ func TestSubsiteState_RejectsTamperedExpiredForeign(t *testing.T) {
 func TestSealedStates_RejectLoginTokenState(t *testing.T) {
 	withStateSecret(t)
 	lt, _ := signState(stateClaims{Mode: "login-token", LoginToken: "x"})
-	r := subsiteReq("datamap.sigma-fi.com")
+	r := subsiteReq("datamap.site-b.test")
 	r.AddCookie(&http.Cookie{Name: hostCookieName(fwdStateCookieBase), Value: lt})
 	if _, ok := readSubsiteState(r); ok {
 		t.Error("login-token state accepted as subsite state")
 	}
-	r = subsiteReq("sigma-fi.com")
+	r = subsiteReq("site-b.test")
 	r.AddCookie(&http.Cookie{Name: hostCookieName(apexStateCookieBase), Value: lt})
 	if _, ok := readApexState(httptest.NewRecorder(), r, lt); ok {
 		t.Error("login-token state accepted as apex state")
@@ -244,8 +244,8 @@ func TestApexStateF1(t *testing.T) {
 
 func centralReq(withState string, cookies ...*http.Cookie) (*httptest.ResponseRecorder, *http.Request) {
 	r := httptest.NewRequest("GET", "/_oauth/google?code=x&state="+url.QueryEscape(withState), nil)
-	r.Host = "sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "sigma-fi.com")
+	r.Host = "site-b.test"
+	r.Header.Set("X-Forwarded-Host", "site-b.test")
 	for _, c := range cookies {
 		r.AddCookie(c)
 	}
@@ -258,7 +258,7 @@ func apexCookie(v string) *http.Cookie {
 
 func TestReadApexState(t *testing.T) {
 	withStateSecret(t)
-	st := apexState{Host: "datamap.sigma-fi.com", Aud: "project:p1", State: "sub-state", Nonce: randomToken(18), Mode: "login", Provider: "google"}
+	st := apexState{Host: "datamap.site-b.test", Aud: "project:p1", State: "sub-state", Nonce: randomToken(18), Mode: "login", Provider: "google"}
 	sealed := sealValue("apex-state", st)
 	f1 := apexStateF1(st.Nonce)
 
@@ -328,7 +328,7 @@ func TestReadApexState(t *testing.T) {
 		legacy := fmt.Sprintf("%d", time.Now().UnixNano())
 		for label, cookies := range map[string][]*http.Cookie{
 			"numeric state + shared fwd_oauth_state": {{Name: "fwd_oauth_state", Value: legacy}},
-			"shared state + host cookie":             {{Name: "fwd_oauth_state", Value: legacy}, {Name: "fwd_oauth_host", Value: "datamap.sigma-fi.com"}},
+			"shared state + host cookie":             {{Name: "fwd_oauth_state", Value: legacy}, {Name: "fwd_oauth_host", Value: "datamap.site-b.test"}},
 			"bare-name apex cookie":                  {{Name: apexStateCookieBase, Value: sealed}},
 		} {
 			w, r := centralReq(legacy, cookies...)
@@ -357,7 +357,7 @@ func TestReadApexState(t *testing.T) {
 func TestLoginPage_ProviderStartUsesSubsiteState(t *testing.T) {
 	withSingleGoogleProject(t)
 	withStateSecret(t)
-	r := subsiteReq("datamap.sigma-fi.com")
+	r := subsiteReq("datamap.site-b.test")
 	r.URL = &url.URL{Path: "/_oauth/login", RawQuery: "provider=google"}
 	w := httptest.NewRecorder()
 	handleLoginPage(w, r)
@@ -368,14 +368,14 @@ func TestLoginPage_ProviderStartUsesSubsiteState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Scheme+"://"+u.Host != "https://sigma-fi.com" || u.Path != "/_oauth/start" {
+	if u.Scheme+"://"+u.Host != "https://site-b.test" || u.Path != "/_oauth/start" {
 		t.Fatalf("Location = %s, want the central host's /_oauth/start", u)
 	}
 	q := u.Query()
-	if q.Get("host") != "datamap.sigma-fi.com" || q.Get("provider") != "google" || q.Get("state") == "" {
+	if q.Get("host") != "datamap.site-b.test" || q.Get("provider") != "google" || q.Get("state") == "" {
 		t.Fatalf("start query = %v", q)
 	}
-	r2 := subsiteReq("datamap.sigma-fi.com")
+	r2 := subsiteReq("datamap.site-b.test")
 	carryCookies(w, r2)
 	st, ok := readSubsiteState(r2)
 	if !ok || st.Nonce != q.Get("state") {
@@ -395,9 +395,9 @@ func TestLoginPage_ProviderStartUsesSubsiteState(t *testing.T) {
 // startRequest is GET <central>/_oauth/start for the platform's traefik.<base>
 // dashboard host (a sign-in target that needs no server lookup).
 func startRequest(provider, state, extra string) *http.Request {
-	r := httptest.NewRequest("GET", "/_oauth/start?host=traefik.sigma-fi.com&provider="+provider+"&state="+url.QueryEscape(state)+extra, nil)
-	r.Host = "sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "sigma-fi.com")
+	r := httptest.NewRequest("GET", "/_oauth/start?host=traefik.site-b.test&provider="+provider+"&state="+url.QueryEscape(state)+extra, nil)
+	r.Host = "site-b.test"
+	r.Header.Set("X-Forwarded-Host", "site-b.test")
 	return r
 }
 
@@ -416,7 +416,7 @@ func TestSSOStart_WritesApexStateAndSendsF1(t *testing.T) {
 	if !openValue("apex-state", c.Value, loginStateLifetime, &st) {
 		t.Fatal("apex state cookie does not open")
 	}
-	if st.Host != "traefik.sigma-fi.com" || st.Aud != "host:traefik.sigma-fi.com" || st.State != "sub-state-1" ||
+	if st.Host != "traefik.site-b.test" || st.Aud != "host:traefik.site-b.test" || st.State != "sub-state-1" ||
 		st.Mode != "login" || st.Provider != "faketwitter" || st.Nonce == "" {
 		t.Fatalf("apex state = %+v", st)
 	}
@@ -434,7 +434,7 @@ func TestSSOStart_RefusesNonCentralHostAndBadState(t *testing.T) {
 	withFakeCallbackUpstream(t)
 	// A tenant host is not the central host: /_oauth/start is not served there.
 	r := startRequest("faketwitter", "s", "")
-	r.Host, r.Header["X-Forwarded-Host"] = "datamap.sigma-fi.com", []string{"datamap.sigma-fi.com"}
+	r.Host, r.Header["X-Forwarded-Host"] = "datamap.site-b.test", []string{"datamap.site-b.test"}
 	w := httptest.NewRecorder()
 	handleSSOStart(w, r)
 	if w.Code != http.StatusNotFound {
@@ -455,8 +455,8 @@ func TestSSOStart_RefusesNonCentralHostAndBadState(t *testing.T) {
 // callbackRequest is the provider's redirect back to the central host.
 func callbackRequest(state string, cookies ...*http.Cookie) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, "/_oauth/faketwitter?code=authcode&state="+url.QueryEscape(state), nil)
-	r.Host = "sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "sigma-fi.com")
+	r.Host = "site-b.test"
+	r.Header.Set("X-Forwarded-Host", "site-b.test")
 	for _, c := range cookies {
 		r.AddCookie(c)
 	}
@@ -488,14 +488,14 @@ func loginApexState(host, aud, subsiteState string) apexState {
 // 带一次性 code 302 回发起登录的子站 /_oauth/session；兄弟子站甩来的 fwd_oauth_redirect / 旧 host cookie 无法改向。
 func TestOAuthCallback_SignsCentralSSOAndRedirectsToStartingHost(t *testing.T) {
 	withFakeCallbackUpstream(t)
-	st := loginApexState("datamap.sigma-fi.com", "project:p1", "sub-state-2")
+	st := loginApexState("datamap.site-b.test", "project:p1", "sub-state-2")
 	f1 := apexStateF1(st.Nonce)
 	w := httptest.NewRecorder()
 	handleOAuthCallback(w, callbackRequest(f1,
 		apexCookie(sealValue("apex-state", st)),
-		&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.sigma-fi.com/phish"},
-		&http.Cookie{Name: hostCookieName(fwdRedirectCookieBase), Value: "https://evil.sigma-fi.com/phish"},
-		&http.Cookie{Name: "fwd_oauth_host", Value: "evil.sigma-fi.com"},
+		&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.site-b.test/phish"},
+		&http.Cookie{Name: hostCookieName(fwdRedirectCookieBase), Value: "https://evil.site-b.test/phish"},
+		&http.Cookie{Name: "fwd_oauth_host", Value: "evil.site-b.test"},
 		&http.Cookie{Name: signedOutHintCookie, Value: "1"},
 	))
 	if w.Code != http.StatusFound {
@@ -505,14 +505,14 @@ func TestOAuthCallback_SignsCentralSSOAndRedirectsToStartingHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loc.Scheme+"://"+loc.Host+loc.Path != "https://datamap.sigma-fi.com/_oauth/session" {
+	if loc.Scheme+"://"+loc.Host+loc.Path != "https://datamap.site-b.test/_oauth/session" {
 		t.Fatalf("Location = %s, want the starting subsite's /_oauth/session", loc)
 	}
 	if loc.Query().Get("state") != "sub-state-2" || loc.Query().Get("code") == "" {
 		t.Fatalf("Location query = %v", loc.Query())
 	}
 	code, ok := takeSSOCode(loc.Query().Get("code"))
-	if !ok || code.Host != "datamap.sigma-fi.com" || code.Aud != "project:p1" ||
+	if !ok || code.Host != "datamap.site-b.test" || code.Aud != "project:p1" ||
 		code.StateDigest != stateDigest("sub-state-2") || code.ID.UserID != "u1" {
 		t.Fatalf("minted code = %+v, ok=%v", code, ok)
 	}
@@ -520,7 +520,7 @@ func TestOAuthCallback_SignsCentralSSOAndRedirectsToStartingHost(t *testing.T) {
 	if sso == nil || sso.Value == "" || sso.Domain != "" || !sso.Secure || !sso.HttpOnly || sso.Path != "/" {
 		t.Fatalf("SSO cookie %+v is not a host-only __Host- cookie", sso)
 	}
-	if _, err := parseFwdToken(sso.Value, ssoAudience("sigma-fi.com"), fwdKindSSO); err != nil {
+	if _, err := parseFwdToken(sso.Value, ssoAudience("site-b.test"), fwdKindSSO); err != nil {
 		t.Fatalf("SSO cookie is not a valid SSO token for the central host: %v", err)
 	}
 	if _, err := parseFwdToken(sso.Value, "project:p1", fwdKindSession, fwdKindSSO); err == nil {
@@ -539,7 +539,7 @@ func TestOAuthCallback_SignsCentralSSOAndRedirectsToStartingHost(t *testing.T) {
 // 只认 apex 封存 cookie + f1；其余全部 400，且不会签发任何 cookie / code。
 func TestOAuthCallback_OldStateFormatsAndSharedCookiesRejected(t *testing.T) {
 	withFakeCallbackUpstream(t)
-	st := loginApexState("datamap.sigma-fi.com", "project:p1", "sub")
+	st := loginApexState("datamap.site-b.test", "project:p1", "sub")
 	sealed := sealValue("apex-state", st)
 	f1 := apexStateF1(st.Nonce)
 	legacy := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -548,9 +548,9 @@ func TestOAuthCallback_OldStateFormatsAndSharedCookiesRejected(t *testing.T) {
 		"old numeric state, no cookie":             callbackRequest(legacy),
 		"old device- state matching shared cookie": callbackRequest("device-"+newStateNonce(), &http.Cookie{Name: "fwd_oauth_state", Value: "device-x"}),
 		"old signed state + host cookie": callbackRequest("fwd1.abc", &http.Cookie{Name: "fwd_oauth_state", Value: "fwd1.abc"},
-			&http.Cookie{Name: "fwd_oauth_host", Value: "datamap.sigma-fi.com"}),
+			&http.Cookie{Name: "fwd_oauth_host", Value: "datamap.site-b.test"}),
 		"valid f1 but no apex cookie":          callbackRequest(f1),
-		"valid f1 with only legacy cookies":    callbackRequest(f1, &http.Cookie{Name: "fwd_oauth_state", Value: f1}, &http.Cookie{Name: "fwd_oauth_host", Value: "datamap.sigma-fi.com"}),
+		"valid f1 with only legacy cookies":    callbackRequest(f1, &http.Cookie{Name: "fwd_oauth_state", Value: f1}, &http.Cookie{Name: "fwd_oauth_host", Value: "datamap.site-b.test"}),
 		"apex cookie but f1 of another nonce":  callbackRequest(apexStateF1(randomToken(18)), apexCookie(sealed)),
 		"apex cookie but cookie sealed as raw": callbackRequest(f1, apexCookie(sealed[:len(sealed)-1]+"A")),
 		"apex cookie but empty state":          callbackRequest("", apexCookie(sealed)),
@@ -576,7 +576,7 @@ func TestOAuthCallback_OldStateFormatsAndSharedCookiesRejected(t *testing.T) {
 // it; re-sending the same provider URL (back button, replay) is refused.
 func TestOAuthCallback_ReplayAfterCookieBurnedRejected(t *testing.T) {
 	withFakeCallbackUpstream(t)
-	st := loginApexState("datamap.sigma-fi.com", "project:p1", "sub-3")
+	st := loginApexState("datamap.site-b.test", "project:p1", "sub-3")
 	f1 := apexStateF1(st.Nonce)
 	w := httptest.NewRecorder()
 	handleOAuthCallback(w, callbackRequest(f1, apexCookie(sealValue("apex-state", st))))
@@ -611,11 +611,11 @@ func TestSSOStartThenCallback_EndToEnd(t *testing.T) {
 		t.Fatalf("callback: status=%d body=%s", cw.Code, cw.Body.String())
 	}
 	back, _ := url.Parse(cw.Header().Get("Location"))
-	if back.Host != "traefik.sigma-fi.com" || back.Path != "/_oauth/session" || back.Query().Get("state") != "sub-e2e" {
+	if back.Host != "traefik.site-b.test" || back.Path != "/_oauth/session" || back.Query().Get("state") != "sub-e2e" {
 		t.Fatalf("callback Location = %s", back)
 	}
 	code, ok := takeSSOCode(back.Query().Get("code"))
-	if !ok || code.Aud != "host:traefik.sigma-fi.com" {
+	if !ok || code.Aud != "host:traefik.site-b.test" {
 		t.Fatalf("code = %+v ok=%v", code, ok)
 	}
 	// A tab that started a different login cannot finish this one: its f1 does
@@ -647,8 +647,8 @@ func registerDeviceEntry(t *testing.T, userCode, aud, host string) *deviceFlowEn
 // （Mode=device + UserCode），伪造的 device- state / 不匹配的 aud / 不存在的 user code 一律 400。
 func TestOAuthCallback_DeviceFlowViaApexState(t *testing.T) {
 	withFakeCallbackUpstream(t)
-	entry := registerDeviceEntry(t, "DEVCODE1", "project:p1", "datamap.sigma-fi.com")
-	st := apexState{Host: "datamap.sigma-fi.com", Aud: "project:p1", Nonce: randomToken(18), Mode: "device", UserCode: "DEVCODE1", Provider: "faketwitter"}
+	entry := registerDeviceEntry(t, "DEVCODE1", "project:p1", "datamap.site-b.test")
+	st := apexState{Host: "datamap.site-b.test", Aud: "project:p1", Nonce: randomToken(18), Mode: "device", UserCode: "DEVCODE1", Provider: "faketwitter"}
 	w := httptest.NewRecorder()
 	handleOAuthCallback(w, callbackRequest(apexStateF1(st.Nonce), apexCookie(sealValue("apex-state", st))))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Device authorized") {
@@ -664,7 +664,7 @@ func TestOAuthCallback_DeviceFlowViaApexState(t *testing.T) {
 	}
 
 	// Rejections: nothing completes.
-	other := registerDeviceEntry(t, "DEVCODE2", "project:p2", "other.sigma-fi.com")
+	other := registerDeviceEntry(t, "DEVCODE2", "project:p2", "other.site-b.test")
 	bad := map[string]*http.Request{
 		"forged device- state": callbackRequest("device-forged", &http.Cookie{Name: "fwd_oauth_state", Value: "device-forged"}),
 		"live user code but old device- state": func() *http.Request {
@@ -697,8 +697,8 @@ func TestOAuthCallback_DeviceFlowViaApexState(t *testing.T) {
 
 func TestSSOStart_DeviceModeBoundToEntry(t *testing.T) {
 	withFakeCallbackUpstream(t)
-	registerDeviceEntry(t, "DEVSTART", "host:traefik.sigma-fi.com", "traefik.sigma-fi.com")
-	registerDeviceEntry(t, "DEVELSE1", "project:p9", "other.sigma-fi.com")
+	registerDeviceEntry(t, "DEVSTART", "host:traefik.site-b.test", "traefik.site-b.test")
+	registerDeviceEntry(t, "DEVELSE1", "project:p9", "other.site-b.test")
 
 	w := httptest.NewRecorder()
 	handleSSOStart(w, startRequest("faketwitter", "", "&mode=device&user_code=devs-tart"))
@@ -729,17 +729,17 @@ func TestSameHostReturnURL(t *testing.T) {
 	tests := []struct {
 		name, raw, inbound, want string
 	}{
-		{"same host absolute kept", "https://datamap.sigma-fi.com/deep?x=1", "datamap.sigma-fi.com", "https://datamap.sigma-fi.com/deep?x=1"},
-		{"relative kept", "/after", "datamap.sigma-fi.com", "/after"},
-		{"relative with query and invite token kept", "/p?invite_token=T#f", "datamap.sigma-fi.com", "/p?invite_token=T#f"},
-		{"sibling refused", "https://evil.sigma-fi.com/phish", "datamap.sigma-fi.com", "/"},
-		{"alias base refused", "https://x.opencws.top/", "datamap.sigma-fi.com", "/"},
-		{"platform apex refused", "https://sigma-fi.com/", "datamap.sigma-fi.com", "/"},
-		{"external refused", "https://evil.com/", "datamap.sigma-fi.com", "/"},
-		{"protocol-relative refused", "//evil.com", "datamap.sigma-fi.com", "/"},
-		{"empty", "", "datamap.sigma-fi.com", "/"},
+		{"same host absolute kept", "https://datamap.site-b.test/deep?x=1", "datamap.site-b.test", "https://datamap.site-b.test/deep?x=1"},
+		{"relative kept", "/after", "datamap.site-b.test", "/after"},
+		{"relative with query and invite token kept", "/p?invite_token=T#f", "datamap.site-b.test", "/p?invite_token=T#f"},
+		{"sibling refused", "https://evil.site-b.test/phish", "datamap.site-b.test", "/"},
+		{"alias base refused", "https://x.site-a.test/", "datamap.site-b.test", "/"},
+		{"platform apex refused", "https://site-b.test/", "datamap.site-b.test", "/"},
+		{"external refused", "https://evil.com/", "datamap.site-b.test", "/"},
+		{"protocol-relative refused", "//evil.com", "datamap.site-b.test", "/"},
+		{"empty", "", "datamap.site-b.test", "/"},
 		{"non-platform inbound, own absolute", "https://tunnel.cfdemo.com/x", "tunnel.cfdemo.com", "https://tunnel.cfdemo.com/x"},
-		{"non-platform inbound, platform absolute refused", "https://datamap.sigma-fi.com/", "evil.com", "/"},
+		{"non-platform inbound, platform absolute refused", "https://datamap.site-b.test/", "evil.com", "/"},
 		{"non-platform inbound keeps relative", "/x", "evil.com", "/x"},
 	}
 	for _, tt := range tests {
@@ -754,11 +754,11 @@ func TestSameHostReturnURL(t *testing.T) {
 func formLoginRequest(path, body string) *http.Request {
 	r := httptest.NewRequest("POST", path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Host = "datamap.sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
-	r.AddCookie(&http.Cookie{Name: hostCookieName(fwdRedirectCookieBase), Value: "https://evil.sigma-fi.com/phish"})
+	r.Host = "datamap.site-b.test"
+	r.Header.Set("X-Forwarded-Host", "datamap.site-b.test")
+	r.AddCookie(&http.Cookie{Name: hostCookieName(fwdRedirectCookieBase), Value: "https://evil.site-b.test/phish"})
 	// A base-domain cookie of the old name (tossed by a sibling) is not read at all.
-	r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.sigma-fi.com/old"})
+	r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.site-b.test/old"})
 	return r
 }
 
@@ -802,7 +802,7 @@ func TestFormLogins_RedirectBoundToCurrentHostAndSessionIsolated(t *testing.T) {
 		if c, err := parseFwdToken(sess.Value, "project:p1", fwdKindSession); err != nil || c.ProjectID != "p1" {
 			t.Fatalf("%s: session invalid for its own project: claims=%+v err=%v", name, c, err)
 		}
-		for _, aud := range []string{"project:p2", "host:datamap.sigma-fi.com"} {
+		for _, aud := range []string{"project:p2", "host:datamap.site-b.test"} {
 			if _, err := parseFwdToken(sess.Value, aud, fwdKindSession); err == nil {
 				t.Fatalf("%s: project session accepted for aud %q", name, aud)
 			}

@@ -75,10 +75,10 @@ func TestLoginPage_LeavesReturnCookieAlone(t *testing.T) {
 	withSingleGoogleProject(t)
 	withStateSecret(t)
 	for _, have := range []bool{false, true} {
-		r := subsiteReq("datamap.sigma-fi.com")
+		r := subsiteReq("datamap.site-b.test")
 		r.URL = &url.URL{Path: "/_oauth/login", RawQuery: "provider=google"}
 		if have {
-			r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: "https://datamap.sigma-fi.com/deep/link"})
+			r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: "https://datamap.site-b.test/deep/link"})
 		}
 		w := httptest.NewRecorder()
 		handleLoginPage(w, r)

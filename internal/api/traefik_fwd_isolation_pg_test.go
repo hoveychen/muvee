@@ -82,7 +82,7 @@ func TestTraefikConfig_FwdIsolation_PG(t *testing.T) {
 	if _, err := st.AddProjectAlias(ctx, proj.ID, "fwdiso.example.org"); err != nil {
 		t.Fatalf("add alias: %v", err)
 	}
-	if _, err := st.AddProjectAlias(ctx, proj.ID, "sigma-fi.com"); err != nil {
+	if _, err := st.AddProjectAlias(ctx, proj.ID, "site-b.test"); err != nil {
 		t.Fatalf("add apex alias: %v", err)
 	}
 
@@ -114,8 +114,8 @@ func TestTraefikConfig_FwdIsolation_PG(t *testing.T) {
 
 	s := &Server{
 		store: st, tunnels: tunnels,
-		baseDomain:       "opencws.top",
-		baseDomains:      []string{"opencws.top", "sigma-fi.com", "cfdemo.com"},
+		baseDomain:       "site-a.test",
+		baseDomains:      []string{"site-a.test", "site-b.test", "cfdemo.com"},
 		cfTunnelDomains:  []string{"cfdemo.com"},
 		authServiceURL:   "http://authservice:4181",
 		tunnelBackendURL: "http://muvee-server:8080",
@@ -195,7 +195,7 @@ func TestTraefikConfig_FwdIsolation_PG(t *testing.T) {
 
 	// The apex alias row produces no router of any kind.
 	for name, r := range cfg.HTTP.Routers {
-		if strings.Contains(r.Rule, "Host(`sigma-fi.com`)") && !strings.HasPrefix(name, "muvee-central-oauth-") {
+		if strings.Contains(r.Rule, "Host(`site-b.test`)") && !strings.HasPrefix(name, "muvee-central-oauth-") {
 			t.Errorf("router %q routes the base-domain apex: %q", name, r.Rule)
 		}
 	}
@@ -210,7 +210,7 @@ func TestTraefikConfig_FwdIsolation_PG(t *testing.T) {
 	}
 
 	// Central /_oauth routers: one per ACME base, X-Muvee-Aud cleared.
-	for _, base := range []string{"opencws.top", "sigma-fi.com"} {
+	for _, base := range []string{"site-a.test", "site-b.test"} {
 		name := centralHostRouterName(base)
 		r, ok := cfg.HTTP.Routers[name]
 		if !ok {

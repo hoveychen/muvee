@@ -36,13 +36,13 @@ func TestParseSessionIDs(t *testing.T) {
 }
 
 func TestIsBaseDomainApex(t *testing.T) {
-	s := &Server{baseDomain: "opencws.top", baseDomains: []string{"opencws.top", "sigma-fi.com"}}
+	s := &Server{baseDomain: "site-a.test", baseDomains: []string{"site-a.test", "site-b.test"}}
 	for host, want := range map[string]bool{
-		"opencws.top":       true,
-		"Sigma-Fi.com ":     true,
-		"a.sigma-fi.com":    false,
-		"sigma-fi.com.evil": false,
-		"":                  false,
+		"site-a.test":      true,
+		"Site-B.test ":     true,
+		"a.site-b.test":    false,
+		"site-b.test.evil": false,
+		"":                 false,
 	} {
 		if got := s.isBaseDomainApex(host); got != want {
 			t.Errorf("isBaseDomainApex(%q) = %v, want %v", host, got, want)
@@ -75,7 +75,7 @@ func TestSessionIDRevocation_PG(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	st := store.New(pool)
-	s := &Server{store: st, tunnels: newTunnelRegistry(), baseDomain: "opencws.top", baseDomains: []string{"opencws.top", "sigma-fi.com"}}
+	s := &Server{store: st, tunnels: newTunnelRegistry(), baseDomain: "site-a.test", baseDomains: []string{"site-a.test", "site-b.test"}}
 
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO users (email, name, role) VALUES ('sid-revoke@example.com', 'sr', 'member')
@@ -229,21 +229,21 @@ func TestSessionIDRevocation_PG(t *testing.T) {
 		code := call(s.handleInternalProjectByHost, http.MethodGet, "/api/internal/projects/by-host", q, nil, &out)
 		return code, out
 	}
-	if code, out := byHost("sid-revoke.sigma-fi.com", false); code != 200 || out["aud"] != "project:"+proj.ID.String() {
+	if code, out := byHost("sid-revoke.site-b.test", false); code != 200 || out["aud"] != "project:"+proj.ID.String() {
 		t.Errorf("by-host project aud: %d %v", code, out["aud"])
 	}
 	tunnelPrefix := "t-sidrev-" + sfx
 	s.tunnels.register(tunnelPrefix, &tunnelConn{})
-	if code, _ := byHost(tunnelPrefix+".opencws.top", false); code != 404 {
+	if code, _ := byHost(tunnelPrefix+".site-a.test", false); code != 404 {
 		t.Errorf("tunnel without include_tunnel: %d, want 404", code)
 	}
-	if code, out := byHost(tunnelPrefix+".sigma-fi.com", true); code != 200 || out["aud"] != "host:"+tunnelPrefix || out["project_id"] != nil {
+	if code, out := byHost(tunnelPrefix+".site-b.test", true); code != 200 || out["aud"] != "host:"+tunnelPrefix || out["project_id"] != nil {
 		t.Errorf("tunnel aud: %d %v", code, out)
 	}
-	if code, _ := byHost("t-not-connected-"+sfx+".opencws.top", true); code != 404 {
+	if code, _ := byHost("t-not-connected-"+sfx+".site-a.test", true); code != 404 {
 		t.Errorf("unknown tunnel: %d, want 404", code)
 	}
-	if code, _ := byHost("sigma-fi.com", true); code != 404 {
+	if code, _ := byHost("site-b.test", true); code != 404 {
 		t.Errorf("apex: %d, want 404", code)
 	}
 }

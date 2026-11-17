@@ -24,9 +24,9 @@ import (
 )
 
 const (
-	epCentral   = "sigma-fi.com"
-	epApp       = "app.sigma-fi.com"
-	epTunnel    = "t1.sigma-fi.com"
+	epCentral   = "site-b.test"
+	epApp       = "app.site-b.test"
+	epTunnel    = "t1.site-b.test"
 	epProjectID = "ep-proj-1"
 	epAud       = "project:" + epProjectID
 	epUserID    = "33333333-3333-3333-3333-333333333333"
@@ -132,7 +132,7 @@ func epProjectJSON(id, aud, enabled string) string {
 	return string(b)
 }
 
-// epEnv pins two base domains (central hosts opencws.top and sigma-fi.com), a
+// epEnv pins two base domains (central hosts site-a.test and site-b.test), a
 // fake provider "faketwitter" and the muvee-server stub.
 func epEnv(t *testing.T) *epStub {
 	t.Helper()
@@ -140,13 +140,13 @@ func epEnv(t *testing.T) *epStub {
 	st := &epStub{
 		revokedSIDs: map[string]bool{},
 		hosts: map[string]string{
-			epApp:                     epProjectJSON(epProjectID, epAud, ""),
-			"onlyfeishu.sigma-fi.com": epProjectJSON("ep-proj-2", "project:ep-proj-2", "feishu"),
-			"nop.sigma-fi.com":        epProjectJSON("ep-proj-3", "project:ep-proj-3", "none"),
-			epTunnel:                  `{"tunnel":true,"aud":"host:` + epTunnel + `"}`,
-			"badaud.sigma-fi.com":     epProjectJSON("ep-proj-4", "project:someone-else", ""),
-			"app.custom.com":          epProjectJSON("ep-proj-5", "project:ep-proj-5", ""), // known to the server, outside the base domains
-			"app.opencws.top":         epProjectJSON("ep-proj-6", "project:ep-proj-6", ""), // other base domain
+			epApp:                    epProjectJSON(epProjectID, epAud, ""),
+			"onlyfeishu.site-b.test": epProjectJSON("ep-proj-2", "project:ep-proj-2", "feishu"),
+			"nop.site-b.test":        epProjectJSON("ep-proj-3", "project:ep-proj-3", "none"),
+			epTunnel:                 `{"tunnel":true,"aud":"host:` + epTunnel + `"}`,
+			"badaud.site-b.test":     epProjectJSON("ep-proj-4", "project:someone-else", ""),
+			"app.custom.com":         epProjectJSON("ep-proj-5", "project:ep-proj-5", ""), // known to the server, outside the base domains
+			"app.site-a.test":        epProjectJSON("ep-proj-6", "project:ep-proj-6", ""), // other base domain
 		},
 	}
 	srv := httptest.NewServer(st)
@@ -171,7 +171,7 @@ func epReq(method, host, path string, q url.Values) *http.Request {
 
 var epIdentity = fwdIdentity{UserID: epUserID, Email: "u@corp.example", Name: "U", Provider: "faketwitter"}
 
-// epSSOCookie is a live central SSO session of the sigma-fi.com central host.
+// epSSOCookie is a live central SSO session of the site-b.test central host.
 func epSSOCookie(t *testing.T) (*http.Cookie, string) {
 	t.Helper()
 	sid := "sso-" + randomToken(8)
@@ -211,9 +211,9 @@ func TestEP_Authorize_LiveSSOMintsCodeBoundToTarget(t *testing.T) {
 	epEnv(t)
 	sso, ssoSID := epSSOCookie(t)
 	for host, wantAud := range map[string]string{
-		epApp:                  epAud,
-		epTunnel:               "host:" + epTunnel,
-		"traefik.sigma-fi.com": "host:traefik.sigma-fi.com",
+		epApp:                 epAud,
+		epTunnel:              "host:" + epTunnel,
+		"traefik.site-b.test": "host:traefik.site-b.test",
 	} {
 		w := epAuthorize(host, "sub-state-"+host, sso)
 		if w.Code != http.StatusFound {
@@ -258,7 +258,7 @@ func TestEP_Authorize_NoSSOPromptNoneBouncesBackWithSSONone(t *testing.T) {
 		t.Fatalf("Location = %s, want https://%s/_oauth/login?sso=none&state=sub-state-9 and no code", loc, epApp)
 	}
 	// A garbage / foreign-audience SSO cookie is the same as none (and is cleared).
-	other, _ := signSSOSession(epIdentity, "opencws.top", "x", time.Now().Unix()) // SSO of the other central host
+	other, _ := signSSOSession(epIdentity, "site-a.test", "x", time.Now().Unix()) // SSO of the other central host
 	w = epAuthorize(epApp, "s", &http.Cookie{Name: fwdCookieName(ssoCookieBase), Value: other})
 	if l := epLoc(t, w); l.Query().Get("sso") != "none" || l.Query().Get("code") != "" {
 		t.Fatalf("SSO of another central host accepted: %s", l)
@@ -319,7 +319,7 @@ func TestEP_Authorize_ProviderNotEnabledForProjectIsSSONone(t *testing.T) {
 	if l := epLoc(t, epAuthorize(epApp, "s", sso)); l.Query().Get("code") == "" {
 		t.Fatalf("control: allowed provider did not mint a code: %s", l)
 	}
-	for _, host := range []string{"onlyfeishu.sigma-fi.com", "nop.sigma-fi.com"} {
+	for _, host := range []string{"onlyfeishu.site-b.test", "nop.site-b.test"} {
 		w := epAuthorize(host, "s", sso)
 		l := epLoc(t, w)
 		if l.Host != host || l.Path != "/_oauth/login" || l.Query().Get("sso") != "none" || l.Query().Get("code") != "" {
@@ -338,12 +338,12 @@ func TestEP_Authorize_RefusesNonSignInHosts(t *testing.T) {
 	cases := map[string]string{
 		"outside every base domain (even if the server knows it)": "app.custom.com",
 		"external host":                     "evil.com",
-		"the base-domain apex itself":       "sigma-fi.com",
-		"the other base domain's apex":      "opencws.top",
-		"a host of the other base domain":   "app.opencws.top",
-		"unknown to by-host (404)":          "ghost.sigma-fi.com",
-		"by-host answers with a bad aud":    "badaud.sigma-fi.com",
-		"the central host with a subdomain": "x.y.sigma-fi.com",
+		"the base-domain apex itself":       "site-b.test",
+		"the other base domain's apex":      "site-a.test",
+		"a host of the other base domain":   "app.site-a.test",
+		"unknown to by-host (404)":          "ghost.site-b.test",
+		"by-host answers with a bad aud":    "badaud.site-b.test",
+		"the central host with a subdomain": "x.y.site-b.test",
 		"empty":                             "",
 	}
 	for label, host := range cases {
@@ -487,7 +487,7 @@ func TestEP_Session_FailuresSignNothingAndCountRetry(t *testing.T) {
 		"query state != cookie nonce": {QueryState: "attacker-state", DigestOfState: "attacker-state"},
 		"code bound to another state": {DigestOfState: "some-other-state"},
 		"no __Host-fwd_state cookie":  {NoStateCookie: true},
-		"code bound to another host":  {ReqHost: "evil.sigma-fi.com", AudHeader: epAud}, // cookie + state valid on evil, code is for app
+		"code bound to another host":  {ReqHost: "evil.site-b.test", AudHeader: epAud}, // cookie + state valid on evil, code is for app
 	}
 	for label, o := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -678,11 +678,11 @@ func TestEP_Logout_SameOriginRevokesBothSIDsAndClears(t *testing.T) {
 func TestEP_Logout_RedirectTargets(t *testing.T) {
 	epEnv(t)
 	for q, want := range map[string]string{
-		"?redirect=/bye":                                           "/bye",
-		"?redirect=https%3A%2F%2Fevil.com%2F":                      loggedOutPath,
-		"?redirect=%2F%2Fevil.com":                                 loggedOutPath,
-		"?redirect=javascript%3Aalert(1)":                          loggedOutPath,
-		"?redirect=https%3A%2F%2Fevil.com.sigma-fi.com.evil.io%2F": loggedOutPath,
+		"?redirect=/bye":                                          "/bye",
+		"?redirect=https%3A%2F%2Fevil.com%2F":                     loggedOutPath,
+		"?redirect=%2F%2Fevil.com":                                loggedOutPath,
+		"?redirect=javascript%3Aalert(1)":                         loggedOutPath,
+		"?redirect=https%3A%2F%2Fevil.com.site-b.test.evil.io%2F": loggedOutPath,
 		"": loggedOutPath,
 	} {
 		r, _, _ := epLogoutReq(t, "same-origin", q)
@@ -952,13 +952,13 @@ func TestEP_RouteAudience(t *testing.T) {
 	}
 	for _, viaXFH := range []bool{true, false} {
 		// Central hosts: the header is ignored, even a forged one.
-		for _, host := range []string{"sigma-fi.com", "SIGMA-FI.com", "opencws.top"} {
+		for _, host := range []string{"site-b.test", "SITE-B.test", "site-a.test"} {
 			if got := routeAudience(hdr(host, "project:victim", viaXFH)); got != "" {
 				t.Errorf("central host %s (xfh=%v): routeAudience = %q, want empty", host, viaXFH, got)
 			}
 		}
 		// Subsites: the injected value.
-		for _, host := range []string{epApp, "app.opencws.top", epTunnel, "app.custom.com"} {
+		for _, host := range []string{epApp, "app.site-a.test", epTunnel, "app.custom.com"} {
 			if got := routeAudience(hdr(host, "project:p9", viaXFH)); got != "project:p9" {
 				t.Errorf("subsite %s (xfh=%v): routeAudience = %q, want project:p9", host, viaXFH, got)
 			}
@@ -967,7 +967,7 @@ func TestEP_RouteAudience(t *testing.T) {
 			}
 		}
 	}
-	if got := routeAudience(hdr(epApp, "  host:x.sigma-fi.com  ", true)); got != "host:x.sigma-fi.com" {
+	if got := routeAudience(hdr(epApp, "  host:x.site-b.test  ", true)); got != "host:x.site-b.test" {
 		t.Errorf("header not trimmed: %q", got)
 	}
 }
@@ -1011,7 +1011,7 @@ func TestEP_UserInfo_CentralHostNeverReturnsIdentity(t *testing.T) {
 	for label, w := range map[string]*httptest.ResponseRecorder{
 		"cookie":     epUserinfo(epCentral, epAud, cookie, ""),
 		"bearer":     epUserinfo(epCentral, epAud, nil, tok),
-		"other base": epUserinfo("opencws.top", epAud, cookie, ""),
+		"other base": epUserinfo("site-a.test", epAud, cookie, ""),
 	} {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s: status %d, want 401", label, w.Code)

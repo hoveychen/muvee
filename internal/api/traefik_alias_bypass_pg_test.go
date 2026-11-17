@@ -126,8 +126,8 @@ func TestTraefikConfig_AliasBypassService_PG(t *testing.T) {
 
 	s := &Server{
 		store: st, tunnels: newTunnelRegistry(),
-		baseDomain:       "opencws.top",
-		baseDomains:      []string{"opencws.top", "sigma-fi.com"},
+		baseDomain:       "site-a.test",
+		baseDomains:      []string{"site-a.test", "site-b.test"},
 		authServiceURL:   "http://authservice:4181",
 		tunnelBackendURL: "http://muvee-server:8080",
 	}

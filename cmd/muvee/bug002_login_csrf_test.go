@@ -16,11 +16,11 @@ import (
 
 // BUG-20261117-002: login CSRF through base-domain state cookies.
 //
-// Any tenant subdomain (evil.sigma-fi.com) can write cookies with
-// Domain=sigma-fi.com. If the OAuth callback on the central host trusts a state
+// Any tenant subdomain (evil.site-b.test) can write cookies with
+// Domain=site-b.test. If the OAuth callback on the central host trusts a state
 // cookie a sibling can write, the tenant plants a state of its choosing in the
 // victim's browser and sends the victim to
-// https://sigma-fi.com/_oauth/<p>?state=<that state>&code=<attacker's code>:
+// https://site-b.test/_oauth/<p>?state=<that state>&code=<attacker's code>:
 // the victim ends up signed in as the attacker (classic login CSRF), or — with
 // a device-flow state — the attacker's CLI ends up holding the victim's
 // identity. Only cookies a sibling cannot write (`__Host-` prefixed, which
@@ -31,9 +31,9 @@ import (
 func csrfEnv(t *testing.T) {
 	t.Helper()
 	prevBase, prevDomain, prevBases, prevSecret := forwardAuthBase, cookieDomain, cookieBaseDomains, jwtSecret
-	forwardAuthBase = "https://opencws.top"
-	cookieDomain = "opencws.top"
-	cookieBaseDomains = []string{"opencws.top", "sigma-fi.com"}
+	forwardAuthBase = "https://site-a.test"
+	cookieDomain = "site-a.test"
+	cookieBaseDomains = []string{"site-a.test", "site-b.test"}
 	jwtSecret = []byte("test-secret")
 	t.Cleanup(func() {
 		forwardAuthBase, cookieDomain, cookieBaseDomains, jwtSecret = prevBase, prevDomain, prevBases, prevSecret
@@ -50,12 +50,12 @@ func csrfEnv(t *testing.T) {
 }
 
 // plantedCallback is the victim's browser landing on the central callback with
-// only the cookies a sibling tenant could have planted (Domain=sigma-fi.com).
+// only the cookies a sibling tenant could have planted (Domain=site-b.test).
 func plantedCallback(state string, planted map[string]string) *http.Request {
 	r := httptest.NewRequest(http.MethodGet,
 		"/_oauth/faketwitter?code=attacker-code&state="+url.QueryEscape(state), nil)
-	r.Host = "sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "sigma-fi.com")
+	r.Host = "site-b.test"
+	r.Header.Set("X-Forwarded-Host", "site-b.test")
 	r.Header.Set("X-Forwarded-Proto", "https")
 	for name, value := range planted {
 		if strings.HasPrefix(name, "__Host-") {
@@ -126,17 +126,17 @@ func TestBUG002_PlantedDeviceStateDoesNotHandOverVictim(t *testing.T) {
 // subdomain can never plant a __Host- cookie in the victim's browser (the
 // plantedCallback guard panics on one), so the strongest attack left is to
 // replay the harvested f1 in the callback URL together with the cookie value
-// under names a sibling CAN set (Domain=sigma-fi.com): the unprefixed
+// under names a sibling CAN set (Domain=site-b.test): the unprefixed
 // apexStateCookieBase and the pre-upgrade fwd_oauth_state. The service must
 // ignore them (it reads only fwdCookieName(apexStateCookieBase)).
 
 const (
-	attackerHost    = "evil.sigma-fi.com"
+	attackerHost    = "evil.site-b.test"
 	attackerProject = "99999999-9999-9999-9999-999999999999"
 )
 
 // attackerStart is the attacker's browser (its own cookie jar, Host
-// sigma-fi.com = the central host of that base domain) calling /_oauth/start
+// site-b.test = the central host of that base domain) calling /_oauth/start
 // for its own project host. It returns the provider state from the redirect
 // and the __Host-fwd_apex_state cookie it was handed.
 func attackerStart(t *testing.T, extra url.Values) (string, *http.Cookie) {
@@ -160,8 +160,8 @@ func attackerStart(t *testing.T, extra url.Values) (string, *http.Cookie) {
 		q[k] = v
 	}
 	r := httptest.NewRequest(http.MethodGet, "/_oauth/start?"+q.Encode(), nil)
-	r.Host = "sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "sigma-fi.com")
+	r.Host = "site-b.test"
+	r.Header.Set("X-Forwarded-Host", "site-b.test")
 	r.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	handleSSOStart(w, r)

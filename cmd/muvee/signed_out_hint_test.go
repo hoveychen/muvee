@@ -37,8 +37,8 @@ func hintCookieName() string { return fwdCookieName(signedOutHintCookie) }
 func TestFwdLogout_SetsSignedOutHint(t *testing.T) {
 	withRedirectDomains(t)
 	for host, wantLegacyDomain := range map[string]string{
-		"datamap.sigma-fi.com": "sigma-fi.com",
-		"proj.opencws.top":     "opencws.top",
+		"datamap.site-b.test": "site-b.test",
+		"proj.site-a.test":    "site-a.test",
 	} {
 		for _, q := range []string{"", "?redirect=/bye", "?redirect=https://evil.com/"} {
 			cs := doLogout(t, host, q).Cookies()
@@ -76,8 +76,8 @@ func withSingleGoogleProject(t *testing.T) {
 func doLoginPage(t *testing.T, hint bool, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/_oauth/login"+query, nil)
-	r.Host = "datamap.sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
+	r.Host = "datamap.site-b.test"
+	r.Header.Set("X-Forwarded-Host", "datamap.site-b.test")
 	r.Header.Set("X-Forwarded-Proto", "https")
 	if hint {
 		r.AddCookie(&http.Cookie{Name: hintCookieName(), Value: "1"})
@@ -100,15 +100,15 @@ func TestLoginPage_SingleProviderAutoRedirectsWithoutHint(t *testing.T) {
 
 	w := doLoginPage(t, false, "")
 	loc, _ := url.Parse(w.Header().Get("Location"))
-	if w.Code != http.StatusFound || loc.Host != "sigma-fi.com" || loc.Path != "/_oauth/authorize" ||
-		loc.Query().Get("prompt") != "none" || loc.Query().Get("host") != "datamap.sigma-fi.com" || loc.Query().Get("state") == "" {
+	if w.Code != http.StatusFound || loc.Host != "site-b.test" || loc.Path != "/_oauth/authorize" ||
+		loc.Query().Get("prompt") != "none" || loc.Query().Get("host") != "datamap.site-b.test" || loc.Query().Get("state") == "" {
 		t.Fatalf("status=%d Location=%q, want 302 to the central silent authorize", w.Code, w.Header().Get("Location"))
 	}
 
 	w = doLoginPage(t, false, "?sso=none")
 	loc, _ = url.Parse(w.Header().Get("Location"))
-	if w.Code != http.StatusFound || loc.Host != "sigma-fi.com" || loc.Path != "/_oauth/start" ||
-		loc.Query().Get("provider") != "google" || loc.Query().Get("host") != "datamap.sigma-fi.com" || loc.Query().Get("state") == "" {
+	if w.Code != http.StatusFound || loc.Host != "site-b.test" || loc.Path != "/_oauth/start" ||
+		loc.Query().Get("provider") != "google" || loc.Query().Get("host") != "datamap.site-b.test" || loc.Query().Get("state") == "" {
 		t.Fatalf("sso=none: status=%d Location=%q, want 302 to central /_oauth/start?provider=google", w.Code, w.Header().Get("Location"))
 	}
 }
@@ -171,8 +171,8 @@ func TestPasswordLogin_ClearsSignedOutHint(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/_oauth/password", strings.NewReader("username=u&password=p"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Host = "datamap.sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
+	r.Host = "datamap.site-b.test"
+	r.Header.Set("X-Forwarded-Host", "datamap.site-b.test")
 	r.AddCookie(&http.Cookie{Name: hintCookieName(), Value: "1"})
 	w := httptest.NewRecorder()
 	handlePasswordLogin(w, r)
@@ -192,7 +192,7 @@ func TestPasswordLogin_ClearsSignedOutHint(t *testing.T) {
 func TestSSOSession_ClearsSignedOutHint(t *testing.T) {
 	withRedirectDomains(t)
 	withStateSecret(t)
-	host := "datamap.sigma-fi.com"
+	host := "datamap.site-b.test"
 	w0 := httptest.NewRecorder()
 	nonce := writeSubsiteState(w0, subsiteReq(host), 0, false)
 	code := mintSSOCode(&ssoCode{
