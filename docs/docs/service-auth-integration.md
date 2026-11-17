@@ -86,7 +86,7 @@ https://myapp.example.com/_oauth/logout?redirect=/goodbye
 
 Sign-out also leaves a `muvee_fwd_signed_out` marker cookie. Until the user signs in again, the login page shows the sign-in button instead of jumping straight to a single OAuth provider, so an old tab that reloads after sign-out (e.g. the auth-guard noticing the expired session) does not quietly sign the user back in.
 
-The session cookie is shared by every project under the same base domain, so signing out of one project signs the user out of all of them. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console.
+The session cookie is shared by every project under the same base domain, so signing out of one project signs the user out of all of them. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console. The reverse does apply: signing out of the muvee console also ends the user's project sessions on every device and every base domain — the next request to any project asks them to sign in again. Bearer tokens obtained through the device flow below are not affected (tokens issued before muvee v1.40.6 are, since they cannot be told apart from sessions).
 
 ## CLI / Headless Access (Device Flow)
 

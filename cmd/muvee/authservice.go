@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,8 +46,20 @@ type authClaims struct {
 	// (those roam across subdomains and rely on per-project ACL checks
 	// instead). handleVerify enforces the binding.
 	ProjectID string `json:"project_id,omitempty"`
+	// Kind tells a browser subsite session (fwdKindSession) from a CLI
+	// device-flow token (fwdKindCLI); both are the same JWT shape. Console
+	// logout revokes the former wherever it is presented, cookie or Bearer, so
+	// a session cookie lifted before the logout cannot be replayed as a Bearer
+	// header; CLI tokens are left alone (BACKLOG-20261117-007). Tokens signed
+	// before this claim existed carry "" (see sessionRevocable).
+	Kind string `json:"kind,omitempty"`
 	jwt.RegisteredClaims
 }
+
+const (
+	fwdKindSession = "session"
+	fwdKindCLI     = "cli"
+)
 
 var (
 	// fwdProvidersAtomic is the source-of-truth for the active provider set.
@@ -287,19 +301,120 @@ func runAuthservice() {
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
 
-// resolveAuthClaims extracts auth claims from the request, trying the session
-// cookie first, then falling back to an Authorization: Bearer JWT header.
-func resolveAuthClaims(r *http.Request) (*authClaims, error) {
+// credSource is where resolveRequestClaims found the credential.
+type credSource int
+
+const (
+	credCookie credSource = iota // muvee_fwd_session
+	credBearer                   // Authorization: Bearer
+)
+
+// resolveRequestClaims extracts auth claims from the request, trying the
+// session cookie first, then falling back to an Authorization: Bearer JWT
+// header. It only validates the signature and expiry: callers must go through
+// resolveAuthClaims, or (handleVerify) run the console-logout revocation check
+// themselves.
+func resolveRequestClaims(r *http.Request) (*authClaims, credSource, error) {
 	if cookie, err := r.Cookie("muvee_fwd_session"); err == nil {
 		if claims, err := parseForwardJWT(cookie.Value); err == nil {
-			return claims, nil
+			return claims, credCookie, nil
 		}
 	}
 	if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
 		token := strings.TrimPrefix(bearer, "Bearer ")
-		return parseForwardJWT(token)
+		claims, err := parseForwardJWT(token)
+		return claims, credBearer, err
 	}
-	return nil, fmt.Errorf("no credentials")
+	return nil, credCookie, fmt.Errorf("no credentials")
+}
+
+// errSessionRevoked: the subsite session predates the user's console logout.
+var errSessionRevoked = errors.New("session revoked by console logout")
+
+// errRevocationCheck: muvee-server could not answer the revocation check.
+var errRevocationCheck = errors.New("session revocation check failed")
+
+// resolveAuthClaims is resolveRequestClaims plus the console-logout
+// revocation check (BACKLOG-20261117-008). A revoked session has its cookie
+// cleared on w (with the signed-out hint, so the login page does not ride the
+// provider's live SSO straight back in) and yields errSessionRevoked; callers
+// then treat the request as unauthenticated. errRevocationCheck means
+// muvee-server was unreachable — callers fail closed.
+func resolveAuthClaims(w http.ResponseWriter, r *http.Request) (*authClaims, error) {
+	claims, src, err := resolveRequestClaims(r)
+	if err != nil {
+		return nil, err
+	}
+	if sessionRevocable(claims, src) {
+		revoked, err := checkSessionRevoked(r.Context(), claims)
+		if err != nil {
+			log.Printf("authservice: session revocation check (%s): %v", claimsSubjectForLog(claims), err)
+			return nil, errRevocationCheck
+		}
+		if revoked {
+			clearFwdSession(w, r)
+			return nil, errSessionRevoked
+		}
+	}
+	return claims, nil
+}
+
+// sessionRevocable reports whether console logout can revoke these claims: a
+// roaming user session (not a password / phone session scoped to one project,
+// which has no users row behind it). Only kind=cli device-flow tokens are
+// exempt, whatever the transport (src is kept for callers' symmetry). An
+// unmarked token signed before the kind claim is revocable even as Bearer: a
+// pre-upgrade session and a pre-upgrade CLI token look the same, and exempting
+// it would let a session cookie replayed as Bearer dodge console logout.
+func sessionRevocable(c *authClaims, src credSource) bool {
+	if c.ProjectID != "" || (c.Email == "" && c.UserID == "") {
+		return false
+	}
+	return c.Kind != fwdKindCLI
+}
+
+// sessionIssuedAt is the session's iat in unix seconds, or 0 for a session
+// signed before sessions carried one — which any revocation on record voids.
+func sessionIssuedAt(c *authClaims) int64 {
+	if c.IssuedAt == nil {
+		return 0
+	}
+	return c.IssuedAt.Unix()
+}
+
+// checkSessionRevoked asks muvee-server whether the session predates the
+// user's last console logout. Used by the paths that do not run the
+// per-project access check (which answers the same question in its own
+// query, see checkProjectAccess).
+func checkSessionRevoked(ctx context.Context, c *authClaims) (bool, error) {
+	q := url.Values{}
+	if c.Email != "" {
+		q.Set("email", c.Email)
+	} else {
+		q.Set("user_id", c.UserID)
+	}
+	q.Set("session_iat", strconv.FormatInt(sessionIssuedAt(c), 10))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		muveeServerURL+"/api/internal/auth/session-revoked?"+q.Encode(), nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("X-Muvee-Internal-Key", internalKey)
+	resp, err := internalClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("internal session check returned %d", resp.StatusCode)
+	}
+	var body struct {
+		Revoked bool `json:"revoked"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false, err
+	}
+	return body.Revoked, nil
 }
 
 // handleVerify is the Traefik ForwardAuth endpoint for regular users.
@@ -309,7 +424,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	// domains), not the browser's query string.
 	inviteToken := extractInviteTokenFromForwardedURI(r)
 
-	claims, err := resolveAuthClaims(r)
+	claims, src, err := resolveRequestClaims(r)
 	if err != nil {
 		// Unauthenticated visitor with an invite token: stash the token in a
 		// short-lived cookie so handleOAuthCallback can consume it once OAuth
@@ -338,6 +453,30 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		redirectToLogin(w, r)
 		return
+	}
+
+	// Console-logout revocation (BACKLOG-20261117-008). With a project_id the
+	// access check below answers it in the same query, at no extra cost; a
+	// verify without one (unbound tunnel) — or one about to consume an invite
+	// on the session's behalf — asks muvee-server up front.
+	projectID := r.URL.Query().Get("project_id")
+	var sessionIAT *int64
+	if sessionRevocable(claims, src) {
+		if projectID == "" || inviteToken != "" {
+			revoked, err := checkSessionRevoked(r.Context(), claims)
+			if err != nil {
+				log.Printf("authservice: session revocation check (%s): %v", claimsSubjectForLog(claims), err)
+				http.Error(w, "access check failed", http.StatusBadGateway)
+				return
+			}
+			if revoked {
+				rejectRevokedSession(w, r)
+				return
+			}
+		} else {
+			iat := sessionIssuedAt(claims)
+			sessionIAT = &iat
+		}
 	}
 
 	// Already-authenticated visitor with an invite token: consume the link
@@ -379,11 +518,15 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if projectID := r.URL.Query().Get("project_id"); projectID != "" {
-		check, err := checkProjectAccess(r.Context(), projectID, claims.Email, claims.UserID)
+	if projectID != "" {
+		check, err := checkProjectAccess(r.Context(), projectID, claims.Email, claims.UserID, sessionIAT)
 		if err != nil {
 			log.Printf("authservice: access check (project=%s user=%s): %v", projectID, claimsSubjectForLog(claims), err)
 			http.Error(w, "access check failed", http.StatusBadGateway)
+			return
+		}
+		if check.SessionRevoked {
+			rejectRevokedSession(w, r)
 			return
 		}
 		if !check.Allowed {
@@ -399,9 +542,19 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Renewal keeps the session's iat, so it never moves a session past a
+	// console logout; and it only runs once the revocation check above passed.
 	renewSessionCookie(w, r)
 	setUserHeaders(w, claims)
 	w.WriteHeader(http.StatusOK)
+}
+
+// rejectRevokedSession answers a ForwardAuth request carrying a session voided
+// by console logout: clear it, then the normal login redirect (or the 401 an
+// SPA fetch gets) — the same response an expired session would get.
+func rejectRevokedSession(w http.ResponseWriter, r *http.Request) {
+	clearFwdSession(w, r)
+	redirectToLogin(w, r)
 }
 
 // sessionLifetime is how long a muvee_fwd_session cookie (and the JWT inside
@@ -637,6 +790,9 @@ func consumeProjectInviteUpstream(ctx context.Context, userID, inviteToken strin
 type accessCheckResult struct {
 	Allowed bool   `json:"allowed"`
 	Mode    string `json:"mode"`
+	// SessionRevoked: the session predates the user's console logout. Only
+	// answered when the request sent session_iat.
+	SessionRevoked bool `json:"session_revoked"`
 }
 
 // requestAccessRedirectURL returns the absolute URL of the request-access page
@@ -663,14 +819,19 @@ func requestAccessRedirectURL(r *http.Request, projectID string) string {
 // the caller so the proxy can fail closed (502) rather than silently allow.
 // email and userID are alternatives: an email-less identity (Twitter/X and
 // other subject-keyed IdPs) sends only the user id, which the server resolves
-// through the same allow rules.
-func checkProjectAccess(ctx context.Context, projectID, email, userID string) (accessCheckResult, error) {
+// through the same allow rules. sessionIAT, when non-nil, also asks whether
+// the session predates the user's console logout (accessCheckResult.
+// SessionRevoked), answered from the users row the check reads anyway.
+func checkProjectAccess(ctx context.Context, projectID, email, userID string, sessionIAT *int64) (accessCheckResult, error) {
 	q := url.Values{}
 	q.Set("project_id", projectID)
 	if email != "" {
 		q.Set("email", email)
 	} else {
 		q.Set("user_id", userID)
+	}
+	if sessionIAT != nil {
+		q.Set("session_iat", strconv.FormatInt(*sessionIAT, 10))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		muveeServerURL+"/api/internal/access/check?"+q.Encode(), nil)
@@ -695,7 +856,11 @@ func checkProjectAccess(ctx context.Context, projectID, email, userID string) (a
 
 // handleVerifyAdmin is the Traefik ForwardAuth endpoint restricted to admin emails.
 func handleVerifyAdmin(w http.ResponseWriter, r *http.Request) {
-	claims, err := resolveAuthClaims(r)
+	claims, err := resolveAuthClaims(w, r)
+	if errors.Is(err, errRevocationCheck) {
+		http.Error(w, "access check failed", http.StatusBadGateway)
+		return
+	}
 	if err != nil {
 		redirectToLogin(w, r)
 		return
@@ -762,7 +927,11 @@ func setUserHeaders(w http.ResponseWriter, claims *authClaims) {
 // handleUserInfo returns the authenticated user's info as JSON.
 func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 	applyUserInfoCORS(w, r)
-	claims, err := resolveAuthClaims(r)
+	claims, err := resolveAuthClaims(w, r)
+	if errors.Is(err, errRevocationCheck) {
+		http.Error(w, "session check failed", http.StatusBadGateway)
+		return
+	}
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -995,6 +1164,20 @@ const signedOutHintMaxAge = 30 * 24 * 3600
 // to the logged-out page. Only the downstream (forward-auth) session is
 // touched; the muvee console's own muvee_session is managed by muvee-server.
 func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
+	clearFwdSession(w, r)
+	redirect, ok := safeReturnURL(r.URL.Query().Get("redirect"), inboundHost(r))
+	if !ok {
+		redirect = loggedOutPath
+	}
+	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+// clearFwdSession deletes the forward-auth session cookie on the request's base
+// domain and sets the signed-out hint. Shared by the subsite logout and the
+// rejection of a session revoked by console logout: both are an explicit
+// sign-out, after which a single-provider login page must not auto-redirect
+// into the provider's still-live SSO session.
+func clearFwdSession(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "muvee_fwd_session", Value: "", MaxAge: -1,
 		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
@@ -1004,11 +1187,6 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
 		Secure: true, SameSite: http.SameSiteLaxMode,
 	})
-	redirect, ok := safeReturnURL(r.URL.Query().Get("redirect"), inboundHost(r))
-	if !ok {
-		redirect = loggedOutPath
-	}
-	http.Redirect(w, r, redirect, http.StatusFound)
 }
 
 // issueFwdSession sets a freshly signed forward-auth session cookie on the
@@ -2234,7 +2412,7 @@ func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Success — issue a long-lived JWT for CLI use.
-	token, err := signForwardJWTWithExpiry(entry.UserID, entry.Email, entry.Name, entry.AvatarURL, entry.Provider, cliTokenExpiry)
+	token, err := signForwardCLIJWT(entry.UserID, entry.Email, entry.Name, entry.AvatarURL, entry.Provider, cliTokenExpiry)
 	if err != nil {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
@@ -2661,7 +2839,13 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	claims, err := resolveAuthClaims(r)
+	claims, err := resolveAuthClaims(w, r)
+	if errors.Is(err, errRevocationCheck) {
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
+			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
+		})
+		return
+	}
 	if err != nil {
 		// Save full request URL so the user lands back on this page after
 		// completing OAuth. Reuses the same cookie redirectToLogin uses.
@@ -2712,7 +2896,13 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 // caller's email comes from the JWT (not a form field) so a user can't open
 // a request on someone else's behalf.
 func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
-	claims, err := resolveAuthClaims(r)
+	claims, err := resolveAuthClaims(w, r)
+	if errors.Is(err, errRevocationCheck) {
+		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
+			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
+		})
+		return
+	}
 	if err != nil {
 		http.Redirect(w, r, "/_oauth/login", http.StatusFound)
 		return
@@ -2815,22 +3005,39 @@ func signForwardProjectJWT(email, name, avatarURL, provider, projectID string) (
 		AvatarURL: cookieSafeAvatar(avatarURL),
 		Provider:  provider,
 		ProjectID: projectID,
+		Kind:      fwdKindSession,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
 }
 
+// signForwardJWTWithExpiry signs a browser subsite session: kind "session",
+// with an issued-at time that console-logout revocation compares against.
 func signForwardJWTWithExpiry(userID, email, name, avatarURL, provider string, expiry time.Duration) (string, error) {
+	return signForwardKindJWT(userID, email, name, avatarURL, provider, fwdKindSession, expiry)
+}
+
+// signForwardCLIJWT signs a CLI device-flow Bearer token (kind "cli"), which
+// console logout does not revoke (BACKLOG-20261117-007).
+func signForwardCLIJWT(userID, email, name, avatarURL, provider string, expiry time.Duration) (string, error) {
+	return signForwardKindJWT(userID, email, name, avatarURL, provider, fwdKindCLI, expiry)
+}
+
+func signForwardKindJWT(userID, email, name, avatarURL, provider, kind string, expiry time.Duration) (string, error) {
+	now := time.Now()
 	claims := authClaims{
 		Email:     email,
 		UserID:    userID,
 		Name:      name,
 		AvatarURL: cookieSafeAvatar(avatarURL),
 		Provider:  provider,
+		Kind:      kind,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
+			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)

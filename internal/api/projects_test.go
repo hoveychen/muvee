@@ -453,7 +453,7 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 		httpsRouter.Middlewares = []string{mwName}
 
 		if dep.AuthBypassPaths != "" {
-			addBypassRouters(&cfg, name, []string{host}, httpsRouter.TLS, dep.AuthBypassPaths)
+			addBypassRouters(&cfg, name, name, []string{host}, httpsRouter.TLS, dep.AuthBypassPaths)
 		}
 
 		addDeviceFlowRouter(&cfg, name, []string{host}, httpsRouter.TLS)

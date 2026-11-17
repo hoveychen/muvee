@@ -796,6 +796,11 @@ type AccessCheckResult struct {
 	Mode    string
 	UserID  uuid.UUID
 	IsAdmin bool
+	// FwdSessionsRevokedAt is users.fwd_sessions_revoked_at: the user's last
+	// console logout, before which every subsite session is void. Read in the
+	// same query that resolves the user so the per-request access check costs
+	// no extra round trip (BACKLOG-20261117-008).
+	FwdSessionsRevokedAt *time.Time
 }
 
 // IsProjectAccessAllowedByEmail decides whether a user (looked up by email)
@@ -806,14 +811,17 @@ type AccessCheckResult struct {
 func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string, projectID uuid.UUID) (AccessCheckResult, error) {
 	var res AccessCheckResult
 	var role UserRole
-	err := s.db.QueryRow(ctx, `SELECT id, role FROM users WHERE email = $1`, email).Scan(&res.UserID, &role)
+	var revokedAt *time.Time
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at FROM users WHERE email = $1`, email).Scan(&res.UserID, &role, &revokedAt)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
 	if err != nil {
 		return res, err
 	}
-	return s.projectAccessForUser(ctx, res.UserID, role, projectID)
+	res, err = s.projectAccessForUser(ctx, res.UserID, role, projectID)
+	res.FwdSessionsRevokedAt = revokedAt
+	return res, err
 }
 
 // IsProjectAccessAllowedByUserID is the user-id-keyed counterpart, used by the
@@ -828,14 +836,17 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.UUID, projectID uuid.UUID) (AccessCheckResult, error) {
 	var res AccessCheckResult
 	var role UserRole
-	err := s.db.QueryRow(ctx, `SELECT id, role FROM users WHERE id = $1`, userID).Scan(&res.UserID, &role)
+	var revokedAt *time.Time
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at FROM users WHERE id = $1`, userID).Scan(&res.UserID, &role, &revokedAt)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
 	if err != nil {
 		return res, err
 	}
-	return s.projectAccessForUser(ctx, res.UserID, role, projectID)
+	res, err = s.projectAccessForUser(ctx, res.UserID, role, projectID)
+	res.FwdSessionsRevokedAt = revokedAt
+	return res, err
 }
 
 // projectAccessForUser holds the shared allow rules, applied once the user row
@@ -870,6 +881,31 @@ func (s *Store) projectAccessForUser(ctx context.Context, userID uuid.UUID, role
 	}
 	res.Allowed = n > 0
 	return res, nil
+}
+
+// RevokeFwdSessions stamps users.fwd_sessions_revoked_at with the current
+// time: every subsite session of the user issued at or before this instant is
+// rejected by authservice from now on (console logout, BACKLOG-20261117-008).
+func (s *Store) RevokeFwdSessions(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `UPDATE users SET fwd_sessions_revoked_at = NOW() WHERE id = $1`, userID)
+	return err
+}
+
+// FwdSessionsRevokedAt returns users.fwd_sessions_revoked_at for the user
+// found by email (preferred) or id. nil means no revocation on record, or no
+// such user.
+func (s *Store) FwdSessionsRevokedAt(ctx context.Context, email string, userID uuid.UUID) (*time.Time, error) {
+	var revokedAt *time.Time
+	var err error
+	if email != "" {
+		err = s.db.QueryRow(ctx, `SELECT fwd_sessions_revoked_at FROM users WHERE email = $1`, email).Scan(&revokedAt)
+	} else {
+		err = s.db.QueryRow(ctx, `SELECT fwd_sessions_revoked_at FROM users WHERE id = $1`, userID).Scan(&revokedAt)
+	}
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return revokedAt, err
 }
 
 // ─── Project Visits (downstream service hit counter) ─────────────────────────
