@@ -5,25 +5,31 @@ import (
 	"testing"
 )
 
-// TestUserInfoCORSMultiDomain locks in the P5 contract for authservice:
-// /_oauth/userinfo (and the other SDK endpoints that route through
-// applyUserInfoCORS) must echo the Origin for a subdomain of ANY configured
-// base domain, so a project SPA on foo.muvee.ai can fetch it cross-origin with
-// credentials — not just subdomains of the canonical cookieDomain.
-func TestUserInfoCORSMultiDomain(t *testing.T) {
-	prevDomain, prevBases := cookieDomain, cookieBaseDomains
+// TestUserInfoCORSSameOriginOnly locks in BACKLOG-20261117-007: /_oauth/userinfo
+// (and the SDK endpoints routed through applyUserInfoCORS) echo Origin only for
+// the subsite's own origin. Another subsite of the same base domain is
+// same-site, so its credentialed fetch would carry this subsite's session;
+// it must not be allowed to read the reply.
+func TestUserInfoCORSSameOriginOnly(t *testing.T) {
+	prevDomain, prevBases, prevBase := cookieDomain, cookieBaseDomains, forwardAuthBase
 	cookieDomain = "muveeai.com"
 	cookieBaseDomains = []string{"muveeai.com", "muvee.ai"}
-	t.Cleanup(func() { cookieDomain, cookieBaseDomains = prevDomain, prevBases })
+	forwardAuthBase = "https://muveeai.com"
+	t.Cleanup(func() { cookieDomain, cookieBaseDomains, forwardAuthBase = prevDomain, prevBases, prevBase })
 
 	tests := []struct {
-		origin    string
-		wantEcho  bool
+		origin   string
+		wantEcho bool
 	}{
-		{"https://foo.muveeai.com", true}, // canonical base subdomain
-		{"https://foo.muvee.ai", true},    // second base-domain subdomain
-		{"https://muvee.ai", true},        // second base apex
+		{"https://foo.muvee.ai", true},       // own origin
+		{"https://FOO.muvee.ai", true},       // host case-insensitive
+		{"https://bar.muvee.ai", false},      // sibling subsite, same site
+		{"https://muvee.ai", false},          // base apex
+		{"https://foo.muveeai.com", false},   // same label, other base
+		{"http://foo.muvee.ai", false},       // wrong scheme
+		{"https://foo.muvee.ai:8443", false}, // port
 		{"https://evil.example.org", false},
+		{"null", false},
 	}
 	for _, tt := range tests {
 		req := httptest.NewRequest("GET", "https://foo.muvee.ai/_oauth/userinfo", nil)
@@ -38,6 +44,9 @@ func TestUserInfoCORSMultiDomain(t *testing.T) {
 		}
 		if !tt.wantEcho && got != "" {
 			t.Errorf("origin %q: expected no CORS echo, got %q", tt.origin, got)
+		}
+		if w.Header().Get("Vary") != "Origin" {
+			t.Errorf("origin %q: Vary = %q, want Origin", tt.origin, w.Header().Get("Vary"))
 		}
 	}
 }

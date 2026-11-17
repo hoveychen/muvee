@@ -935,41 +935,31 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// applyUserInfoCORS lets SPAs on any project subdomain of BASE_DOMAIN fetch
-// /_oauth/userinfo cross-origin with credentials. Origins outside the BASE_DOMAIN
-// tree are rejected by simply not echoing the Origin header back.
+// applyUserInfoCORS echoes Origin only when it is the subsite's own origin.
+// Subsite sessions are per-host __Host- cookies bound to one project, and
+// subsites are same-site with each other, so a credentialed fetch from
+// tenant A to B's /_oauth/userinfo would carry B's session: allowing A to read
+// the reply would let A identify a visitor signed in to B
+// (BACKLOG-20261117-007). Other origins get no CORS headers.
 func applyUserInfoCORS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "Origin")
 	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return
-	}
-	if !originMatchesAnyBaseDomain(origin) {
+	if origin == "" || !originIsInboundHost(origin, r) {
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
-	w.Header().Set("Vary", "Origin")
 }
 
-// originMatchesAnyBaseDomain reports whether origin is https://B or https://*.B
-// for any configured platform base domain B, falling back to the canonical
-// cookieDomain when no BASE_DOMAINS list is set. This is the multi-domain
-// widening of the CORS gate: a project SPA on a subdomain of any served apex
-// can call /_oauth/* cross-origin with credentials.
-func originMatchesAnyBaseDomain(origin string) bool {
-	bases := cookieBaseDomains
-	if len(bases) == 0 {
-		bases = []string{cookieDomain}
+// originIsInboundHost reports whether origin is <platform scheme>://<inbound
+// host> (no port, matching how subsites are served).
+func originIsInboundHost(origin string, r *http.Request) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Port() != "" || u.Scheme != platformScheme() {
+		return false
 	}
-	for _, b := range bases {
-		if b == "" {
-			continue
-		}
-		if originMatchesBaseDomain(origin, b) {
-			return true
-		}
-	}
-	return false
+	h := domains.NormalizeHost(u.Host)
+	return h != "" && h == domains.NormalizeHost(inboundHost(r))
 }
 
 // cookieDomainForHost returns the base domain an auth cookie should be scoped
@@ -1009,25 +999,6 @@ func forwardAuthBaseForHost(host string) string {
 // values match.
 func oauthRedirectForHost(host, providerName string) string {
 	return forwardAuthBaseForHost(host) + "/_oauth/" + providerName
-}
-
-// originMatchesBaseDomain reports whether origin is https://base or
-// https://*.base (scheme is not constrained; a misconfigured plaintext
-// deployment would still be accepted, matching how cookies already flow).
-func originMatchesBaseDomain(origin, base string) bool {
-	// Origin format: scheme://host[:port]
-	i := strings.Index(origin, "://")
-	if i < 0 {
-		return false
-	}
-	host := origin[i+3:]
-	if j := strings.IndexByte(host, '/'); j >= 0 {
-		host = host[:j]
-	}
-	if k := strings.IndexByte(host, ':'); k >= 0 {
-		host = host[:k]
-	}
-	return host == base || strings.HasSuffix(host, "."+base)
 }
 
 // loggedOutPath is where /_oauth/logout lands by default: a page served on the
