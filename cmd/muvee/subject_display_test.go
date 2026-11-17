@@ -59,10 +59,12 @@ func TestRequestAccessPage_RendersAccountLabel(t *testing.T) {
 	}
 }
 
-// TestLoginTokenPoll_ReturnsUserID pins the SDK-facing side: the polled result
-// carries the user id, which for an email-less identity is the only stable
-// handle the SDK can key its own state on.
-func TestLoginTokenPoll_ReturnsUserID(t *testing.T) {
+// TestLoginTokenPoll_ReturnsStatusOnly pins the SDK-facing side of the poll.
+// -007: the polled result carried the user id / identity (user.user_id) ->
+// status only: the login_token travels in a provider URL, so handing out an
+// identity to whoever polls it would let a lured victim's identity be read
+// back. Browser sign-in uses the popup flow instead.
+func TestLoginTokenPoll_ReturnsStatusOnly(t *testing.T) {
 	token := "tok-" + t.Name()
 	t.Cleanup(func() { loginTokens.Delete(token) })
 	loginTokens.Store(token, &loginTokenEntry{
@@ -80,17 +82,23 @@ func TestLoginTokenPoll_ReturnsUserID(t *testing.T) {
 	w := httptest.NewRecorder()
 	handleLoginTokenPoll(w, r)
 
-	var out struct {
-		Status string            `json:"status"`
-		User   map[string]string `json:"user"`
-	}
+	var out map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode poll response: %v (body=%s)", err, w.Body.String())
 	}
-	if out.Status != "success" {
-		t.Fatalf("status = %q, want success (body=%s)", out.Status, w.Body.String())
+	if out["status"] != "success" {
+		t.Fatalf("status = %v, want success (body=%s)", out["status"], w.Body.String())
 	}
-	if out.User["user_id"] != testUserID {
-		t.Errorf("poll user.user_id = %q, want %q", out.User["user_id"], testUserID)
+	if _, has := out["user"]; has {
+		t.Errorf("poll must not return an identity, got user=%v", out["user"])
+	}
+	for _, leak := range []string{testUserID, "Fake User", "twitter"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("poll body leaks %q: %s", leak, w.Body.String())
+		}
+	}
+	// Single-use: the token is consumed by the successful poll.
+	if _, still := loginTokens.Load(token); still {
+		t.Error("login_token must be consumed by a successful poll")
 	}
 }

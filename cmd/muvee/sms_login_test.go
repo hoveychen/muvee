@@ -8,19 +8,19 @@ import (
 	"testing"
 )
 
-// TestSignForwardProjectJWT_Phone verifies a phone session bakes the phone into
-// the forward JWT (surfaced as X-Forwarded-User) and stays project-scoped with
+// TestSignProjectSession_Phone verifies a phone session bakes the phone into
+// the project session JWT (surfaced as X-Forwarded-User) and stays project-scoped with
 // provider "phone".
-func TestSignForwardProjectJWT_Phone(t *testing.T) {
+func TestSignProjectSession_Phone(t *testing.T) {
 	prev := jwtSecret
 	jwtSecret = []byte("test-secret-for-phone-jwt")
 	defer func() { jwtSecret = prev }()
 
-	signed, err := signForwardProjectJWT("+8613800138000", "+8613800138000", "", "phone", "proj-9")
+	signed, err := signProjectSession("+8613800138000", "+8613800138000", "", "phone", "proj-9")
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	claims, err := parseForwardJWT(signed)
+	claims, err := parseFwdToken(signed, "project:proj-9", fwdKindSession)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -36,12 +36,13 @@ func TestSignForwardProjectJWT_Phone(t *testing.T) {
 
 // TestHandleVerify_PhoneProjectBinding verifies a phone session is admitted only
 // on its own project (project_id match) and bounced to login otherwise.
+// -007: the binding was a ProjectID-claim comparison only -> it is now also the
+// token audience (aud=project:<id>): another project's verify never parses the
+// session, and a verify with no project_id/tunnel_host has no audience at all.
 func TestHandleVerify_PhoneProjectBinding(t *testing.T) {
-	prev := jwtSecret
-	jwtSecret = []byte("test-secret-for-phone-verify")
-	defer func() { jwtSecret = prev }()
+	verifyEnv(t, true)
 
-	signed, err := signForwardProjectJWT("+8613800138000", "+8613800138000", "", "phone", "proj-A")
+	signed, err := signProjectSession("+8613800138000", "+8613800138000", "", "phone", "proj-A")
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -57,12 +58,7 @@ func TestHandleVerify_PhoneProjectBinding(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			url := "/verify"
-			if c.projectID != "" {
-				url += "?project_id=" + c.projectID
-			}
-			r := httptest.NewRequest(http.MethodGet, url, nil)
-			r.AddCookie(&http.Cookie{Name: "muvee_fwd_session", Value: signed})
+			r := verifyRequest(signed, c.projectID, "")
 			w := httptest.NewRecorder()
 			handleVerify(w, r)
 			if w.Code != c.wantStatus {

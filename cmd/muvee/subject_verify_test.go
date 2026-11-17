@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 )
 
 // verifyEnv points authservice at a stub muvee-server that records the access
@@ -35,7 +36,8 @@ func verifyEnv(t *testing.T, allowed bool) *url.Values {
 }
 
 // verifyRequest builds the ForwardAuth request Traefik would send for a
-// project, carrying session as the muvee_fwd_session cookie.
+// project, carrying session as the __Host-muvee_fwd cookie. project_id is what
+// gives /verify its audience (project:<id>); an empty one means no audience.
 func verifyRequest(session, projectID, domains string) *http.Request {
 	q := url.Values{}
 	q.Set("project_id", projectID)
@@ -45,11 +47,28 @@ func verifyRequest(session, projectID, domains string) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, "/verify?"+q.Encode(), nil)
 	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
 	r.Header.Set("X-Forwarded-Proto", "https")
-	r.AddCookie(&http.Cookie{Name: "muvee_fwd_session", Value: session})
+	r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdSessionCookieBase), Value: session})
 	return r
 }
 
-const testUserID = "22222222-2222-2222-2222-222222222222"
+const (
+	testUserID = "22222222-2222-2222-2222-222222222222"
+	// testVerifyProjectID is the project every verifyRequest in this file's
+	// tests targets; mintTestSubsiteSession mints sessions with this audience.
+	testVerifyProjectID = "11111111-1111-1111-1111-111111111111"
+)
+
+// mintTestSubsiteSession signs a roaming subsite session (as the SSO code
+// exchange would) for project projectID, with a fresh sid / sso_sid.
+func mintTestSubsiteSession(t *testing.T, userID, email, name, avatar, provider, projectID string) string {
+	t.Helper()
+	s, err := signSubsiteSession(fwdIdentity{UserID: userID, Email: email, Name: name, AvatarURL: avatar, Provider: provider},
+		"project:"+projectID, "sso-sid-"+t.Name(), time.Now().Unix())
+	if err != nil {
+		t.Fatalf("sign session: %v", err)
+	}
+	return s
+}
 
 // TestHandleVerify_EmailLessSessionChecksAccessByUserID pins the second half
 // of the subject-keyed login: a session with no email must still reach the
@@ -59,12 +78,9 @@ const testUserID = "22222222-2222-2222-2222-222222222222"
 func TestHandleVerify_EmailLessSessionChecksAccessByUserID(t *testing.T) {
 	gotQuery := verifyEnv(t, true)
 
-	session, err := signForwardJWT(testUserID, "", "Fake User", "https://cdn.example/a.png", "twitter")
-	if err != nil {
-		t.Fatalf("sign session: %v", err)
-	}
+	session := mintTestSubsiteSession(t, testUserID, "", "Fake User", "https://cdn.example/a.png", "twitter", testVerifyProjectID)
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(session, "11111111-1111-1111-1111-111111111111", ""))
+	handleVerify(w, verifyRequest(session, testVerifyProjectID, ""))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("verify status = %d, want 200 (body=%s)", w.Code, w.Body.String())
@@ -90,12 +106,9 @@ func TestHandleVerify_EmailLessSessionChecksAccessByUserID(t *testing.T) {
 func TestHandleVerify_EmailLessSessionSkipsDomainWhitelist(t *testing.T) {
 	gotQuery := verifyEnv(t, true)
 
-	session, err := signForwardJWT(testUserID, "", "Fake User", "", "twitter")
-	if err != nil {
-		t.Fatalf("sign session: %v", err)
-	}
+	session := mintTestSubsiteSession(t, testUserID, "", "Fake User", "", "twitter", testVerifyProjectID)
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(session, "11111111-1111-1111-1111-111111111111", "corp.example"))
+	handleVerify(w, verifyRequest(session, testVerifyProjectID, "corp.example"))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("verify status = %d, want 200 — the domain whitelist must not reject an address-less identity outright (body=%s)", w.Code, w.Body.String())
@@ -112,12 +125,9 @@ func TestHandleVerify_EmailLessSessionSkipsDomainWhitelist(t *testing.T) {
 func TestHandleVerify_EmailLessSessionDeniedWithoutGrant(t *testing.T) {
 	verifyEnv(t, false)
 
-	session, err := signForwardJWT(testUserID, "", "Fake User", "", "twitter")
-	if err != nil {
-		t.Fatalf("sign session: %v", err)
-	}
+	session := mintTestSubsiteSession(t, testUserID, "", "Fake User", "", "twitter", testVerifyProjectID)
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(session, "11111111-1111-1111-1111-111111111111", "corp.example"))
+	handleVerify(w, verifyRequest(session, testVerifyProjectID, "corp.example"))
 
 	if w.Code != http.StatusFound && w.Code != http.StatusForbidden {
 		t.Fatalf("verify status = %d, want a redirect to request-access or 403 (body=%s)", w.Code, w.Body.String())
@@ -130,12 +140,9 @@ func TestHandleVerify_EmailLessSessionDeniedWithoutGrant(t *testing.T) {
 func TestHandleVerify_EmailSessionStillKeysOnEmail(t *testing.T) {
 	gotQuery := verifyEnv(t, true)
 
-	session, err := signForwardJWT(testUserID, "alice@corp.example", "Alice", "", "google")
-	if err != nil {
-		t.Fatalf("sign session: %v", err)
-	}
+	session := mintTestSubsiteSession(t, testUserID, "alice@corp.example", "Alice", "", "google", testVerifyProjectID)
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(session, "11111111-1111-1111-1111-111111111111", "corp.example"))
+	handleVerify(w, verifyRequest(session, testVerifyProjectID, "corp.example"))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("verify status = %d, want 200 (body=%s)", w.Code, w.Body.String())
@@ -160,12 +167,9 @@ func TestHandleVerify_EmailSessionStillKeysOnEmail(t *testing.T) {
 func TestHandleVerify_EmailSessionWrongDomainStillRejected(t *testing.T) {
 	verifyEnv(t, true)
 
-	session, err := signForwardJWT(testUserID, "mallory@evil.example", "Mallory", "", "google")
-	if err != nil {
-		t.Fatalf("sign session: %v", err)
-	}
+	session := mintTestSubsiteSession(t, testUserID, "mallory@evil.example", "Mallory", "", "google", testVerifyProjectID)
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(session, "11111111-1111-1111-1111-111111111111", "corp.example"))
+	handleVerify(w, verifyRequest(session, testVerifyProjectID, "corp.example"))
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("verify status = %d, want 403 for an out-of-domain email (body=%s)", w.Code, w.Body.String())
@@ -178,12 +182,9 @@ func TestHandleVerify_EmailSessionWrongDomainStillRejected(t *testing.T) {
 func TestHandleVerify_KeylessSessionFailsClosed(t *testing.T) {
 	verifyEnv(t, true)
 
-	session, err := signForwardJWT("", "", "Nobody", "", "twitter")
-	if err != nil {
-		t.Fatalf("sign session: %v", err)
-	}
+	session := mintTestSubsiteSession(t, "", "", "Nobody", "", "twitter", testVerifyProjectID)
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(session, "11111111-1111-1111-1111-111111111111", ""))
+	handleVerify(w, verifyRequest(session, testVerifyProjectID, ""))
 
 	if w.Code != http.StatusFound {
 		t.Fatalf("verify status = %d, want a redirect back to login (body=%s)", w.Code, w.Body.String())

@@ -118,28 +118,136 @@ func TestBUG002_PlantedDeviceStateDoesNotHandOverVictim(t *testing.T) {
 	}
 }
 
+// -007: the attacker's state used to be minted with signFwdState / devicePending
+// (both deleted); it now comes from the attacker's own legitimate browser
+// request to the central host's /_oauth/start, which is the only way to obtain
+// a valid provider state ("f1.<mac>") and its sealed __Host-fwd_apex_state
+// cookie. The attacker can read both from its own browser, but a sibling
+// subdomain can never plant a __Host- cookie in the victim's browser (the
+// plantedCallback guard panics on one), so the strongest attack left is to
+// replay the harvested f1 in the callback URL together with the cookie value
+// under names a sibling CAN set (Domain=sigma-fi.com): the unprefixed
+// apexStateCookieBase and the pre-upgrade fwd_oauth_state. The service must
+// ignore them (it reads only fwdCookieName(apexStateCookieBase)).
+
+const (
+	attackerHost    = "evil.sigma-fi.com"
+	attackerProject = "99999999-9999-9999-9999-999999999999"
+)
+
+// attackerStart is the attacker's browser (its own cookie jar, Host
+// sigma-fi.com = the central host of that base domain) calling /_oauth/start
+// for its own project host. It returns the provider state from the redirect
+// and the __Host-fwd_apex_state cookie it was handed.
+func attackerStart(t *testing.T, extra url.Values) (string, *http.Cookie) {
+	t.Helper()
+	// by-host lookup of the attacker's own (legitimate) project.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/internal/projects/by-host" && r.URL.Query().Get("host") == attackerHost {
+			_, _ = w.Write([]byte(`{"project_id":"` + attackerProject + `","aud":"project:` + attackerProject + `"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer stub.Close()
+	prevServer := muveeServerURL
+	muveeServerURL = stub.URL
+	defer func() { muveeServerURL = prevServer }()
+
+	q := url.Values{"host": {attackerHost}, "provider": {"faketwitter"}}
+	for k, v := range extra {
+		q[k] = v
+	}
+	r := httptest.NewRequest(http.MethodGet, "/_oauth/start?"+q.Encode(), nil)
+	r.Host = "sigma-fi.com"
+	r.Header.Set("X-Forwarded-Host", "sigma-fi.com")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	handleSSOStart(w, r)
+	if w.Code != http.StatusFound {
+		t.Fatalf("attacker's own /_oauth/start: status %d body %q, want 302 to the provider", w.Code, w.Body.String())
+	}
+	loc, err := url.Parse(w.Header().Get("Location"))
+	if err != nil || loc.Query().Get("state") == "" {
+		t.Fatalf("no provider state in Location %q (err=%v)", w.Header().Get("Location"), err)
+	}
+	c := findCookie(w.Result().Cookies(), fwdCookieName(apexStateCookieBase))
+	if c == nil || c.Value == "" {
+		t.Fatalf("/_oauth/start set no %s cookie", fwdCookieName(apexStateCookieBase))
+	}
+	return loc.Query().Get("state"), c
+}
+
+// legitCallback is the attacker's OWN browser finishing its own sign-in: the
+// real __Host- cookie, so it is accepted. It is the positive control proving
+// the harvested state and cookie are genuinely valid — the planted replays
+// below are refused only because a sibling cannot deliver them.
+func legitCallback(state string, apex *http.Cookie) *http.Request {
+	r := plantedCallback(state, nil)
+	r.AddCookie(&http.Cookie{Name: apex.Name, Value: apex.Value})
+	return r
+}
+
 // attackerMintedState: the attacker's own, legitimately minted login state plus
 // the sibling-plantable cookies that accompany it.
 func attackerMintedState(t *testing.T) (string, map[string]string) {
 	t.Helper()
-	s := signFwdState("evil.sigma-fi.com")
-	return s, map[string]string{"fwd_oauth_state": s, fwdHostCookieName: "evil.sigma-fi.com"}
+	state, apex := attackerStart(t, url.Values{"state": {"attacker-subsite-nonce"}})
+	return state, map[string]string{apexStateCookieBase: apex.Value, "fwd_oauth_state": state}
 }
 
-// attackerDeviceState: a device flow the attacker started from its own CLI.
+// attackerDeviceState: a device flow the attacker started from its own CLI on
+// its own host, then pointed at the provider through /_oauth/start?mode=device.
 // completed reports whether the victim's sign-in completed it.
 func attackerDeviceState(t *testing.T) (string, map[string]string, func() bool) {
 	t.Helper()
+	state, planted, completed, _ := attackerDevice(t)
+	return state, planted, completed
+}
+
+func attackerDevice(t *testing.T) (string, map[string]string, func() bool, *http.Cookie) {
+	t.Helper()
 	deviceCode, userCode := "ATTACKERDEVICECODE", "ATKRCODE"
-	entry := &deviceFlowEntry{UserCode: userCode, ExpiresAt: time.Now().Add(time.Minute)}
+	entry := &deviceFlowEntry{
+		UserCode: userCode, Aud: "project:" + attackerProject, Host: attackerHost,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
 	deviceFlows.Store(deviceCode, entry)
 	deviceByUser.Store(userCode, deviceCode)
-	state := "device-" + newStateNonce()
-	devicePending.Store(state, userCode)
 	t.Cleanup(func() {
 		deviceFlows.Delete(deviceCode)
 		deviceByUser.Delete(userCode)
-		devicePending.Delete(state)
 	})
-	return state, map[string]string{"fwd_oauth_state": state}, func() bool { return entry.Completed }
+	state, apex := attackerStart(t, url.Values{"mode": {"device"}, "user_code": {userCode}})
+	return state, map[string]string{apexStateCookieBase: apex.Value, "fwd_oauth_state": state},
+		func() bool { entry.mu.Lock(); defer entry.mu.Unlock(); return entry.Completed }, apex
+}
+
+// Positive control for the signed-state variant: the attacker's own browser,
+// carrying the real __Host- cookie, does get signed in. Without this the
+// planted-replay test could pass for the wrong reason (e.g. a broken harvest).
+func TestBUG002_Control_AttackerOwnBrowserSignsInWithRealCookie(t *testing.T) {
+	csrfEnv(t)
+	state, apex := attackerStart(t, url.Values{"state": {"attacker-subsite-nonce"}})
+	w := httptest.NewRecorder()
+	handleOAuthCallback(w, legitCallback(state, apex))
+	if _, ok := issuedCredential(w); !ok {
+		t.Fatalf("control: the attacker's own sign-in with its real cookie was refused (status %d body %q)", w.Code, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); !strings.HasPrefix(loc, "https://"+attackerHost+"/_oauth/session?code=") {
+		t.Errorf("control: Location = %q, want a code hand-off to %s", loc, attackerHost)
+	}
+}
+
+// Positive control for the device variant: with the real cookie the device
+// code does complete, so "not completed" above is attributable to the planting.
+func TestBUG002_Control_AttackerOwnBrowserCompletesDeviceWithRealCookie(t *testing.T) {
+	csrfEnv(t)
+	state, _, completed, apex := attackerDevice(t)
+	w := httptest.NewRecorder()
+	handleOAuthCallback(w, legitCallback(state, apex))
+	if !completed() {
+		t.Fatalf("control: the attacker's own device authorization with its real cookie did not complete (status %d body %q)", w.Code, w.Body.String())
+	}
 }
