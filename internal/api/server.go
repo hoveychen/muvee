@@ -332,6 +332,16 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 		"allowed": res.Allowed,
 		"mode":    res.Mode,
 	}
+	// Console-logout revocation (BACKLOG-20261117-008), answered from the
+	// same users row the lookup above already read.
+	if iat, ok, perr := parseSessionIAT(r); perr != nil {
+		jsonErr(w, perr, 400)
+		return
+	} else if ok && fwdSessionRevoked(res.FwdSessionsRevokedAt, iat) {
+		resp["session_revoked"] = true
+		jsonOK(w, resp)
+		return
+	}
 	if res.Allowed && !res.IsAdmin && res.UserID != uuid.Nil {
 		// Buffered batch UPSERT into project_visits; non-blocking.
 		s.visits.Push(projectID, res.UserID)
@@ -914,6 +924,7 @@ func (s *Server) Router() http.Handler {
 	// Internal access-check endpoint called by muvee-authservice during ForwardAuth.
 	// Authenticated via X-Muvee-Internal-Key (derived from JWT_SECRET).
 	r.Get("/api/internal/access/check", s.handleInternalAccessCheck)
+	r.Get("/api/internal/auth/session-revoked", s.handleInternalSessionRevoked)
 	// Internal project info + access-request submission endpoints — used by
 	// muvee-authservice to render and process the request-access page directly
 	// on the project subdomain (no platform-domain hop needed).
@@ -1466,9 +1477,99 @@ fetch(%q).catch(function(){});
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
+// handleLogout signs the user out of the console and, through
+// users.fwd_sessions_revoked_at, out of every project subdomain on every device
+// and base domain (BACKLOG-20261117-008): authservice rejects subsite sessions
+// issued at or before that instant. The route sits outside the auth middleware,
+// so the user is read from the request's own muvee_session; a missing or
+// invalid one just clears the cookie. CLI Bearer tokens and API tokens are not
+// revoked here (BACKLOG-20261117-007).
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if userID, ok := s.consoleSessionUserID(r); ok {
+		if err := s.store.RevokeFwdSessions(r.Context(), userID); err != nil {
+			log.Printf("logout: revoke subsite sessions for user %s: %v", userID, err)
+		}
+	}
 	http.SetCookie(w, &http.Cookie{Name: "muvee_session", MaxAge: -1, Path: "/"})
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// consoleSessionUserID returns the user behind the request's muvee_session
+// cookie, if it carries a valid console JWT.
+func (s *Server) consoleSessionUserID(r *http.Request) (uuid.UUID, bool) {
+	if s.auth == nil {
+		return uuid.Nil, false
+	}
+	c, err := r.Cookie("muvee_session")
+	if err != nil || c.Value == "" {
+		return uuid.Nil, false
+	}
+	claims, err := s.auth.ParseJWT(c.Value)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(claims.UserID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// fwdSessionRevoked reports whether a subsite session issued at issuedAt (unix
+// seconds; 0 for a session signed before sessions carried an issued-at time)
+// predates the user's last console logout. JWT iat has second precision, so the
+// comparison is in whole seconds and a session issued in the same second as the
+// logout counts as revoked: failing safe costs at most one extra sign-in for a
+// login completed within the same second as the logout.
+func fwdSessionRevoked(revokedAt *time.Time, issuedAt int64) bool {
+	return revokedAt != nil && issuedAt <= revokedAt.Unix()
+}
+
+// parseSessionIAT reads the optional session_iat query parameter authservice
+// sends for sessions subject to console-logout revocation.
+func parseSessionIAT(r *http.Request) (int64, bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("session_iat"))
+	if raw == "" {
+		return 0, false, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid session_iat")
+	}
+	return v, true, nil
+}
+
+// handleInternalSessionRevoked answers authservice's revocation check for the
+// subsite-session paths that do not run the per-project access check (verify
+// without a project, verify-admin, /_oauth/userinfo, request-access, invite
+// consumption). One primary-key / unique-email lookup. Internal-key gated.
+func (s *Server) handleInternalSessionRevoked(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	email := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("email")))
+	userIDStr := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	iat, ok, err := parseSessionIAT(r)
+	if err != nil || !ok || (email == "" && userIDStr == "") {
+		jsonErr(w, fmt.Errorf("session_iat and one of email or user_id are required"), 400)
+		return
+	}
+	var userID uuid.UUID
+	if email == "" {
+		if userID, err = uuid.Parse(userIDStr); err != nil {
+			jsonErr(w, fmt.Errorf("invalid user_id"), 400)
+			return
+		}
+	}
+	revokedAt, err := s.store.FwdSessionsRevokedAt(r.Context(), email, userID)
+	if err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]bool{"revoked": fwdSessionRevoked(revokedAt, iat)})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
