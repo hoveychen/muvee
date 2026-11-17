@@ -483,8 +483,18 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	if bypass0.Priority <= 0 {
 		t.Errorf("bypass router should have positive priority, got %d", bypass0.Priority)
 	}
-	if len(bypass0.Middlewares) != 0 {
-		t.Errorf("bypass router should have NO middlewares, got %v", bypass0.Middlewares)
+	// Bypass routers skip ForwardAuth but still strip the muvee subsite
+	// session cookie before the upstream sees it (BACKLOG-20261117-003).
+	if len(bypass0.Middlewares) != 1 || bypass0.Middlewares[0] != stripFwdSessionMiddlewareName {
+		t.Errorf("bypass router should only strip the session cookie, got %v", bypass0.Middlewares)
+	}
+	mw, ok := cfg.HTTP.Middlewares[stripFwdSessionMiddlewareName]
+	if !ok || mw.ForwardAuth != nil {
+		t.Fatalf("strip middleware missing or wrong: %+v", mw)
+	}
+	raw, _ := json.Marshal(mw)
+	if string(raw) != `{"plugin":{"embed-bridge":{"stripOnly":true}}}` {
+		t.Errorf("strip middleware JSON = %s", raw)
 	}
 	expectedRule0 := "Host(`myapp.example.com`) && Path(`/health`)"
 	if bypass0.Rule != expectedRule0 {
@@ -503,11 +513,11 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	if bypass1.Rule != expectedRule1 {
 		t.Errorf("bypass-1 rule = %q, want %q", bypass1.Rule, expectedRule1)
 	}
-	if len(bypass1.Middlewares) != 0 {
-		t.Errorf("bypass-1 should have NO middlewares, got %v", bypass1.Middlewares)
+	if len(bypass1.Middlewares) != 1 || bypass1.Middlewares[0] != stripFwdSessionMiddlewareName {
+		t.Errorf("bypass-1 should only strip the session cookie, got %v", bypass1.Middlewares)
 	}
 
-	// Verify JSON serialization includes priority and omits middlewares.
+	// Verify JSON serialization includes priority.
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("failed to marshal config: %v", err)
@@ -520,8 +530,14 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	// OAuth-bypass router should also exist for auth-protected deployments: it
 	// must cover the whole /_oauth namespace so logout / userinfo / device flow
 	// all reach the authservice on project subdomains.
-	if _, ok := cfg.HTTP.Routers["myapp-device-flow"]; !ok {
+	df, ok := cfg.HTTP.Routers["myapp-device-flow"]
+	if !ok {
 		t.Fatal("oauth-bypass router myapp-device-flow not found — addDeviceFlowRouter was not called for auth-protected deployment")
+	}
+	// /_oauth/* goes to authservice, which needs muvee_fwd_session (logout,
+	// userinfo, session renewal) — it must never get the stripping middleware.
+	if len(df.Middlewares) != 0 {
+		t.Errorf("device-flow router must not carry middlewares, got %v", df.Middlewares)
 	}
 }
 

@@ -25,6 +25,8 @@ muvee 告诉你的服务**用户是谁**（authentication，认证）。它**不
 
 这些 Header 由 Traefik 设置，而非终端用户——只要你的服务仅通过 Traefik 可达，它们就**无法被伪造**。你的服务无需解析 cookie、验证 JWT 或与任何 OAuth 提供商通信。
 
+muvee 自身的会话 Cookie（`muvee_fwd_session`、`muvee_invite_token`、`fwd_oauth_state`）会在请求到达你的服务之前被移除，因此同一基域下的其他项目永远拿不到、也无法重放用户的会话。你自己的 Cookie 原样转发。需要用户信息时请在浏览器里调用 `/_oauth/*`（例如 `/_oauth/userinfo`），不要在后端转发会话 Cookie。
+
 ```python
 # Python / Flask
 email    = request.headers.get("X-Forwarded-User")
