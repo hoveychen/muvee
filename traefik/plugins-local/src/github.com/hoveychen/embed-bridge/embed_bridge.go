@@ -39,18 +39,42 @@ type Config struct {
 	// the path the plugin intercepts to serve the SDK body. Defaults to
 	// `/_embed-bridge.js` when empty.
 	ScriptPath string `json:"scriptPath,omitempty" yaml:"scriptPath,omitempty"`
+
+	// StripCookies names cookies removed from the request's Cookie header
+	// before it is forwarded to the project upstream. Defaults to the
+	// base-domain secrets authservice sets: the subsite session
+	// (muvee_fwd_session), the pending invite-link token (muvee_invite_token)
+	// and the OAuth state (fwd_oauth_state). ForwardAuth runs earlier in the
+	// router chain and has already consumed the session; the tenant only gets
+	// the X-Forwarded-User* identity headers — handing it the session JWT
+	// itself would let any tenant replay it against every other subsite. The
+	// others are only read on /_oauth/* (routed straight to authservice,
+	// never through this plugin).
+	// The default lives here (not in dynamic.yml) because dynamic.yml is a
+	// host-mounted file that image upgrades do not refresh.
+	StripCookies []string `json:"stripCookies,omitempty" yaml:"stripCookies,omitempty"`
+
+	// StripOnly turns the instance into a pure cookie stripper: no SDK
+	// injection and no /_embed-bridge.js short-circuit. Used on auth-bypass
+	// routers (webhooks, public assets) where the SDK has no business.
+	StripOnly bool `json:"stripOnly,omitempty" yaml:"stripOnly,omitempty"`
 }
 
 // CreateConfig is required by traefik plugin contract.
 func CreateConfig() *Config {
-	return &Config{ScriptPath: "/_embed-bridge.js"}
+	return &Config{
+		ScriptPath:   "/_embed-bridge.js",
+		StripCookies: []string{"muvee_fwd_session", "muvee_invite_token", "fwd_oauth_state"},
+	}
 }
 
 // EmbedBridge is the middleware handler.
 type EmbedBridge struct {
-	next       http.Handler
-	name       string
-	scriptPath string
+	next         http.Handler
+	name         string
+	scriptPath   string
+	stripCookies map[string]bool
+	stripOnly    bool
 }
 
 // New is required by traefik plugin contract.
@@ -59,10 +83,67 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 	if scriptPath == "" {
 		scriptPath = "/_embed-bridge.js"
 	}
-	return &EmbedBridge{next: next, name: name, scriptPath: scriptPath}, nil
+	strip := map[string]bool{}
+	for _, c := range config.StripCookies {
+		if c = strings.TrimSpace(c); c != "" {
+			strip[c] = true
+		}
+	}
+	return &EmbedBridge{next: next, name: name, scriptPath: scriptPath, stripCookies: strip, stripOnly: config.StripOnly}, nil
+}
+
+// stripRequestCookies removes the configured cookies from every Cookie header
+// line, keeping the other pairs verbatim (no re-encoding, so tenant cookies a
+// strict parser would reject still pass; separators are normalized to "; "
+// once anything was removed). A header left empty is
+// deleted. Runs before anything else in ServeHTTP so upgrades are covered.
+func (e *EmbedBridge) stripRequestCookies(req *http.Request) {
+	if len(e.stripCookies) == 0 {
+		return
+	}
+	lines := req.Header.Values("Cookie")
+	if len(lines) == 0 {
+		return
+	}
+	var kept []string
+	changed := false
+	for _, line := range lines {
+		var pairs []string
+		for _, part := range strings.Split(line, ";") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			name := part
+			if i := strings.IndexByte(part, '='); i >= 0 {
+				name = strings.TrimSpace(part[:i])
+			}
+			if e.stripCookies[name] {
+				changed = true
+				continue
+			}
+			pairs = append(pairs, part)
+		}
+		if len(pairs) > 0 {
+			kept = append(kept, strings.Join(pairs, "; "))
+		}
+	}
+	if !changed {
+		return
+	}
+	req.Header.Del("Cookie")
+	for _, line := range kept {
+		req.Header.Add("Cookie", line)
+	}
 }
 
 func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	e.stripRequestCookies(req)
+	if e.stripOnly {
+		e.next.ServeHTTP(rw, req)
+		return
+	}
+
 	// HTTP Upgrade requests (WebSocket, h2c, …) terminate in a 101 Switching
 	// Protocols and require Traefik's reverse proxy to hijack the client conn.
 	// Our responseRecorder is a buffering wrapper without http.Hijacker, which

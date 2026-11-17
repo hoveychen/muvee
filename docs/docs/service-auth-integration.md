@@ -25,6 +25,8 @@ Every authenticated request that reaches your service includes the following hea
 
 These headers are set by Traefik, not by the end user — they **cannot be forged** as long as your service is only reachable through Traefik. Your service does not need to parse cookies, validate JWTs, or talk to any OAuth provider.
 
+muvee's own session cookies (`muvee_fwd_session`, `muvee_invite_token`, `fwd_oauth_state`) are removed from the request before it reaches your service, so another project on the same base domain can never receive — and replay — a user's session. Your own cookies are forwarded unchanged. Use `/_oauth/*` from the browser (for example `/_oauth/userinfo`) rather than forwarding the session cookie from your backend.
+
 ```python
 # Python / Flask
 email    = request.headers.get("X-Forwarded-User")

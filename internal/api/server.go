@@ -4740,6 +4740,9 @@ type traefikServer struct {
 
 type traefikMiddleware struct {
 	ForwardAuth *traefikForwardAuth `json:"forwardAuth,omitempty"`
+	// Plugin instantiates a Traefik plugin by its experimental.localPlugins
+	// name (traefik/traefik.yml) with the given config.
+	Plugin map[string]map[string]any `json:"plugin,omitempty"`
 }
 
 type traefikForwardAuth struct {
@@ -4790,9 +4793,11 @@ func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName string, hosts []s
 // in traefik/dynamic.yml. Appended to every user-facing project router so any
 // HTML page served by a muvee-deployed project gets the embed-bridge SDK
 // auto-injected (see traefik/plugins-local/.../embed-bridge and the
-// docs/embed-bridge.md page). Bypass / device-flow / authservice routers are
-// intentionally excluded — those serve OAuth callbacks, not HTML the user
-// would iframe.
+// docs/embed-bridge.md page). The plugin also strips muvee_fwd_session from
+// the forwarded request by default. Bypass / device-flow / authservice routers
+// are intentionally excluded — those serve OAuth callbacks, not HTML the user
+// would iframe (bypass routers get stripFwdSessionMiddlewareName instead; the
+// /_oauth/* device-flow router goes to authservice, which needs the cookie).
 const embedBridgeMiddlewareRef = "embed-bridge@file"
 
 // attachEmbedBridge appends embedBridgeMiddlewareRef to the router's
@@ -4807,8 +4812,30 @@ func attachEmbedBridge(router *traefikRouter) {
 	router.Middlewares = append(router.Middlewares, embedBridgeMiddlewareRef)
 }
 
+// stripFwdSessionMiddlewareName is a strip-only embed-bridge instance that
+// removes the muvee subsite session cookie (muvee_fwd_session) from requests
+// before they reach a project upstream. Project routers get the same stripping
+// from embed-bridge@file (the plugin strips by default); bypass routers skip
+// ForwardAuth and the SDK, so they get this instance instead. It is declared
+// here in the HTTP provider rather than in dynamic.yml because dynamic.yml is
+// host-mounted and not refreshed by image upgrades (BACKLOG-20261117-003).
+const stripFwdSessionMiddlewareName = "muvee-strip-fwd-session"
+
+// ensureStripFwdSessionMiddleware declares stripFwdSessionMiddlewareName in cfg.
+// Only called when a router references it, so configs without bypass routers
+// stay byte-identical.
+func ensureStripFwdSessionMiddleware(cfg *traefikDynamicConfig) {
+	if cfg.HTTP.Middlewares == nil {
+		cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
+	}
+	cfg.HTTP.Middlewares[stripFwdSessionMiddlewareName] = traefikMiddleware{
+		Plugin: map[string]map[string]any{"embed-bridge": {"stripOnly": true}},
+	}
+}
+
 // addBypassRouters creates higher-priority Traefik routers that skip ForwardAuth
-// for the given newline-separated bypass paths.
+// for the given newline-separated bypass paths. They still strip the muvee
+// session cookie so a public path cannot harvest it.
 func addBypassRouters(cfg *traefikDynamicConfig, routerName string, hosts []string, tls *traefikTLS, bypassPaths string) {
 	hostRule := hostMatchRule(hosts)
 	for i, raw := range strings.Split(bypassPaths, "\n") {
@@ -4823,10 +4850,12 @@ func addBypassRouters(cfg *traefikDynamicConfig, routerName string, hosts []stri
 			pathRule = fmt.Sprintf("Path(`%s`)", p)
 		}
 		bypassName := fmt.Sprintf("%s-bypass-%d", routerName, i)
+		ensureStripFwdSessionMiddleware(cfg)
 		cfg.HTTP.Routers[bypassName] = traefikRouter{
 			Rule:        hostRule + " && " + pathRule,
 			EntryPoints: []string{"websecure"},
 			Service:     routerName,
+			Middlewares: []string{stripFwdSessionMiddlewareName},
 			TLS:         tls,
 			Priority:    100,
 		}
