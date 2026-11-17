@@ -4927,9 +4927,18 @@ type traefikServer struct {
 
 type traefikMiddleware struct {
 	ForwardAuth *traefikForwardAuth `json:"forwardAuth,omitempty"`
+	// Headers rewrites request headers before the router's service sees them.
+	Headers *traefikHeaders `json:"headers,omitempty"`
 	// Plugin instantiates a Traefik plugin by its experimental.localPlugins
 	// name (traefik/traefik.yml) with the given config.
 	Plugin map[string]map[string]any `json:"plugin,omitempty"`
+}
+
+// traefikHeaders is the subset of Traefik's headers middleware muvee uses.
+// customRequestHeaders overwrite any client-sent value of the same header; an
+// empty value deletes the header instead.
+type traefikHeaders struct {
+	CustomRequestHeaders map[string]string `json:"customRequestHeaders"`
 }
 
 type traefikForwardAuth struct {
@@ -4942,6 +4951,29 @@ type traefikForwardAuth struct {
 	AddAuthCookiesToResponse []string `json:"addAuthCookiesToResponse,omitempty"`
 }
 
+// FwdAuthCookieNames lists every authservice cookie that must never reach a
+// tenant upstream: the host-only __Host- names (BACKLOG-20261117-007), their
+// plain-http dev fallbacks (FWD_INSECURE_DEV_COOKIES drops the prefix) and the
+// pre-isolation base-domain names browsers may still hold. Every embed-bridge
+// instance the HTTP provider declares gets this list explicitly rather than
+// relying on the plugin's built-in default, so an authservice release that
+// lands before the traefik image is refreshed cannot leak a new cookie to
+// tenants. Mirrors cmd/muvee fwdAllCookieNames (a drift-guard test compares
+// the two).
+var FwdAuthCookieNames = []string{
+	"__Host-muvee_fwd", "__Host-muvee_sso", "__Host-fwd_state", "__Host-fwd_apex_state",
+	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect",
+	"muvee_fwd", "muvee_sso", "fwd_state", "fwd_apex_state",
+	"muvee_fwd_signed_out", "fwd_oauth_redirect",
+	"muvee_fwd_session", "fwd_oauth_state", "fwd_oauth_host", "muvee_invite_token",
+}
+
+// fwdSessionResponseCookies are the subsite session cookies authservice may
+// set on a 2xx /verify (sliding renewal) that Traefik must copy onto the
+// proxied response: the host-only name, its dev fallback and, while browsers
+// still hold it, the legacy base-domain name.
+var fwdSessionResponseCookies = []string{"__Host-muvee_fwd", "muvee_fwd", "muvee_fwd_session"}
+
 // projectForwardAuth builds the per-project ForwardAuth middleware pointing
 // at verifyURL.
 func projectForwardAuth(verifyURL string) *traefikForwardAuth {
@@ -4949,7 +4981,7 @@ func projectForwardAuth(verifyURL string) *traefikForwardAuth {
 		Address:                  verifyURL,
 		AuthResponseHeaders:      []string{"X-Forwarded-User", "X-Forwarded-User-Name", "X-Forwarded-User-Avatar", "X-Forwarded-User-Provider"},
 		TrustForwardHeader:       true,
-		AddAuthCookiesToResponse: []string{"muvee_fwd_session"},
+		AddAuthCookiesToResponse: append([]string(nil), fwdSessionResponseCookies...),
 	}
 }
 
@@ -4966,57 +4998,153 @@ const deviceFlowServiceName = "muvee-authservice-device"
 // the client-facing /_oauth/logout and /_oauth/userinfo endpoints documented
 // in service-auth-integration.md, so downstream frontends can call them with
 // a relative path (same-origin, no CORS) or a full {BASE_DOMAIN} URL.
-func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName string, hosts []string, tls *traefikTLS) {
+//
+// aud is the audience of the subsite the hosts belong to ("project:<id>", or
+// "host:<prefix>" for a project-less tunnel). A per-router headers middleware
+// injects it as X-Muvee-Aud, overwriting any client-sent value, so authservice
+// knows which project a /_oauth request is for without trusting the request
+// (BACKLOG-20261117-007: the code exchange, device flow, request-access and
+// userinfo all bind to it).
+func addDeviceFlowRouter(cfg *traefikDynamicConfig, routerName string, hosts []string, tls *traefikTLS, aud string) {
+	mw := clearAudMiddlewareName
+	if aud != "" {
+		mw = routerName + "-aud"
+		setRequestHeaderMiddleware(cfg, mw, routeAudienceHeader, aud)
+	} else {
+		ensureClearAudMiddleware(cfg)
+	}
 	cfg.HTTP.Routers[routerName+"-device-flow"] = traefikRouter{
 		Rule:        hostMatchRule(hosts) + " && PathPrefix(`/_oauth`)",
 		EntryPoints: []string{"websecure"},
 		Service:     deviceFlowServiceName,
+		Middlewares: []string{mw},
 		TLS:         tls,
 		Priority:    200, // higher than bypass (100) and default routers
 	}
 }
 
-// embedBridgeMiddlewareRef is the file-provider middleware reference declared
-// in traefik/dynamic.yml. Appended to every user-facing project router so any
-// HTML page served by a muvee-deployed project gets the embed-bridge SDK
-// auto-injected (see traefik/plugins-local/.../embed-bridge and the
-// docs/embed-bridge.md page). The plugin also strips muvee_fwd_session from
-// the forwarded request by default. Bypass / device-flow / authservice routers
-// are intentionally excluded — those serve OAuth callbacks, not HTML the user
-// would iframe (bypass routers get stripFwdSessionMiddlewareName instead; the
-// /_oauth/* device-flow router goes to authservice, which needs the cookie).
-const embedBridgeMiddlewareRef = "embed-bridge@file"
+// routeAudienceHeader carries a subsite's audience to authservice on /_oauth
+// routes. Must match cmd/muvee routeAudienceHeader.
+const routeAudienceHeader = "X-Muvee-Aud"
 
-// attachEmbedBridge appends embedBridgeMiddlewareRef to the router's
-// Middlewares slice unless it's already present. The slice may be nil when
-// no auth middleware ran (public project), in which case we initialise it.
-func attachEmbedBridge(router *traefikRouter) {
+// clearAudMiddlewareName deletes X-Muvee-Aud on routes to authservice that are
+// not a subsite: the central sign-in host and the panel hosts. A client-sent
+// value must never reach authservice there.
+const clearAudMiddlewareName = "muvee-clear-aud"
+
+func ensureMiddlewares(cfg *traefikDynamicConfig) {
+	if cfg.HTTP.Middlewares == nil {
+		cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
+	}
+}
+
+// setRequestHeaderMiddleware declares a headers middleware that sets (or, for
+// an empty value, deletes) one request header.
+func setRequestHeaderMiddleware(cfg *traefikDynamicConfig, name, header, value string) {
+	ensureMiddlewares(cfg)
+	cfg.HTTP.Middlewares[name] = traefikMiddleware{
+		Headers: &traefikHeaders{CustomRequestHeaders: map[string]string{header: value}},
+	}
+}
+
+func ensureClearAudMiddleware(cfg *traefikDynamicConfig) {
+	setRequestHeaderMiddleware(cfg, clearAudMiddlewareName, routeAudienceHeader, "")
+}
+
+// centralHostRouterName names the /_oauth router of one base domain's central
+// sign-in host. Dots are not used in muvee's generated router names.
+func centralHostRouterName(base string) string {
+	return "muvee-central-oauth-" + strings.ReplaceAll(base, ".", "-")
+}
+
+// addCentralOAuthRouters routes /_oauth on every ACME base domain's apex — the
+// central sign-in host (FORWARD_AUTH_BASE_URL rebased per base domain; the
+// compose templates set it to https://${BASE_DOMAIN}) — to authservice, with
+// X-Muvee-Aud cleared. Generated here rather than as compose labels because
+// labels cannot be repeated per BASE_DOMAINS entry; for the canonical base it
+// overrides the compose label router (same rule, higher priority) so the header
+// is cleared there too. Cloudflare Tunnel bases get the equivalent from
+// addCFTunnelPanelRouters.
+func (s *Server) addCentralOAuthRouters(cfg *traefikDynamicConfig) {
+	bases := s.baseDomains
+	if len(bases) == 0 && s.baseDomain != "" {
+		bases = []string{s.baseDomain}
+	}
+	added := false
+	for _, b := range bases {
+		b = domains.NormalizeHost(b)
+		if b == "" || s.isCFTunnelHost(b) {
+			continue
+		}
+		cfg.HTTP.Routers[centralHostRouterName(b)] = traefikRouter{
+			Rule:        fmt.Sprintf("Host(`%s`) && PathPrefix(`/_oauth`)", b),
+			EntryPoints: []string{"websecure"},
+			Service:     deviceFlowServiceName,
+			Middlewares: []string{clearAudMiddlewareName},
+			TLS: &traefikTLS{
+				CertResolver: "letsencrypt",
+				Domains:      []traefikTLSDomain{{Main: b}},
+			},
+			Priority: 200,
+		}
+		added = true
+	}
+	if added {
+		ensureClearAudMiddleware(cfg)
+	}
+}
+
+// embedBridgeMiddlewareName is the embed-bridge plugin instance declared in
+// this HTTP provider (BACKLOG-20261117-007; earlier releases referenced the
+// host-mounted embed-bridge@file, whose strip list was the plugin default).
+// Appended to every user-facing project router so any HTML page served by a
+// muvee-deployed project gets the embed-bridge SDK auto-injected (see
+// traefik/plugins-local/.../embed-bridge and docs/embed-bridge.md), and every
+// authservice cookie in FwdAuthCookieNames is stripped from the forwarded
+// request. Bypass / device-flow / authservice routers are intentionally
+// excluded — bypass routers get stripFwdSessionMiddlewareName instead; the
+// /_oauth/* device-flow router goes to authservice, which needs the cookies.
+const embedBridgeMiddlewareName = "muvee-embed-bridge"
+
+// attachEmbedBridge appends embedBridgeMiddlewareName to the router's
+// Middlewares slice unless it's already present, declaring the instance in
+// cfg. The slice may be nil when no auth middleware ran (public project), in
+// which case we initialise it.
+func attachEmbedBridge(cfg *traefikDynamicConfig, router *traefikRouter) {
+	ensureMiddlewares(cfg)
+	cfg.HTTP.Middlewares[embedBridgeMiddlewareName] = traefikMiddleware{
+		Plugin: map[string]map[string]any{"embed-bridge": {
+			"scriptPath":   "/_embed-bridge.js",
+			"stripCookies": append([]string(nil), FwdAuthCookieNames...),
+		}},
+	}
 	for _, m := range router.Middlewares {
-		if m == embedBridgeMiddlewareRef {
+		if m == embedBridgeMiddlewareName {
 			return
 		}
 	}
-	router.Middlewares = append(router.Middlewares, embedBridgeMiddlewareRef)
+	router.Middlewares = append(router.Middlewares, embedBridgeMiddlewareName)
 }
 
 // stripFwdSessionMiddlewareName is a strip-only embed-bridge instance that
-// removes the muvee subsite session cookie (muvee_fwd_session) from requests
-// before they reach a project upstream. Project routers get the same stripping
-// from embed-bridge@file (the plugin strips by default); bypass routers skip
-// ForwardAuth and the SDK, so they get this instance instead. It is declared
-// here in the HTTP provider rather than in dynamic.yml because dynamic.yml is
-// host-mounted and not refreshed by image upgrades (BACKLOG-20261117-003).
+// removes every authservice cookie (FwdAuthCookieNames) from requests before
+// they reach a project upstream. Project routers get the same stripping from
+// embedBridgeMiddlewareName; bypass routers skip ForwardAuth and the SDK, so
+// they get this instance instead. It is declared here in the HTTP provider
+// rather than in dynamic.yml because dynamic.yml is host-mounted and not
+// refreshed by image upgrades (BACKLOG-20261117-003).
 const stripFwdSessionMiddlewareName = "muvee-strip-fwd-session"
 
 // ensureStripFwdSessionMiddleware declares stripFwdSessionMiddlewareName in cfg.
 // Only called when a router references it, so configs without bypass routers
 // stay byte-identical.
 func ensureStripFwdSessionMiddleware(cfg *traefikDynamicConfig) {
-	if cfg.HTTP.Middlewares == nil {
-		cfg.HTTP.Middlewares = make(map[string]traefikMiddleware)
-	}
+	ensureMiddlewares(cfg)
 	cfg.HTTP.Middlewares[stripFwdSessionMiddlewareName] = traefikMiddleware{
-		Plugin: map[string]map[string]any{"embed-bridge": {"stripOnly": true}},
+		Plugin: map[string]map[string]any{"embed-bridge": {
+			"stripOnly":    true,
+			"stripCookies": append([]string(nil), FwdAuthCookieNames...),
+		}},
 	}
 }
 
@@ -5269,9 +5397,10 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		// without ForwardAuth need this just as much — without it Traefik
 		// falls through to the project's own backend (e.g. an nginx SPA), the
 		// SDK sees HTML instead of JSON, and sign-in is broken.
-		addDeviceFlowRouter(&cfg, name, hosts, httpsRouter.TLS)
+		projectAud := "project:" + dep.ProjectID.String()
+		addDeviceFlowRouter(&cfg, name, hosts, httpsRouter.TLS, projectAud)
 
-		attachEmbedBridge(&httpsRouter)
+		attachEmbedBridge(&cfg, &httpsRouter)
 		cfg.HTTP.Routers[name] = httpsRouter
 		cfg.HTTP.Services[name] = traefikService{
 			LoadBalancer: traefikLB{
@@ -5306,7 +5435,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			if needsForwardAuth && dep.AuthBypassPaths != "" {
 				addBypassRouters(&cfg, aliasName, name, []string{a.Host}, aliasTLS, dep.AuthBypassPaths)
 			}
-			addDeviceFlowRouter(&cfg, aliasName, []string{a.Host}, aliasTLS)
+			addDeviceFlowRouter(&cfg, aliasName, []string{a.Host}, aliasTLS, projectAud)
 			// httpsRouter already had embed-bridge attached above; aliasRouter
 			// inherited it via the Middlewares copy, so no need to attach again.
 			cfg.HTTP.Routers[aliasName] = aliasRouter
@@ -5354,6 +5483,11 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 					if proj.AuthAllowedDomains != "" {
 						verifyURL += "&domains=" + proj.AuthAllowedDomains
 					}
+				} else {
+					// A project-less tunnel is its own audience
+					// (BACKLOG-20261117-007): fixed here, never taken from the
+					// client-controlled X-Forwarded-Host.
+					verifyURL += "?tunnel_host=" + url.QueryEscape(t.Domain)
 				}
 				cfg.HTTP.Middlewares[mwName] = traefikMiddleware{
 					ForwardAuth: projectForwardAuth(verifyURL),
@@ -5369,9 +5503,13 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			// /_oauth/* always routes to authservice — applies even to
 			// public, no-auth tunnels so the SDK can call /_oauth/providers
 			// etc. from a project's frontend.
-			addDeviceFlowRouter(&cfg, name, hosts, router.TLS)
+			tunnelAud := "host:" + t.Domain
+			if hasProj {
+				tunnelAud = "project:" + proj.ID.String()
+			}
+			addDeviceFlowRouter(&cfg, name, hosts, router.TLS, tunnelAud)
 
-			attachEmbedBridge(&router)
+			attachEmbedBridge(&cfg, &router)
 			cfg.HTTP.Routers[name] = router
 			cfg.HTTP.Services[name] = traefikService{
 				LoadBalancer: traefikLB{
@@ -5430,9 +5568,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 			// /_oauth/* always routes to authservice — public domain-only
 			// projects with a connected tunnel still need it for SDK calls.
-			addDeviceFlowRouter(&cfg, name, hosts, domainRouter.TLS)
+			addDeviceFlowRouter(&cfg, name, hosts, domainRouter.TLS, "project:"+p.ID.String())
 
-			attachEmbedBridge(&domainRouter)
+			attachEmbedBridge(&cfg, &domainRouter)
 			cfg.HTTP.Routers[name] = domainRouter
 			cfg.HTTP.Services[name] = traefikService{
 				LoadBalancer: traefikLB{
@@ -5441,6 +5579,9 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// /_oauth on each base domain's central sign-in host (X-Muvee-Aud cleared).
+	s.addCentralOAuthRouters(&cfg)
 
 	// Hosts under CF_TUNNEL_DOMAINS move to the cftunnel entrypoint — see cftunnel.go.
 	s.applyCFTunnelDomains(&cfg)

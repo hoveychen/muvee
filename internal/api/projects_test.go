@@ -456,7 +456,7 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 			addBypassRouters(&cfg, name, name, []string{host}, httpsRouter.TLS, dep.AuthBypassPaths)
 		}
 
-		addDeviceFlowRouter(&cfg, name, []string{host}, httpsRouter.TLS)
+		addDeviceFlowRouter(&cfg, name, []string{host}, httpsRouter.TLS, fmt.Sprintf("project:%s", dep.ProjectID))
 	}
 
 	cfg.HTTP.Routers[name] = httpsRouter
@@ -492,9 +492,12 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	if !ok || mw.ForwardAuth != nil {
 		t.Fatalf("strip middleware missing or wrong: %+v", mw)
 	}
+	// Strip-only, with the full explicit cookie list (BACKLOG-20261117-007:
+	// the plugin's built-in default only knows the legacy names).
 	raw, _ := json.Marshal(mw)
-	if string(raw) != `{"plugin":{"embed-bridge":{"stripOnly":true}}}` {
-		t.Errorf("strip middleware JSON = %s", raw)
+	wantNames, _ := json.Marshal(FwdAuthCookieNames)
+	if want := `{"plugin":{"embed-bridge":{"stripCookies":` + string(wantNames) + `,"stripOnly":true}}}`; string(raw) != want {
+		t.Errorf("strip middleware JSON = %s, want %s", raw, want)
 	}
 	expectedRule0 := "Host(`myapp.example.com`) && Path(`/health`)"
 	if bypass0.Rule != expectedRule0 {
@@ -534,10 +537,14 @@ func TestTraefikConfig_AuthBypassRouters(t *testing.T) {
 	if !ok {
 		t.Fatal("oauth-bypass router myapp-device-flow not found — addDeviceFlowRouter was not called for auth-protected deployment")
 	}
-	// /_oauth/* goes to authservice, which needs muvee_fwd_session (logout,
+	// /_oauth/* goes to authservice, which needs the session cookies (logout,
 	// userinfo, session renewal) — it must never get the stripping middleware.
-	if len(df.Middlewares) != 0 {
-		t.Errorf("device-flow router must not carry middlewares, got %v", df.Middlewares)
+	// Its only middleware injects the project audience (BACKLOG-20261117-007).
+	if len(df.Middlewares) != 1 || df.Middlewares[0] != "myapp-aud" {
+		t.Errorf("device-flow router must carry only the aud middleware, got %v", df.Middlewares)
+	}
+	if mw := cfg.HTTP.Middlewares["myapp-aud"]; mw.Plugin != nil || mw.ForwardAuth != nil || mw.Headers == nil {
+		t.Errorf("aud middleware must be a plain headers middleware, got %+v", mw)
 	}
 }
 
@@ -591,7 +598,7 @@ func TestTraefikConfig_DeviceFlowRouter_PublicProject(t *testing.T) {
 	if needsForwardAuth {
 		t.Fatalf("test setup error: needsForwardAuth should be false for a public + auth_required=false deployment")
 	}
-	addDeviceFlowRouter(&cfg, name, []string{host}, httpsRouter.TLS)
+	addDeviceFlowRouter(&cfg, name, []string{host}, httpsRouter.TLS, fmt.Sprintf("project:%s", dep.ProjectID))
 
 	cfg.HTTP.Routers[name] = httpsRouter
 
@@ -609,8 +616,17 @@ func TestTraefikConfig_DeviceFlowRouter_PublicProject(t *testing.T) {
 	if dfRouter.Priority < 200 {
 		t.Errorf("device-flow priority should be >= 200, got %d", dfRouter.Priority)
 	}
-	if len(dfRouter.Middlewares) != 0 {
-		t.Errorf("device-flow router should have NO middlewares (bypasses ForwardAuth), got %v", dfRouter.Middlewares)
+	// It bypasses ForwardAuth: its only middleware is the headers middleware
+	// injecting the project audience (BACKLOG-20261117-007).
+	if len(dfRouter.Middlewares) != 1 || dfRouter.Middlewares[0] != name+"-aud" {
+		t.Fatalf("device-flow router middlewares = %v, want only the aud headers middleware", dfRouter.Middlewares)
+	}
+	mw := cfg.HTTP.Middlewares[name+"-aud"]
+	if mw.ForwardAuth != nil || mw.Headers == nil {
+		t.Fatalf("aud middleware = %+v, want a headers middleware without ForwardAuth", mw)
+	}
+	if got, want := mw.Headers.CustomRequestHeaders["X-Muvee-Aud"], fmt.Sprintf("project:%s", dep.ProjectID); got != want {
+		t.Errorf("X-Muvee-Aud = %q, want %q", got, want)
 	}
 }
 

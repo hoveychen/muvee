@@ -93,15 +93,31 @@ var legacyFwdCookies = []string{
 	"muvee_invite_token", "muvee_fwd_signed_out", "fwd_oauth_redirect",
 }
 
-// fwdAllCookieNames lists every auth cookie name, new and legacy, that must
-// never reach a tenant: the HTTP provider passes it to the embed-bridge
-// strip middleware explicitly (see internal/api traefik generation).
+// fwdAllCookieNames lists every auth cookie name that must never reach a
+// tenant: the __Host- names, their plain-http dev fallbacks (the bare base
+// names) and the legacy base-domain names. internal/api FwdAuthCookieNames,
+// which the HTTP provider passes to every embed-bridge instance, must hold the
+// same set (a drift-guard test compares them).
 func fwdAllCookieNames() []string {
+	bases := []string{fwdSessionCookieBase, ssoCookieBase, fwdStateCookieBase, apexStateCookieBase, signedOutCookieBase, fwdRedirectCookieBase}
 	out := []string{}
-	for _, b := range []string{fwdSessionCookieBase, ssoCookieBase, fwdStateCookieBase, apexStateCookieBase, signedOutCookieBase, fwdRedirectCookieBase} {
-		out = append(out, "__Host-"+b)
+	seen := map[string]bool{}
+	add := func(n string) {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
 	}
-	return append(out, legacyFwdCookies...)
+	for _, b := range bases {
+		add("__Host-" + b)
+	}
+	for _, b := range bases {
+		add(b)
+	}
+	for _, n := range legacyFwdCookies {
+		add(n)
+	}
+	return out
 }
 
 // devInsecureCookies drops the __Host- prefix and the Secure flag. Only ever
@@ -358,7 +374,13 @@ func verifyAudience(r *http.Request) string {
 // and cleared on the central host's routers.
 const routeAudienceHeader = "X-Muvee-Aud"
 
+// routeAudience is the audience Traefik injected for this subsite route. The
+// central sign-in host is never a subsite: there the header is ignored even if
+// a misconfigured router let a client-sent value through.
 func routeAudience(r *http.Request) string {
+	if isCentralHost(r) {
+		return ""
+	}
 	return strings.TrimSpace(r.Header.Get(routeAudienceHeader))
 }
 

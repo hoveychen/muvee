@@ -27,9 +27,9 @@ func TestApplyCFTunnelDomainsSplitsRouters(t *testing.T) {
 		EntryPoints: []string{"websecure"},
 		Service:     "foo",
 		TLS:         tls,
-		Middlewares: []string{"foo-auth", embedBridgeMiddlewareRef},
+		Middlewares: []string{"foo-auth", embedBridgeMiddlewareName},
 	}
-	addDeviceFlowRouter(&cfg, "foo", hosts, tls)
+	addDeviceFlowRouter(&cfg, "foo", hosts, tls, "project:p-foo")
 
 	s.applyCFTunnelDomains(&cfg)
 
@@ -61,6 +61,10 @@ func TestApplyCFTunnelDomainsSplitsRouters(t *testing.T) {
 	df := cfg.HTTP.Routers["foo-device-flow_cf"]
 	if df.Rule != "Host(`foo.cfdemo.com`) && PathPrefix(`/_oauth`)" || df.Priority != 200 {
 		t.Errorf("device-flow sibling = %+v", df)
+	}
+	// The tunnel sibling keeps the X-Muvee-Aud injection (BACKLOG-20261117-007).
+	if len(df.Middlewares) != 1 || df.Middlewares[0] != "foo-aud" {
+		t.Errorf("device-flow sibling middlewares = %v, want [foo-aud]", df.Middlewares)
 	}
 	if got := cfg.HTTP.Routers["foo-device-flow"].Rule; got != "Host(`foo.muveeai.com`) && PathPrefix(`/_oauth`)" {
 		t.Errorf("ACME device-flow rule = %q", got)
@@ -130,6 +134,16 @@ func TestApplyCFTunnelDomainsPanelRouters(t *testing.T) {
 	oauth := cfg.HTTP.Routers["panel-oauth_cf"]
 	if oauth.Service != deviceFlowServiceName || oauth.Priority != 200 {
 		t.Errorf("panel-oauth_cf = %+v", oauth)
+	}
+	// The panel hosts include the central sign-in host: a client-sent
+	// X-Muvee-Aud must be deleted there (BACKLOG-20261117-007).
+	if len(oauth.Middlewares) != 1 || oauth.Middlewares[0] != clearAudMiddlewareName {
+		t.Errorf("panel-oauth_cf middlewares = %v, want [%s]", oauth.Middlewares, clearAudMiddlewareName)
+	}
+	if h := cfg.HTTP.Middlewares[clearAudMiddlewareName].Headers; h == nil || len(h.CustomRequestHeaders) != 1 || h.CustomRequestHeaders["X-Muvee-Aud"] != "" {
+		t.Errorf("clear-aud middleware = %+v", h)
+	} else if _, ok := h.CustomRequestHeaders["X-Muvee-Aud"]; !ok {
+		t.Error("clear-aud middleware does not name X-Muvee-Aud")
 	}
 	if svc := cfg.HTTP.Services[deviceFlowServiceName]; len(svc.LoadBalancer.Servers) != 1 {
 		t.Errorf("authservice backend not declared: %+v", svc)
