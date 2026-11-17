@@ -38,9 +38,24 @@ func newPluginWith(t *testing.T, next http.Handler, mutate func(*Config)) http.H
 
 func TestDefaultConfigStripsFwdSession(t *testing.T) {
 	cfg := CreateConfig()
-	want := []string{"muvee_fwd_session", "muvee_invite_token", "fwd_oauth_state"}
-	if strings.Join(cfg.StripCookies, ",") != strings.Join(want, ",") {
-		t.Fatalf("default StripCookies = %v, want %v", cfg.StripCookies, want)
+	// The default must cover the current __Host- session names as well as the
+	// legacy ones: instances without an explicit list (embed-bridge@file, or
+	// routers from an older muvee-server after a rollback) use it.
+	have := map[string]bool{}
+	for _, n := range cfg.StripCookies {
+		have[n] = true
+	}
+	for _, n := range []string{
+		"__Host-muvee_fwd", "__Host-muvee_sso", "__Host-fwd_state", "__Host-fwd_apex_state",
+		"muvee_fwd_session", "muvee_invite_token", "fwd_oauth_state",
+	} {
+		if !have[n] {
+			t.Errorf("default StripCookies %v is missing %q", cfg.StripCookies, n)
+		}
+	}
+	cfg.StripCookies[0] = "mutated"
+	if CreateConfig().StripCookies[0] == "mutated" {
+		t.Error("CreateConfig shares its default slice between instances")
 	}
 	if cfg.StripOnly {
 		t.Fatal("default StripOnly must be false (the shared embed-bridge@file instance injects the SDK)")
@@ -109,9 +124,9 @@ func TestStripIsExactNameMatch(t *testing.T) {
 	cap := &headerCapture{}
 	h := newPluginWith(t, cap, nil)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Cookie", "muvee_fwd_session_x=1; note=muvee_fwd_session=2; muvee_fwd_signed_out=1")
+	req.Header.Set("Cookie", "muvee_fwd_session_x=1; note=muvee_fwd_session=2; Host-muvee_fwd=1; muvee_fwd_signed_out=1")
 	h.ServeHTTP(httptest.NewRecorder(), req)
-	want := "muvee_fwd_session_x=1; note=muvee_fwd_session=2; muvee_fwd_signed_out=1"
+	want := "muvee_fwd_session_x=1; note=muvee_fwd_session=2; Host-muvee_fwd=1"
 	if len(cap.cookies) != 1 || cap.cookies[0] != want {
 		t.Fatalf("upstream Cookie = %q, want %q", cap.cookies, want)
 	}

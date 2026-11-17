@@ -60,11 +60,26 @@ type Config struct {
 	StripOnly bool `json:"stripOnly,omitempty" yaml:"stripOnly,omitempty"`
 }
 
+// defaultStripCookies is every cookie muvee's authservice may set, current and
+// legacy names. muvee-server hands the same list to each instance it declares,
+// but instances configured without one — embed-bridge@file in a host-mounted
+// dynamic.yml, or the routers an older muvee-server generates after an image
+// rollback — rely on this default, so it must cover the current names too.
+// Mirrors internal/api FwdAuthCookieNames (drift-guarded by
+// cmd/muvee TestFwdCookieNamesMatchStripList).
+var defaultStripCookies = []string{
+	"__Host-muvee_fwd", "__Host-muvee_sso", "__Host-fwd_state", "__Host-fwd_apex_state",
+	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect",
+	"muvee_fwd", "muvee_sso", "fwd_state", "fwd_apex_state",
+	"muvee_fwd_signed_out", "fwd_oauth_redirect",
+	"muvee_fwd_session", "fwd_oauth_state", "fwd_oauth_host", "muvee_invite_token",
+}
+
 // CreateConfig is required by traefik plugin contract.
 func CreateConfig() *Config {
 	return &Config{
 		ScriptPath:   "/_embed-bridge.js",
-		StripCookies: []string{"muvee_fwd_session", "muvee_invite_token", "fwd_oauth_state"},
+		StripCookies: append([]string(nil), defaultStripCookies...),
 	}
 }
 
