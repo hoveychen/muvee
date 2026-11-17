@@ -626,6 +626,11 @@ func TestEP_Logout_NonSameOriginOnlyConfirms(t *testing.T) {
 	}
 }
 
+// The "" case pins a deliberate deviation from design §4 (which says "not
+// same-origin → confirm"): requests without Sec-Fetch-Site (curl, browsers
+// predating Fetch Metadata) sign out directly, so SDK signOut()'s fetch keeps
+// working there. Pending confirmation by the coordinator; if §4 is applied
+// literally, move "" into TestEP_Logout_NonSameOriginOnlyConfirms.
 func TestEP_Logout_SameOriginRevokesBothSIDsAndClears(t *testing.T) {
 	for _, sfs := range []string{"same-origin", ""} {
 		t.Run("Sec-Fetch-Site="+sfs, func(t *testing.T) {
