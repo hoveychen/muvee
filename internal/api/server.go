@@ -4836,7 +4836,13 @@ func ensureStripFwdSessionMiddleware(cfg *traefikDynamicConfig) {
 // addBypassRouters creates higher-priority Traefik routers that skip ForwardAuth
 // for the given newline-separated bypass paths. They still strip the muvee
 // session cookie so a public path cannot harvest it.
-func addBypassRouters(cfg *traefikDynamicConfig, routerName string, hosts []string, tls *traefikTLS, bypassPaths string) {
+//
+// routerName only prefixes the generated router names; serviceName is the
+// backend they route to. They differ for custom-domain aliases, whose routers
+// are named "<prefix>-alias-N" but share the project service "<prefix>"
+// (BUG-20261117-001: passing the alias router name as the service produced
+// routers pointing at a service that does not exist).
+func addBypassRouters(cfg *traefikDynamicConfig, routerName, serviceName string, hosts []string, tls *traefikTLS, bypassPaths string) {
 	hostRule := hostMatchRule(hosts)
 	for i, raw := range strings.Split(bypassPaths, "\n") {
 		p := strings.TrimSpace(raw)
@@ -4854,7 +4860,7 @@ func addBypassRouters(cfg *traefikDynamicConfig, routerName string, hosts []stri
 		cfg.HTTP.Routers[bypassName] = traefikRouter{
 			Rule:        hostRule + " && " + pathRule,
 			EntryPoints: []string{"websecure"},
-			Service:     routerName,
+			Service:     serviceName,
 			Middlewares: []string{stripFwdSessionMiddlewareName},
 			TLS:         tls,
 			Priority:    100,
@@ -5066,7 +5072,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 			// Auth bypass paths: create higher-priority routers that skip ForwardAuth.
 			if dep.AuthBypassPaths != "" {
-				addBypassRouters(&cfg, name, hosts, httpsRouter.TLS, dep.AuthBypassPaths)
+				addBypassRouters(&cfg, name, name, hosts, httpsRouter.TLS, dep.AuthBypassPaths)
 			}
 		}
 
@@ -5105,7 +5111,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				Middlewares: append([]string(nil), httpsRouter.Middlewares...),
 			}
 			if needsForwardAuth && dep.AuthBypassPaths != "" {
-				addBypassRouters(&cfg, aliasName, []string{a.Host}, aliasTLS, dep.AuthBypassPaths)
+				addBypassRouters(&cfg, aliasName, name, []string{a.Host}, aliasTLS, dep.AuthBypassPaths)
 			}
 			addDeviceFlowRouter(&cfg, aliasName, []string{a.Host}, aliasTLS)
 			// httpsRouter already had embed-bridge attached above; aliasRouter
@@ -5163,7 +5169,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 
 				// Auth bypass paths from the bound domain_only project.
 				if hasProj && proj.AuthBypassPaths != "" {
-					addBypassRouters(&cfg, name, hosts, router.TLS, proj.AuthBypassPaths)
+					addBypassRouters(&cfg, name, name, hosts, router.TLS, proj.AuthBypassPaths)
 				}
 			}
 
@@ -5225,7 +5231,7 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 				domainRouter.Middlewares = []string{mwName}
 
 				if p.AuthBypassPaths != "" {
-					addBypassRouters(&cfg, name, hosts, domainRouter.TLS, p.AuthBypassPaths)
+					addBypassRouters(&cfg, name, name, hosts, domainRouter.TLS, p.AuthBypassPaths)
 				}
 			}
 
