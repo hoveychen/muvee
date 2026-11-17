@@ -288,9 +288,11 @@ func TestVerify_RevocationCheckFailureFailsClosed(t *testing.T) {
 	}
 }
 
-// CLI device-flow tokens are out of scope (BACKLOG-20261117-007): neither a
-// kind=cli token nor an unmarked Bearer token from before the claim is checked.
-// A session-kind JWT replayed as Bearer is.
+// kind=cli device-flow tokens are out of scope (BACKLOG-20261117-007) and are
+// not checked. An unmarked Bearer token is: sessions and CLI tokens signed
+// before the kind claim are indistinguishable, so treating it as CLI would let
+// a pre-upgrade session cookie replayed as Bearer dodge console logout. A
+// session-kind JWT replayed as Bearer is checked too.
 func TestVerify_BearerRevocationByKind(t *testing.T) {
 	stub := revokeEnv(t)
 	stub.revoked, stub.revokedIAT = true, time.Now().Unix()
@@ -305,7 +307,7 @@ func TestVerify_BearerRevocationByKind(t *testing.T) {
 	for name, tc := range map[string]struct {
 		token string
 		ok    bool
-	}{"cli": {cli, true}, "legacy-cli": {legacyCLI, true}, "session-as-bearer": {session, false}} {
+	}{"cli": {cli, true}, "legacy-unmarked": {legacyCLI, false}, "session-as-bearer": {session, false}} {
 		r := httptest.NewRequest(http.MethodGet, "/verify?project_id="+revokeProjectID, nil)
 		r.Header.Set("X-Forwarded-Host", "myproj.example.com")
 		r.Header.Set("Authorization", "Bearer "+tc.token)

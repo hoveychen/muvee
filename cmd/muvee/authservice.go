@@ -361,14 +361,16 @@ func resolveAuthClaims(w http.ResponseWriter, r *http.Request) (*authClaims, err
 
 // sessionRevocable reports whether console logout can revoke these claims: a
 // roaming user session (not a password / phone session scoped to one project,
-// which has no users row behind it) presented as the session cookie or
-// marked as a session. Unmarked Bearer tokens are CLI device-flow tokens from
-// before the kind claim and are left alone like current CLI tokens.
+// which has no users row behind it). Only kind=cli device-flow tokens are
+// exempt, whatever the transport (src is kept for callers' symmetry). An
+// unmarked token signed before the kind claim is revocable even as Bearer: a
+// pre-upgrade session and a pre-upgrade CLI token look the same, and exempting
+// it would let a session cookie replayed as Bearer dodge console logout.
 func sessionRevocable(c *authClaims, src credSource) bool {
-	if c.ProjectID != "" || (c.Email == "" && c.UserID == "") || c.Kind == fwdKindCLI {
+	if c.ProjectID != "" || (c.Email == "" && c.UserID == "") {
 		return false
 	}
-	return src == credCookie || c.Kind == fwdKindSession
+	return c.Kind != fwdKindCLI
 }
 
 // sessionIssuedAt is the session's iat in unix seconds, or 0 for a session
