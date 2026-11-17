@@ -184,17 +184,14 @@ func handleLoginTokenPoll(w http.ResponseWriter, r *http.Request) {
 
 	switch entry.Status {
 	case "success":
+		// Status only, never an identity or a credential
+		// (BACKLOG-20261117-007): the signed state that ties a provider round
+		// trip to this login_token travels in the provider URL, so anyone
+		// holding that URL could lure a victim through it and poll the
+		// victim's identity back. Browser sign-in goes through the popup flow
+		// (/_oauth/login?popup=1), whose state is bound to the browser.
 		loginTokens.Delete(token)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "success",
-			"user": map[string]string{
-				"email":      entry.Email,
-				"user_id":    entry.UserID,
-				"name":       entry.Name,
-				"avatar_url": entry.AvatarURL,
-				"provider":   entry.ProviderName,
-			},
-		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success"})
 	case "error":
 		loginTokens.Delete(token)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -306,13 +303,10 @@ func handleLoginTokenCallback(w http.ResponseWriter, r *http.Request, p auth.Pro
 	entry.ProviderName = providerName
 	entry.Status = "success"
 
-	// Also issue the standard forward-auth session cookie. If the OAuth round
-	// trip happened in the same browser as the SDK (the common web case), the
-	// SPA gets the cookie automatically and onAuthChange listeners on other
-	// tabs of the same project subdomain will fire too.
-	if signed, err := signForwardJWT(userID, email, name, avatarURL, providerName); err == nil {
-		issueFwdSession(w, r, signed)
-	}
+	// No session is issued here (BACKLOG-20261117-007): the login-token
+	// state rides in the provider URL rather than being bound to this
+	// browser, so whoever started the flow is not necessarily the person who
+	// completed it. Browser sessions come only from the state-bound flow.
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, loginCompletePage)

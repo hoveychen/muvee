@@ -6,10 +6,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -100,94 +98,32 @@ func verifyState(s string) (stateClaims, error) {
 	return c, nil
 }
 
-// Forward-auth login state ("f1.<payload>.<mac>").
+// Central sign-in state ("f1.<mac>"), BACKLOG-20261117-007 / BUG-20261117-002.
 //
-// The browser login started on /_oauth/login?provider=X used to send a plain
-// time.Now().UnixNano() as the OAuth state: guessable, and carrying nothing
-// about where the login began. The callback lands on the forwardAuthBase host
-// and reads the post-login return URL from fwd_oauth_redirect — a base-domain
-// cookie that any sibling project subdomain can overwrite — so a tenant could
-// toss its own host in there and receive users who were signing in elsewhere.
-//
-// The fwd state binds the flow to the host it started on: the callback only
-// follows a return URL on that host (boundPostLoginRedirect). The state holds
-// an 8-byte hash of the host rather than the host itself, and the host travels
-// in the fwd_oauth_host cookie (checked against the hash): some providers cap
-// state length (WeCom: 128 bytes) and project hosts have no length limit, so
-// the state is a fixed 58 bytes. The HMAC reuses jwtSecret with a
-// domain-separation label so it can never be confused with a signState token.
-const (
-	fwdStatePrefix    = "f1."
-	fwdHostCookieName = "fwd_oauth_host"
-)
+// A provider round trip started on the central sign-in host
+// (/_oauth/start) keeps everything it needs — target host, the subsite's
+// state, mode, device user code, a random nonce — in that host's own
+// __Host-fwd_apex_state cookie, which no tenant subdomain can write. The
+// provider only carries f1, a MAC over that nonce: fixed length (WeCom caps
+// state at 128 bytes) and meaningless without the cookie. The callback accepts
+// nothing else for a browser sign-in: the base-domain fwd_oauth_state /
+// fwd_oauth_host cookies, the signed host-bound state and the pre-upgrade
+// numeric state are gone, because a sibling subdomain could plant all of them
+// (login CSRF).
+const fwdStatePrefix = "f1."
 
-func fwdStateMAC(p string) []byte {
+// apexStateF1 derives the provider state for an apex sign-in nonce.
+func apexStateF1(nonce string) string {
 	mac := hmac.New(sha256.New, jwtSecret)
-	_, _ = mac.Write([]byte("muvee-fwd-state\x00"))
-	_, _ = mac.Write([]byte(p))
-	return mac.Sum(nil)[:16]
+	_, _ = mac.Write([]byte("muvee-apex-state\x00"))
+	_, _ = mac.Write([]byte(nonce))
+	return fwdStatePrefix + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:24])
 }
 
-func fwdHostHash(host string) []byte {
-	h := sha256.Sum256([]byte("muvee-fwd-host\x00" + host))
-	return h[:8]
-}
-
-func signFwdState(host string) string { return signFwdStateAt(host, time.Now()) }
-
-func signFwdStateAt(host string, at time.Time) string {
-	payload := make([]byte, 24)
-	if _, err := rand.Read(payload[:12]); err != nil {
-		panic(err)
-	}
-	binary.BigEndian.PutUint32(payload[12:16], uint32(at.Unix()))
-	copy(payload[16:], fwdHostHash(host))
-	p := base64.RawURLEncoding.EncodeToString(payload)
-	return fwdStatePrefix + p + "." + base64.RawURLEncoding.EncodeToString(fwdStateMAC(p))
-}
-
-// isFwdState reports whether s claims to be a fwd state (valid or not).
-func isFwdState(s string) bool { return strings.HasPrefix(s, fwdStatePrefix) }
-
-// verifyFwdState checks a fwd state's signature and age and that it was
-// minted for host (the value of the fwd_oauth_host cookie).
-func verifyFwdState(s, host string) bool {
-	if !isFwdState(s) || host == "" {
+// apexStateF1Matches compares a provider state with the one nonce derives.
+func apexStateF1Matches(state, nonce string) bool {
+	if nonce == "" || !strings.HasPrefix(state, fwdStatePrefix) {
 		return false
 	}
-	parts := strings.SplitN(strings.TrimPrefix(s, fwdStatePrefix), ".", 2)
-	if len(parts) != 2 {
-		return false
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || !hmac.Equal(sig, fwdStateMAC(parts[0])) {
-		return false
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil || len(payload) != 24 {
-		return false
-	}
-	iat := int64(binary.BigEndian.Uint32(payload[12:16]))
-	now := time.Now().Unix()
-	if iat+stateMaxAge < now || iat > now+60 {
-		return false
-	}
-	return hmac.Equal(payload[16:], fwdHostHash(host))
-}
-
-// isFreshLegacyState accepts the pre-v1.40.4 unsigned state — the decimal
-// UnixNano at which the login started — only while it is younger than
-// stateMaxAge. That covers logins in flight across the upgrade (and replicas
-// still on the old version) without depending on process start time; any
-// other unsigned value is rejected so nobody can opt out of the host binding.
-func isFreshLegacyState(s string) bool {
-	if len(s) < 18 || len(s) > 20 {
-		return false
-	}
-	ns, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || ns <= 0 {
-		return false
-	}
-	age := time.Since(time.Unix(0, ns))
-	return age >= -time.Minute && age <= stateMaxAge*time.Second
+	return hmac.Equal([]byte(state), []byte(apexStateF1(nonce)))
 }

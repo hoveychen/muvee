@@ -53,6 +53,15 @@ type authClaims struct {
 	// header; CLI tokens are left alone (BACKLOG-20261117-007). Tokens signed
 	// before this claim existed carry "" (see sessionRevocable).
 	Kind string `json:"kind,omitempty"`
+	// SID identifies this credential for per-session revocation; SSOSID is the
+	// central SSO session a subsite session was minted from, and AuthTime that
+	// SSO's sign-in time (a password / phone session's own issue time), which
+	// console logout is compared against (BACKLOG-20261117-007). The audience
+	// (RegisteredClaims.Audience) is project:<id> or host:<h> for subsite
+	// sessions and CLI tokens, sso:<central host> for the SSO session.
+	SID      string `json:"sid,omitempty"`
+	SSOSID   string `json:"sso_sid,omitempty"`
+	AuthTime int64  `json:"auth_time,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -253,6 +262,8 @@ func runAuthservice() {
 		log.Fatal("no auth providers configured; set at least one of GOOGLE_CLIENT_ID, FEISHU_APP_ID, WECOM_CORP_ID, DINGTALK_CLIENT_ID, or enable a social provider via admin/settings")
 	}
 
+	initFwdCookieMode()
+
 	r := chi.NewRouter()
 	r.Get("/verify", handleVerify)
 	r.Get("/verify-admin", handleVerifyAdmin)
@@ -265,6 +276,12 @@ func runAuthservice() {
 	r.Get("/_oauth/logout", handleFwdLogout)
 	r.Get("/_oauth/logged-out", handleLoggedOutPage)
 	r.Get("/_oauth/login", handleLoginPage)
+	// Central sign-in host (BACKLOG-20261117-007): silent authorize, provider
+	// start; and the subsite end of it: code exchange and the SDK popup page.
+	r.Get("/_oauth/authorize", handleSSOAuthorize)
+	r.Get("/_oauth/start", handleSSOStart)
+	r.Get("/_oauth/session", handleSSOSession)
+	r.Get(popupDonePath, handlePopupDone)
 	// Username/password ("demo account") form submission from the login page.
 	// POST-only, so it never collides with the GET {provider} catch-all below.
 	r.Post("/_oauth/password", handlePasswordLogin)
@@ -305,67 +322,66 @@ func runAuthservice() {
 type credSource int
 
 const (
-	credCookie credSource = iota // muvee_fwd_session
+	credCookie credSource = iota // __Host-muvee_fwd
 	credBearer                   // Authorization: Bearer
 )
 
-// resolveRequestClaims extracts auth claims from the request, trying the
-// session cookie first, then falling back to an Authorization: Bearer JWT
-// header. It only validates the signature and expiry: callers must go through
-// resolveAuthClaims, or (handleVerify) run the console-logout revocation check
-// themselves.
-func resolveRequestClaims(r *http.Request) (*authClaims, credSource, error) {
-	if cookie, err := r.Cookie("muvee_fwd_session"); err == nil {
-		if claims, err := parseForwardJWT(cookie.Value); err == nil {
+// resolveRequestClaims extracts the subsite credential for audience aud: the
+// host-only session cookie (kind=session), else an Authorization: Bearer
+// token (kind=session or cli). It only validates signature, expiry, audience
+// and kind: callers go through resolveAuthClaims, or (handleVerify) run the
+// revocation check themselves. An empty aud (a request whose router carries
+// no audience) never authenticates.
+func resolveRequestClaims(r *http.Request, aud string) (*authClaims, credSource, error) {
+	if aud == "" {
+		return nil, credCookie, fmt.Errorf("no audience")
+	}
+	if v, ok := hostCookie(r, fwdSessionCookieBase); ok {
+		if claims, err := parseFwdToken(v, aud, fwdKindSession); err == nil {
 			return claims, credCookie, nil
 		}
 	}
 	if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
-		token := strings.TrimPrefix(bearer, "Bearer ")
-		claims, err := parseForwardJWT(token)
+		claims, err := parseFwdToken(strings.TrimPrefix(bearer, "Bearer "), aud, fwdKindSession, fwdKindCLI)
 		return claims, credBearer, err
 	}
 	return nil, credCookie, fmt.Errorf("no credentials")
 }
 
-// errSessionRevoked: the subsite session predates the user's console logout.
-var errSessionRevoked = errors.New("session revoked by console logout")
+// errSessionRevoked: the credential was revoked (console logout, or a
+// sign-out that revoked its sid / sso_sid).
+var errSessionRevoked = errors.New("session revoked")
 
 // errRevocationCheck: muvee-server could not answer the revocation check.
 var errRevocationCheck = errors.New("session revocation check failed")
 
-// resolveAuthClaims is resolveRequestClaims plus the console-logout
-// revocation check (BACKLOG-20261117-008). A revoked session has its cookie
-// cleared on w (with the signed-out hint, so the login page does not ride the
-// provider's live SSO straight back in) and yields errSessionRevoked; callers
-// then treat the request as unauthenticated. errRevocationCheck means
-// muvee-server was unreachable — callers fail closed.
-func resolveAuthClaims(w http.ResponseWriter, r *http.Request) (*authClaims, error) {
-	claims, src, err := resolveRequestClaims(r)
+// resolveAuthClaims is resolveRequestClaims plus the revocation check. A
+// revoked session has its cookie cleared on w (with the signed-out hint, so
+// the login page does not ride the provider's live SSO straight back in) and
+// yields errSessionRevoked; callers then treat the request as
+// unauthenticated. errRevocationCheck means muvee-server was unreachable —
+// callers fail closed.
+func resolveAuthClaims(w http.ResponseWriter, r *http.Request, aud string) (*authClaims, error) {
+	claims, _, err := resolveRequestClaims(r, aud)
 	if err != nil {
 		return nil, err
 	}
-	if sessionRevocable(claims, src) {
-		revoked, err := checkSessionRevoked(r.Context(), claims)
-		if err != nil {
-			log.Printf("authservice: session revocation check (%s): %v", claimsSubjectForLog(claims), err)
-			return nil, errRevocationCheck
-		}
-		if revoked {
-			clearFwdSession(w, r)
-			return nil, errSessionRevoked
-		}
+	revoked, err := checkSessionRevoked(r.Context(), claims)
+	if err != nil {
+		log.Printf("authservice: session revocation check (%s): %v", claimsSubjectForLog(claims), err)
+		return nil, errRevocationCheck
+	}
+	if revoked {
+		clearFwdSession(w, r)
+		return nil, errSessionRevoked
 	}
 	return claims, nil
 }
 
 // sessionRevocable reports whether console logout can revoke these claims: a
-// roaming user session (not a password / phone session scoped to one project,
-// which has no users row behind it). Only kind=cli device-flow tokens are
-// exempt, whatever the transport (src is kept for callers' symmetry). An
-// unmarked token signed before the kind claim is revocable even as Bearer: a
-// pre-upgrade session and a pre-upgrade CLI token look the same, and exempting
-// it would let a session cookie replayed as Bearer dodge console logout.
+// user credential (not a password / phone session scoped to one project,
+// which has no users row behind it) other than a kind=cli device-flow token.
+// Per-session sid revocation applies to every credential regardless.
 func sessionRevocable(c *authClaims, src credSource) bool {
 	if c.ProjectID != "" || (c.Email == "" && c.UserID == "") {
 		return false
@@ -382,18 +398,27 @@ func sessionIssuedAt(c *authClaims) int64 {
 	return c.IssuedAt.Unix()
 }
 
-// checkSessionRevoked asks muvee-server whether the session predates the
-// user's last console logout. Used by the paths that do not run the
-// per-project access check (which answers the same question in its own
-// query, see checkProjectAccess).
+// checkSessionRevoked asks muvee-server whether the credential is revoked:
+// its sid / sso_sid listed by a sign-out, or (user credentials) its auth_time
+// at or before the user's last console logout. Used by the paths that do not
+// run the per-project access check (which answers the same question in its
+// own query, see checkProjectAccess).
 func checkSessionRevoked(ctx context.Context, c *authClaims) (bool, error) {
 	q := url.Values{}
-	if c.Email != "" {
-		q.Set("email", c.Email)
-	} else {
-		q.Set("user_id", c.UserID)
+	if sessionRevocable(c, credCookie) {
+		if c.Email != "" {
+			q.Set("email", c.Email)
+		} else {
+			q.Set("user_id", c.UserID)
+		}
+		q.Set("session_iat", strconv.FormatInt(claimsAuthTime(c), 10))
 	}
-	q.Set("session_iat", strconv.FormatInt(sessionIssuedAt(c), 10))
+	if sids := claimsSIDs(c); len(sids) > 0 {
+		q.Set("sids", strings.Join(sids, ","))
+	}
+	if len(q) == 0 {
+		return false, nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		muveeServerURL+"/api/internal/auth/session-revoked?"+q.Encode(), nil)
 	if err != nil {
@@ -417,65 +442,72 @@ func checkSessionRevoked(ctx context.Context, c *authClaims) (bool, error) {
 	return body.Revoked, nil
 }
 
-// handleVerify is the Traefik ForwardAuth endpoint for regular users.
+// handleVerify is the Traefik ForwardAuth endpoint for regular users. The
+// accepted audience comes from the verify URL the server generated
+// (verifyAudience): a session of another project or host never passes.
 func handleVerify(w http.ResponseWriter, r *http.Request) {
 	// Look at the user-visible URL (X-Forwarded-Uri) for ?invite_token=... —
 	// r.URL only carries the Traefik forward-auth parameters (project_id /
-	// domains), not the browser's query string.
+	// domains), not the browser's query string. An unauthenticated visitor's
+	// invite token needs no cookie: the post-login return URL keeps the
+	// original query, and the first verify with the new session consumes it
+	// below (BACKLOG-20261117-007).
 	inviteToken := extractInviteTokenFromForwardedURI(r)
+	projectID := r.URL.Query().Get("project_id")
 
-	claims, src, err := resolveRequestClaims(r)
+	claims, src, err := resolveRequestClaims(r, verifyAudience(r))
 	if err != nil {
-		// Unauthenticated visitor with an invite token: stash the token in a
-		// short-lived cookie so handleOAuthCallback can consume it once OAuth
-		// completes (the post-OAuth redirect back to the original URL would
-		// otherwise lose the query string visibility to the callback handler).
-		if inviteToken != "" {
-			setInviteTokenCookie(w, r, inviteToken)
-		}
 		redirectToLogin(w, r)
 		return
 	}
 
 	// Password ("demo account") and phone (self-service SMS) sessions are
-	// hard-scoped to the project that authenticated them. The claim's email is
-	// a passthrough attribute for downstream (X-Forwarded-User), NOT an access
-	// key: authenticating against the project (a demo account, or a verified
-	// phone code) IS the access grant, so we skip both the domains check and
-	// the email-keyed project ACL below. That grant holds only for this one
-	// project, so a mismatching (or absent) project_id fails closed back to the
-	// login page.
+	// hard-scoped to the project that authenticated them (aud and ProjectID).
+	// The claim's email is a passthrough attribute for downstream
+	// (X-Forwarded-User), NOT an access key: authenticating against the
+	// project IS the access grant, so the domains check and the email-keyed
+	// ACL below are skipped. Only per-session revocation applies.
 	if claims.Provider == "password" || claims.Provider == "phone" {
-		if projectID := r.URL.Query().Get("project_id"); projectID != "" && projectID == claims.ProjectID {
-			setUserHeaders(w, claims)
-			w.WriteHeader(http.StatusOK)
+		if projectID == "" || projectID != claims.ProjectID {
+			redirectToLogin(w, r)
 			return
 		}
+		revoked, err := checkSessionRevoked(r.Context(), claims)
+		if err != nil {
+			log.Printf("authservice: session revocation check (%s): %v", claimsSubjectForLog(claims), err)
+			http.Error(w, "access check failed", http.StatusBadGateway)
+			return
+		}
+		if revoked {
+			rejectRevokedSession(w, r)
+			return
+		}
+		setUserHeaders(w, claims)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// An identity with neither key cannot be checked against anything — fail
+	// closed rather than let it through the checks below on empty strings.
+	if claims.Email == "" && claims.UserID == "" {
 		redirectToLogin(w, r)
 		return
 	}
 
-	// Console-logout revocation (BACKLOG-20261117-008). With a project_id the
+	// Revocation (console logout + sid / sso_sid). With a project_id the
 	// access check below answers it in the same query, at no extra cost; a
 	// verify without one (unbound tunnel) — or one about to consume an invite
 	// on the session's behalf — asks muvee-server up front.
-	projectID := r.URL.Query().Get("project_id")
-	var sessionIAT *int64
-	if sessionRevocable(claims, src) {
-		if projectID == "" || inviteToken != "" {
-			revoked, err := checkSessionRevoked(r.Context(), claims)
-			if err != nil {
-				log.Printf("authservice: session revocation check (%s): %v", claimsSubjectForLog(claims), err)
-				http.Error(w, "access check failed", http.StatusBadGateway)
-				return
-			}
-			if revoked {
-				rejectRevokedSession(w, r)
-				return
-			}
-		} else {
-			iat := sessionIssuedAt(claims)
-			sessionIAT = &iat
+	if projectID == "" || inviteToken != "" {
+		revoked, err := checkSessionRevoked(r.Context(), claims)
+		if err != nil {
+			log.Printf("authservice: session revocation check (%s): %v", claimsSubjectForLog(claims), err)
+			http.Error(w, "access check failed", http.StatusBadGateway)
+			return
+		}
+		if revoked {
+			rejectRevokedSession(w, r)
+			return
 		}
 	}
 
@@ -497,14 +529,6 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 				log.Printf("authservice: consume project invite (authed, user_id=%s): %v", claims.UserID, err)
 			}
 		}
-		clearInviteTokenCookie(w, r)
-	}
-
-	// An identity with neither key cannot be checked against anything — fail
-	// closed rather than let it through the checks below on empty strings.
-	if claims.Email == "" && claims.UserID == "" {
-		redirectToLogin(w, r)
-		return
 	}
 
 	// A project's auth_allowed_domains whitelist only applies to identities
@@ -519,7 +543,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if projectID != "" {
-		check, err := checkProjectAccess(r.Context(), projectID, claims.Email, claims.UserID, sessionIAT)
+		check, err := checkProjectAccess(r.Context(), projectID, claims)
 		if err != nil {
 			log.Printf("authservice: access check (project=%s user=%s): %v", projectID, claimsSubjectForLog(claims), err)
 			http.Error(w, "access check failed", http.StatusBadGateway)
@@ -542,48 +566,38 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Renewal keeps the session's iat, so it never moves a session past a
-	// console logout; and it only runs once the revocation check above passed.
-	renewSessionCookie(w, r)
+	// Renewal keeps sid, sso_sid and auth_time, so it never moves a session
+	// past a revocation; and it only runs once the revocation check passed.
+	if src == credCookie {
+		renewSessionCookie(w, r, claims)
+	}
 	setUserHeaders(w, claims)
 	w.WriteHeader(http.StatusOK)
 }
 
-// rejectRevokedSession answers a ForwardAuth request carrying a session voided
-// by console logout: clear it, then the normal login redirect (or the 401 an
-// SPA fetch gets) — the same response an expired session would get.
+// rejectRevokedSession answers a ForwardAuth request carrying a revoked
+// session: clear it (with the signed-out hint), then the normal login redirect
+// (or the 401 an SPA fetch gets) — the same response an expired session gets.
 func rejectRevokedSession(w http.ResponseWriter, r *http.Request) {
 	clearFwdSession(w, r)
 	redirectToLogin(w, r)
 }
 
-// sessionLifetime is how long a muvee_fwd_session cookie (and the JWT inside
-// it) stays valid after it was issued or last renewed.
-const sessionLifetime = 7 * 24 * time.Hour
+// sessionLifetime / sessionRenewAfter: see subsiteSessionLifetime.
+const (
+	sessionLifetime   = subsiteSessionLifetime
+	sessionRenewAfter = subsiteSessionRenewAfter
+)
 
-// sessionRenewAfter is how old a session has to be before an authenticated
-// request renews it. Renewing at most about once a day keeps Set-Cookie off
-// nearly every proxied response while still letting a user who comes back
-// within the lifetime stay signed in indefinitely.
-const sessionRenewAfter = 24 * time.Hour
-
-// renewSessionCookie re-signs the request's muvee_fwd_session with a fresh
-// expiry once it is older than sessionRenewAfter (sliding session). Only the
-// cookie session slides: a Bearer JWT (CLI device flow) has its own fixed
-// lifetime and is left alone. So do password / phone sessions: verify never
-// re-checks the demo account or phone grant behind them, so the fixed expiry
-// is the only thing that retires one after the grant is removed. Roaming
-// OAuth sessions are safe to slide because every verify re-runs the project
-// access check. Traefik copies the cookie onto the proxied
+// renewSessionCookie re-signs the request's subsite session with a fresh
+// expiry once less than sessionRenewAfter is left (sliding session). Only
+// roaming SSO-minted sessions slide: password / phone sessions keep their
+// fixed expiry (verify never re-checks the grant behind them), and Bearer
+// tokens are never renewed. Traefik copies the cookie onto the proxied
 // response because the project forwardAuth middlewares list it in
 // addAuthCookiesToResponse.
-func renewSessionCookie(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("muvee_fwd_session")
-	if err != nil {
-		return
-	}
-	claims, err := parseForwardJWT(cookie.Value)
-	if err != nil || claims.ExpiresAt == nil || claims.ProjectID != "" {
+func renewSessionCookie(w http.ResponseWriter, r *http.Request, claims *authClaims) {
+	if claims == nil || claims.ExpiresAt == nil || claims.ProjectID != "" || claims.Kind != fwdKindSession {
 		return
 	}
 	if time.Until(claims.ExpiresAt.Time) > sessionLifetime-sessionRenewAfter {
@@ -596,11 +610,7 @@ func renewSessionCookie(w http.ResponseWriter, r *http.Request) {
 		log.Printf("authservice: renew session (%s): %v", claimsSubjectForLog(claims), err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "muvee_fwd_session", Value: signed,
-		MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, Path: "/",
-		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
-	})
+	setHostCookie(w, fwdSessionCookieBase, signed, int(sessionLifetime.Seconds()))
 }
 
 // upsertUserUpstream syncs an OAuth-verified identity into muvee-server's
@@ -661,15 +671,6 @@ func upsertUserUpstream(ctx context.Context, providerName, providerUserID, email
 	return out.UserID, out.AvatarURL, nil
 }
 
-// inviteTokenCookieName is the short-lived cookie that carries the value of
-// a `?invite_token=...` query parameter across the OAuth handoff. Set by
-// handleVerify when an unauthenticated visitor first hits the project
-// subdomain with the token, consumed by handleOAuthCallback once the user
-// completes OAuth — at which point we know who they are and can call
-// /api/internal/auth/upsert with the token to add them to
-// project_access_users.
-const inviteTokenCookieName = "muvee_invite_token"
-
 // extractInviteTokenFromForwardedURI returns the invite_token query parameter
 // from the user-visible URL. Behind Traefik forward-auth, r.URL.Query() only
 // carries the forward-auth middleware's own params (project_id, domains) —
@@ -690,26 +691,11 @@ func extractInviteTokenFromForwardedURI(r *http.Request) string {
 	return strings.TrimSpace(vals.Get("invite_token"))
 }
 
-func setInviteTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name: inviteTokenCookieName, Value: token,
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-		SameSite: http.SameSiteLaxMode, Secure: true,
-	})
-}
-
-func clearInviteTokenCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name: inviteTokenCookieName, Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-	})
-}
-
 // consumeInviteUpstream calls muvee-server's /api/internal/auth/upsert with
 // the invite_token, which threads through EnsurePlatformMember to record the
 // link use and add the user to project_access_users (see auth.go). Used in
-// two contexts: the authed-already path in handleVerify, and the post-OAuth
-// callback path when the cookie was set by an earlier verify hop.
+// the authed-already path in handleVerify (the post-login return URL keeps the
+// invite query, so the first verify with the new session gets here).
 // Like upsertUserUpstream it returns the resolved users.id and the avatar the
 // server actually stored, so a session created through the invite path carries
 // the same key and the same avatar as one created through the plain identity
@@ -790,8 +776,8 @@ func consumeProjectInviteUpstream(ctx context.Context, userID, inviteToken strin
 type accessCheckResult struct {
 	Allowed bool   `json:"allowed"`
 	Mode    string `json:"mode"`
-	// SessionRevoked: the session predates the user's console logout. Only
-	// answered when the request sent session_iat.
+	// SessionRevoked: the credential predates the user's console logout or
+	// its sid / sso_sid was revoked.
 	SessionRevoked bool `json:"session_revoked"`
 }
 
@@ -819,19 +805,22 @@ func requestAccessRedirectURL(r *http.Request, projectID string) string {
 // the caller so the proxy can fail closed (502) rather than silently allow.
 // email and userID are alternatives: an email-less identity (Twitter/X and
 // other subject-keyed IdPs) sends only the user id, which the server resolves
-// through the same allow rules. sessionIAT, when non-nil, also asks whether
-// the session predates the user's console logout (accessCheckResult.
-// SessionRevoked), answered from the users row the check reads anyway.
-func checkProjectAccess(ctx context.Context, projectID, email, userID string, sessionIAT *int64) (accessCheckResult, error) {
+// through the same allow rules. The same query also answers revocation
+// (accessCheckResult.SessionRevoked): auth_time at or before the user's
+// console logout, or a revoked sid / sso_sid.
+func checkProjectAccess(ctx context.Context, projectID string, c *authClaims) (accessCheckResult, error) {
 	q := url.Values{}
 	q.Set("project_id", projectID)
-	if email != "" {
-		q.Set("email", email)
+	if c.Email != "" {
+		q.Set("email", c.Email)
 	} else {
-		q.Set("user_id", userID)
+		q.Set("user_id", c.UserID)
 	}
-	if sessionIAT != nil {
-		q.Set("session_iat", strconv.FormatInt(*sessionIAT, 10))
+	if sessionRevocable(c, credCookie) {
+		q.Set("session_iat", strconv.FormatInt(claimsAuthTime(c), 10))
+	}
+	if sids := claimsSIDs(c); len(sids) > 0 {
+		q.Set("sids", strings.Join(sids, ","))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		muveeServerURL+"/api/internal/access/check?"+q.Encode(), nil)
@@ -856,7 +845,7 @@ func checkProjectAccess(ctx context.Context, projectID, email, userID string, se
 
 // handleVerifyAdmin is the Traefik ForwardAuth endpoint restricted to admin emails.
 func handleVerifyAdmin(w http.ResponseWriter, r *http.Request) {
-	claims, err := resolveAuthClaims(w, r)
+	claims, err := resolveAuthClaims(w, r, adminAudience(r))
 	if errors.Is(err, errRevocationCheck) {
 		http.Error(w, "access check failed", http.StatusBadGateway)
 		return
@@ -927,7 +916,7 @@ func setUserHeaders(w http.ResponseWriter, claims *authClaims) {
 // handleUserInfo returns the authenticated user's info as JSON.
 func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 	applyUserInfoCORS(w, r)
-	claims, err := resolveAuthClaims(w, r)
+	claims, err := resolveAuthClaims(w, r, routeAudience(r))
 	if errors.Is(err, errRevocationCheck) {
 		http.Error(w, "session check failed", http.StatusBadGateway)
 		return
@@ -1096,74 +1085,59 @@ func safeReturnURL(raw, inbound string) (string, bool) {
 	return "", false
 }
 
-// postLoginRedirect returns where to send the user after a completed sign-in:
-// the fwd_oauth_redirect cookie when it passes safeReturnURL, "/" otherwise.
-// The cookie is scoped to the whole base domain, so any project subdomain —
-// i.e. tenant code — can plant its own value; it must never be followed blind.
-func postLoginRedirect(r *http.Request) string {
-	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil {
-		if u, ok := safeReturnURL(c.Value, inboundHost(r)); ok {
-			return u
-		}
-		if c.Value != "" {
-			log.Printf("authservice: refused post-login redirect %q (host=%s)", c.Value, inboundHost(r))
-		}
-	}
-	return "/"
-}
+// signedOutHintCookie marks a browser whose user explicitly signed out of
+// this subsite (host-only __Host-muvee_fwd_signed_out). While present,
+// /_oauth/login shows the signed-out page instead of silently asking the
+// central host for a session, and never auto-redirects a single-provider
+// project into the provider: the provider's own SSO is still live, so either
+// would sign the user straight back in. A UX hint, not a security boundary.
+// Cleared by every completed sign-in on this host (issueFwdSession).
+const signedOutHintCookie = signedOutCookieBase
 
-// boundPostLoginRedirect is postLoginRedirect for a login whose signed state
-// says it started on host: the return URL must be on that same host. A
-// relative return URL is kept when the callback itself runs on that host
-// (apex / forward-auth host logins) and rebased onto it otherwise; anything
-// pointing at another host — e.g. a sibling tenant that overwrote the shared
-// fwd_oauth_redirect cookie — is replaced by the starting host's root.
-func boundPostLoginRedirect(r *http.Request, host string) string {
-	redirect := postLoginRedirect(r)
-	if _, ok := domains.Match(host, cookieBaseDomains); !ok {
-		// Not a platform host (e.g. a forged X-Forwarded-Host reached the
-		// login start): never build a URL from it.
-		if strings.HasPrefix(redirect, "/") {
-			return redirect
-		}
-		return "/"
-	}
-	scheme := "https"
-	if strings.HasPrefix(forwardAuthBase, "http://") {
-		scheme = "http"
-	}
-	if strings.HasPrefix(redirect, "/") {
-		if domains.NormalizeHost(inboundHost(r)) == host {
-			return redirect
-		}
-		return scheme + "://" + host + redirect
-	}
-	if u, err := url.Parse(redirect); err == nil && domains.NormalizeHost(u.Host) == host {
-		return redirect
-	}
-	log.Printf("authservice: post-login redirect %q is not on the login's starting host %s", redirect, host)
-	return scheme + "://" + host + "/"
-}
-
-// signedOutHintCookie marks a browser whose user explicitly signed out of the
-// forward-auth session. While present, /_oauth/login renders the selection
-// page instead of auto-redirecting a single-provider project into the
-// provider: the provider's own SSO session is still live, so the redirect
-// would sign the user straight back in (a stale tab's auth-guard reload is
-// enough to trigger it). It is a UX hint, not a security boundary — any
-// sibling subdomain can write or delete it, which only changes whether one
-// extra click is needed. Cleared by every completed sign-in (issueFwdSession).
-const signedOutHintCookie = "muvee_fwd_signed_out"
-
-// signedOutHintMaxAge outlives the 7-day session so an old tab reopened days
+// signedOutHintMaxAge outlives the SSO session so an old tab reopened days
 // later is still caught.
 const signedOutHintMaxAge = 30 * 24 * 3600
 
-// handleFwdLogout clears the forward-auth session cookie and redirects to
-// ?redirect= when it is a safe same-platform target (see safeReturnURL), else
-// to the logged-out page. Only the downstream (forward-auth) session is
-// touched; the muvee console's own muvee_session is managed by muvee-server.
+// handleFwdLogout signs out of this subsite and ends the base domain's
+// central SSO session it came from: the session's sid and sso_sid are revoked
+// (every other subsite session minted from that SSO dies on its next request),
+// the cookie is cleared with the signed-out hint set, and the browser goes to
+// ?redirect= when safeReturnURL accepts it, else the logged-out page. The
+// console's own muvee_session is untouched.
+//
+// GET from another origin (a tenant page embedding a link or an <img>) only
+// shows a confirmation page: subsites are same-site with each other, so the
+// cookie's SameSite=Lax cannot stop a tenant from signing users out of the
+// whole base domain. Requests without Sec-Fetch-Site (curl, old browsers)
+// keep the direct behaviour.
 func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = logoutConfirmTmpl.Execute(w, struct {
+			M      loginMsg
+			Action string
+		}{loginMessages(acceptLang(r)), r.URL.RequestURI()})
+		return
+	}
+	var sids []string
+	if v, ok := hostCookie(r, fwdSessionCookieBase); ok {
+		if c := tokenForRevocation(v); c != nil {
+			sids = append(sids, claimsSIDs(c)...)
+		}
+	}
+	if v, ok := hostCookie(r, ssoCookieBase); ok {
+		if c := tokenForRevocation(v); c != nil && c.SID != "" {
+			sids = append(sids, c.SID)
+		}
+		setHostCookie(w, ssoCookieBase, "", -1)
+	}
+	if len(sids) > 4 {
+		sids = sids[:4]
+	}
+	if err := revokeSessionIDs(r.Context(), sids); err != nil {
+		log.Printf("authservice: revoke sids on logout (%s): %v", inboundHost(r), err)
+	}
 	clearFwdSession(w, r)
 	redirect, ok := safeReturnURL(r.URL.Query().Get("redirect"), inboundHost(r))
 	if !ok {
@@ -1172,46 +1146,61 @@ func handleFwdLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirect, http.StatusFound)
 }
 
-// clearFwdSession deletes the forward-auth session cookie on the request's base
-// domain and sets the signed-out hint. Shared by the subsite logout and the
-// rejection of a session revoked by console logout: both are an explicit
-// sign-out, after which a single-provider login page must not auto-redirect
-// into the provider's still-live SSO session.
+var logoutConfirmTmpl = template.Must(template.New("logout-confirm").Parse(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{if .M.EN}}Sign out?{{else}}确认退出登录？{{end}}</title></head>
+<body style="font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#faf9f7">
+<div style="background:#fff;border:1px solid #e9e5dd;border-radius:16px;padding:2.5rem;max-width:24rem;text-align:center">
+<h2>{{if .M.EN}}Sign out?{{else}}确认退出登录？{{end}}</h2>
+<p style="color:#8a857c">{{if .M.EN}}You will be signed out of this site and of the sign-in shared by sites on this domain.{{else}}将退出本站，并结束本域名下各站点共用的登录。{{end}}</p>
+<a href="{{.Action}}" style="display:inline-block;padding:.7rem 1.4rem;border-radius:10px;background:#1a1917;color:#fff;text-decoration:none">{{if .M.EN}}Sign out{{else}}退出登录{{end}}</a>
+</div></body></html>`))
+
+// clearFwdSession deletes this subsite's session cookie (and every legacy
+// base-domain auth cookie) and sets the host-only signed-out hint. Shared by
+// the subsite logout and the rejection of a revoked session: both are an
+// explicit sign-out, after which the login page must not silently sign back
+// in.
 func clearFwdSession(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name: "muvee_fwd_session", Value: "", MaxAge: -1,
-		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
-	})
-	http.SetCookie(w, &http.Cookie{
-		Name: signedOutHintCookie, Value: "1", MaxAge: signedOutHintMaxAge,
-		Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
-		Secure: true, SameSite: http.SameSiteLaxMode,
-	})
+	setHostCookie(w, fwdSessionCookieBase, "", -1)
+	clearLegacyFwdCookies(w, r)
+	setHostCookie(w, signedOutHintCookie, "1", signedOutHintMaxAge)
 }
 
-// issueFwdSession sets a freshly signed forward-auth session cookie on the
-// request's base domain and clears the signed-out hint. Every completed
-// sign-in goes through here (a drift-guard test enforces it); only the silent
-// renewal of an already-valid session writes the cookie directly.
-func issueFwdSession(w http.ResponseWriter, r *http.Request, signed string) {
-	http.SetCookie(w, &http.Cookie{
-		Name: "muvee_fwd_session", Value: signed,
-		MaxAge: 7 * 24 * 3600, HttpOnly: true, Path: "/",
-		Domain: cookieDomainForRequest(r), SameSite: http.SameSiteLaxMode,
-	})
-	if _, err := r.Cookie(signedOutHintCookie); err == nil {
-		http.SetCookie(w, &http.Cookie{
-			Name: signedOutHintCookie, Value: "", MaxAge: -1,
-			Path: "/", Domain: cookieDomainForRequest(r), HttpOnly: true,
-			Secure: true, SameSite: http.SameSiteLaxMode,
-		})
+// issueFwdSession sets a freshly signed subsite session cookie (host-only)
+// and clears the signed-out hint and the legacy base-domain cookies. Every
+// completed sign-in goes through here (a drift-guard test enforces it); only
+// the silent renewal of an already-valid session writes the cookie directly.
+func issueFwdSession(w http.ResponseWriter, r *http.Request, signed string, lifetime time.Duration) {
+	setHostCookie(w, fwdSessionCookieBase, signed, int(lifetime.Seconds()))
+	if signedOut(r) {
+		setHostCookie(w, signedOutHintCookie, "", -1)
 	}
+	clearLegacyFwdCookies(w, r)
 }
 
-// signedOut reports whether the browser carries the signed-out hint.
+// loginErrorURL is the login page showing a password / SMS form error (no
+// silent central sign-in), keeping a popup sign-in a popup.
+func loginErrorURL(r *http.Request, code string) string {
+	q := url.Values{"sso": {"none"}, "error": {code}}
+	if r.URL.Query().Get("popup") == "1" {
+		q.Set("popup", "1")
+	}
+	return "/_oauth/login?" + q.Encode()
+}
+
+// projectLoginDone is where a completed password / SMS sign-in goes: the
+// popup landing page, or this host's own return URL.
+func projectLoginDone(w http.ResponseWriter, r *http.Request) string {
+	if r.URL.Query().Get("popup") == "1" {
+		return popupDonePath
+	}
+	return takePostLoginRedirect(w, r)
+}
+
+// signedOut reports whether the browser carries this host's signed-out hint.
 func signedOut(r *http.Request) bool {
-	_, err := r.Cookie(signedOutHintCookie)
-	return err == nil
+	_, ok := hostCookie(r, signedOutHintCookie)
+	return ok
 }
 
 // handleLoggedOutPage renders the "you have signed out" page with the
@@ -1233,82 +1222,55 @@ func handleLoggedOutPage(w http.ResponseWriter, r *http.Request) {
 	_ = loginPageTmpl.Execute(w, data)
 }
 
-// seedLoginReturnURL backfills the post-login return URL when a user reaches a
-// project subdomain's /_oauth/login without one. redirectToLogin normally sets
-// fwd_oauth_redirect, but it is single-use (cleared by the first completed
-// login) and expires after 5 minutes, so a second attempt — back button, a
-// bookmarked login page, an app linking straight to /_oauth/login — would
-// otherwise land on "/" of the OAuth callback host after sign-in: the platform
-// apex, i.e. the console, which project end-users should never see. The
-// project subdomain's root is the natural fallback. The apex itself and the
-// forward-auth host keep the old behaviour (no cookie → "/").
-func seedLoginReturnURL(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie("fwd_oauth_redirect"); err == nil {
-		// A value planted by another subdomain is not a real return URL:
-		// overwrite it rather than let postLoginRedirect fall back to "/".
-		if _, ok := safeReturnURL(c.Value, inboundHost(r)); ok {
-			return
-		}
-	}
-	host := inboundHost(r)
-	base, ok := domains.Match(host, cookieBaseDomains)
-	if !ok {
-		return
-	}
-	h := domains.NormalizeHost(host)
-	if h == base {
-		return
-	}
-	if u, err := url.Parse(forwardAuthBaseForHost(host)); err == nil && domains.NormalizeHost(u.Host) == h {
-		return
-	}
-	proto := r.Header.Get("X-Forwarded-Proto")
-	if proto == "" {
-		proto = "https"
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_redirect", Value: proto + "://" + h + "/",
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-		SameSite: http.SameSiteLaxMode, Secure: true,
-	})
-}
-
-// handleLoginPage either auto-redirects (single provider) or shows a
-// provider-selection page (multiple providers).  When ?provider=X is present
-// it kicks off the OAuth flow for that specific provider. The selection
-// page is rendered with the project's branding (or platform / built-in
-// fallbacks) so downstream end-users see a coherent visual instead of the
-// generic indigo card the page used to show.
+// handleLoginPage is the subsite sign-in entry (BACKLOG-20261117-007):
+//
+//   - ?provider=X: write the subsite state and start X on the central host;
+//   - signed-out hint present (and no ?sso=none): the signed-out page — never
+//     a silent sign-in;
+//   - ?sso=none (the central host has no usable SSO) or ?attempt=N after a
+//     failed exchange: the login page, rendered here with the project's
+//     branding and provider filter; a single provider without password / SMS
+//     auto-starts as before (unless signed out);
+//   - otherwise: write the subsite state and ask the central host for a
+//     session silently (prompt=none).
+//
+// ?popup=1 (the SDK's popup sign-in) is carried in the state so the exchange
+// lands on /_oauth/popup-done. The central host itself serves no login page.
 func handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	seedLoginReturnURL(w, r)
-	providerName := r.URL.Query().Get("provider")
-	// Fetch the project's auth config (providers + branding) for the
-	// inbound host. cfg is nil for hosts that don't map to a project
-	// (apex / platform), in which case we fall back to the global
-	// provider set and built-in branding defaults.
+	w.Header().Set("Cache-Control", "no-store")
+	if isCentralHost(r) {
+		http.Error(w, "sign-in starts from the site you are visiting", http.StatusBadRequest)
+		return
+	}
+	q := r.URL.Query()
+	popup := q.Get("popup") == "1"
+	trips, _ := strconv.Atoi(q.Get("attempt"))
+	if trips < 0 || trips > maxLoginRoundTrips+1 {
+		trips = maxLoginRoundTrips + 1
+	}
+	if trips > maxLoginRoundTrips {
+		retryLogin(w, r, trips, popup)
+		return
+	}
 	cfg, _ := fetchProjectAuthConfigByHost(r.Context(), inboundHost(r))
 	allowed := allowedProvidersFromConfig(cfg)
-	if providerName != "" {
-		p, ok := allowed[providerName]
-		if !ok {
+	if providerName := q.Get("provider"); providerName != "" {
+		if _, ok := allowed[providerName]; !ok {
 			http.Error(w, "unknown or disabled provider", http.StatusBadRequest)
 			return
 		}
-		// Signed, unpredictable, and bound to the host the login started on
-		// (see signFwdState / boundPostLoginRedirect).
-		startHost := domains.NormalizeHost(inboundHost(r))
-		state := signFwdState(startHost)
-		http.SetCookie(w, &http.Cookie{
-			Name: "fwd_oauth_state", Value: state,
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-			SameSite: http.SameSiteLaxMode, Secure: true,
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name: fwdHostCookieName, Value: startHost,
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-			SameSite: http.SameSiteLaxMode, Secure: true,
-		})
-		http.Redirect(w, r, p.AuthCodeURL(state, oauthRedirectForHost(inboundHost(r), providerName)), http.StatusFound)
+		state := writeSubsiteState(w, r, trips, popup)
+		redirectToCentral(w, r, "/_oauth/start", url.Values{"state": {state}, "provider": {providerName}})
+		return
+	}
+	ssoNone := q.Get("sso") == "none"
+	if !ssoNone && trips == 0 {
+		if signedOut(r) {
+			handleLoggedOutPage(w, r)
+			return
+		}
+		state := writeSubsiteState(w, r, trips, popup)
+		redirectToCentral(w, r, "/_oauth/authorize", url.Values{"state": {state}, "prompt": {"none"}})
 		return
 	}
 
@@ -1321,21 +1283,22 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	smsLogin := cfg != nil && cfg.SMSLogin
 	if len(allowed) == 1 && !passwordLogin && !smsLogin && !signedOut(r) {
 		for name := range allowed {
-			http.Redirect(w, r, "/_oauth/login?provider="+name, http.StatusFound)
+			state := writeSubsiteState(w, r, trips, popup)
+			redirectToCentral(w, r, "/_oauth/start", url.Values{"state": {state}, "provider": {name}})
 			return
 		}
 	}
 
 	data := buildLoginPageData(cfg, allowed)
 	data.M = loginMessages(acceptLang(r))
-	switch r.URL.Query().Get("error") {
+	data.Popup = popup
+	switch q.Get("error") {
 	case "invalid_credentials":
 		data.LoginError = data.M.BadCredentials
 	case "invalid_code":
 		data.SMSError = data.M.BadCode
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
 	_ = loginPageTmpl.Execute(w, data)
 }
 
@@ -1368,23 +1331,16 @@ func handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if identity == nil {
-		http.Redirect(w, r, "/_oauth/login?error=invalid_credentials", http.StatusSeeOther)
+		http.Redirect(w, r, loginErrorURL(r, "invalid_credentials"), http.StatusSeeOther)
 		return
 	}
-	signed, err := signForwardPasswordJWT(identity.Email, identity.Name, identity.AvatarURL, cfg.ProjectID)
+	signed, err := signProjectSession(identity.Email, identity.Name, identity.AvatarURL, "password", cfg.ProjectID)
 	if err != nil {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
 	}
-	issueFwdSession(w, r, signed)
-	// The form posts to the host the user is signing in on, so that is the
-	// only host the (sibling-writable) return-URL cookie may send them to.
-	redirect := boundPostLoginRedirect(r, domains.NormalizeHost(inboundHost(r)))
-	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-	})
-	http.Redirect(w, r, redirect, http.StatusSeeOther)
+	issueFwdSession(w, r, signed, projectSessionLifetime)
+	http.Redirect(w, r, projectLoginDone(w, r), http.StatusSeeOther)
 }
 
 // passwordIdentity is the response of muvee-server's internal password-login
@@ -1564,23 +1520,16 @@ func handleSMSVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if identity == nil {
-		http.Redirect(w, r, "/_oauth/login?error=invalid_code", http.StatusSeeOther)
+		http.Redirect(w, r, loginErrorURL(r, "invalid_code"), http.StatusSeeOther)
 		return
 	}
-	signed, err := signForwardProjectJWT(identity.Phone, identity.Name, identity.AvatarURL, "phone", cfg.ProjectID)
+	signed, err := signProjectSession(identity.Phone, identity.Name, identity.AvatarURL, "phone", cfg.ProjectID)
 	if err != nil {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
 	}
-	issueFwdSession(w, r, signed)
-	// The form posts to the host the user is signing in on, so that is the
-	// only host the (sibling-writable) return-URL cookie may send them to.
-	redirect := boundPostLoginRedirect(r, domains.NormalizeHost(inboundHost(r)))
-	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-	})
-	http.Redirect(w, r, redirect, http.StatusSeeOther)
+	issueFwdSession(w, r, signed, projectSessionLifetime)
+	http.Redirect(w, r, projectLoginDone(w, r), http.StatusSeeOther)
 }
 
 // allowedProvidersFromConfig returns the provider map honoured by this
@@ -1627,6 +1576,9 @@ type loginPageData struct {
 	// LoggedOut renders the post-logout variant: a "signed out" heading and a
 	// single "sign in again" link instead of the sign-in methods.
 	LoggedOut bool
+	// Popup keeps the SDK popup sign-in (?popup=1) across the provider and
+	// password / SMS forms, so it ends on /_oauth/popup-done.
+	Popup bool
 	// M holds the localized UI strings (zh/en), chosen per-request from the
 	// Accept-Language header. See loginMessages.
 	M loginMsg
@@ -1893,12 +1845,12 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
       </div>
       {{if .LoggedOut}}<h1 class="head">{{.M.SignedOut}}</h1>
       <p class="sub">{{if .SiteName}}{{.M.SignedOutOf}} {{.SiteName}}{{if .M.EN}}.{{else}}。{{end}}{{end}}{{.M.SignedOutSub}}</p>
-      <a class="btn" href="/_oauth/login">{{.M.SignInAgain}}</a>
+      <a class="btn" href="/_oauth/login?sso=none">{{.M.SignInAgain}}</a>
       {{else}}<h1 class="head">{{.M.WelcomeBack}}</h1>
       {{if .MultipleMethods}}<p class="sub">{{.M.ChooseMethod}}{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}{{.M.SignInTo}} {{.SiteName}}{{else}}{{.M.YourAccount}}{{end}}</p>{{end}}
-      {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{if $.M.EN}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</a>{{end}}
+      {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}{{if $.Popup}}&amp;popup=1{{end}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{if $.M.EN}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</a>{{end}}
       {{if .PasswordLogin}}{{if .Providers}}<div class="divider">{{.M.Or}}</div>{{end}}
-      <form class="pw-form" method="post" action="/_oauth/password">
+      <form class="pw-form" method="post" action="/_oauth/password{{if .Popup}}?popup=1{{end}}">
         {{if .LoginError}}<p class="pw-error">{{.LoginError}}</p>{{end}}
         <label for="pw-username">{{.M.Username}}</label>
         <input id="pw-username" name="username" type="text" autocomplete="username" autocapitalize="none" placeholder="{{.M.UsernamePH}}" required>
@@ -1907,7 +1859,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
         <button type="submit">{{.M.Login}}</button>
       </form>{{end}}
       {{if .SMSLogin}}{{if or .Providers .PasswordLogin}}<div class="divider">{{.M.Or}}</div>{{end}}
-      <form class="pw-form sms-form" method="post" action="/_oauth/sms/verify">
+      <form class="pw-form sms-form" method="post" action="/_oauth/sms/verify{{if .Popup}}?popup=1{{end}}">
         {{if .SMSError}}<p class="pw-error">{{.SMSError}}</p>{{end}}
         <label for="sms-phone">{{.M.Phone}}</label>
         <input id="sms-phone" name="phone" type="tel" autocomplete="tel" inputmode="numeric" placeholder="{{.M.PhonePH}}" required>
@@ -2007,42 +1959,21 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stateCookie, err := r.Cookie("fwd_oauth_state")
-	if err != nil || stateCookie.Value != queryState {
+	// Browser sign-ins (subsite login and device flow) are only accepted with
+	// the central host's own __Host-fwd_apex_state cookie, whose nonce the
+	// provider state must match (BUG-20261117-002: no base-domain state
+	// cookie, no host-bound or numeric legacy state, no device- state).
+	st, ok := readApexState(w, r, queryState)
+	if !ok || st.Provider != providerName {
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_state", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-	})
-	// The cookie match above only proves the browser holds the state; the
-	// cookie is base-domain wide, so a sibling subdomain could have planted
-	// both. Require a state this service minted: a signed fwd state (which
-	// pins where the user returns to), a live device-flow state, or a fresh
-	// pre-upgrade numeric state (logins in flight across the upgrade).
-	boundHost := ""
-	if c, err := r.Cookie(fwdHostCookieName); err == nil {
-		boundHost = c.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: fwdHostCookieName, Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-	})
-	fwdState := verifyFwdState(queryState, boundHost)
-	if !fwdState {
-		_, deviceState := devicePending.Load(queryState)
-		if !deviceState && !isFreshLegacyState(queryState) {
-			http.Error(w, "invalid state", http.StatusBadRequest)
-			return
-		}
 	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		code = r.URL.Query().Get("authCode") // DingTalk uses authCode instead of code
 	}
-	sub, email, name, avatarURL, err := oauthUserInfo(ctx, p, code, stateCookie.Value, oauthRedirectForHost(inboundHost(r), providerName))
+	sub, email, name, avatarURL, err := oauthUserInfo(ctx, p, code, queryState, oauthRedirectForHost(inboundHost(r), providerName))
 	if err != nil {
 		log.Printf("authservice: UserInfo (%s): %v", providerName, err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
@@ -2050,84 +1981,37 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sync the verified identity into muvee-server's users table BEFORE
-	// signing the forward JWT. Without this, users that only ever
-	// authenticated through this subdomain ForwardAuth path would not exist
-	// in the central `users` table, and IsProjectAccessAllowedByEmail would
-	// reject them as "not a member" even on public projects.
+	// signing anything. Without this, users that only ever authenticated
+	// through subdomain ForwardAuth would not exist in the central `users`
+	// table, and IsProjectAccessAllowedByEmail would reject them as "not a
+	// member" even on public projects. Domain restrictions and invite-mode
+	// gating do not apply here (platform-side admission rules); per-project
+	// ACL runs on the subsequent verify, which also consumes an invite link
+	// carried in the return URL.
 	//
-	// If an invite_token cookie was set by an earlier verify hop, route to
-	// auth/upsert (which runs EnsurePlatformMember → consumes the link +
-	// adds project_access_users). Otherwise stick with identity-upsert:
-	// domain restrictions and invite-mode gating do not apply to plain
-	// subdomain logins (those are platform-side admission rules). Per-project
-	// ACL still runs in checkProjectAccess on the subsequent verify.
-	//
-	// An email-less identity cannot go through auth/upsert at all (that whole
-	// path is email-keyed), so it takes identity-upsert first and consumes the
-	// link afterwards against the user id it just got back — see
-	// consumeProjectInviteUpstream.
-	inviteToken := ""
-	if c, err := r.Cookie(inviteTokenCookieName); err == nil {
-		inviteToken = c.Value
+	// storedAvatar is what muvee-server persisted, which is what credentials
+	// are signed with: an Entra data URI has been materialised into a short
+	// URL there, and signing with the raw inlined image would blow past the
+	// cookie size limit.
+	userID, storedAvatar, err := upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL)
+	if err != nil {
+		log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
+		http.Error(w, "authentication failed", http.StatusInternalServerError)
+		return
 	}
-	// storedAvatar is what muvee-server persisted, which is what the session is
-	// signed with: an Entra data URI has been materialised into a short URL
-	// there, and signing with the raw inlined image would blow past the cookie
-	// size limit. Empty (an upsert that answered without one) leaves the
-	// provider's own value in place.
-	var userID, storedAvatar string
-	switch {
-	case inviteToken != "" && email != "":
-		clearInviteTokenCookie(w, r)
-		var err error
-		if userID, storedAvatar, err = consumeInviteUpstream(ctx, providerName, email, name, avatarURL, inviteToken); err != nil {
-			// Token may be expired / exhausted / revoked. Fall back to
-			// identity-upsert so the user still completes login; the access
-			// check on the subsequent verify will bounce them to
-			// request-access instead of breaking the OAuth round-trip.
-			log.Printf("authservice: consume invite (callback, %s, %s): %v; falling back to identity-upsert", providerName, email, err)
-			if userID, storedAvatar, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
-				log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
-				http.Error(w, "authentication failed", http.StatusInternalServerError)
-				return
-			}
-		}
-	default:
-		var err error
-		if userID, storedAvatar, err = upsertUserUpstream(ctx, providerName, sub, email, name, avatarURL); err != nil {
-			log.Printf("authservice: upstream identity upsert (%s, %s): %v", providerName, email, err)
-			http.Error(w, "authentication failed", http.StatusInternalServerError)
-			return
-		}
-		if inviteToken != "" {
-			clearInviteTokenCookie(w, r)
-			// Best-effort, exactly like the email path: a stale link must not
-			// break an otherwise valid login — the access check on the next
-			// verify decides where the user ends up.
-			if err := consumeProjectInviteUpstream(ctx, userID, inviteToken); err != nil {
-				log.Printf("authservice: consume project invite (callback, %s, user_id=%s): %v", providerName, userID, err)
-			}
-		}
-	}
-
 	if storedAvatar != "" {
 		avatarURL = storedAvatar
 	}
+	id := fwdIdentity{UserID: userID, Email: email, Name: name, AvatarURL: avatarURL, Provider: providerName}
 
-	// Check if this OAuth callback was initiated by the device flow.
-	if userCode, ok := devicePending.LoadAndDelete(stateCookie.Value); ok {
-		uc := userCode.(string)
-		if dc, ok := deviceByUser.Load(uc); ok {
-			if val, ok := deviceFlows.Load(dc); ok {
-				entry := val.(*deviceFlowEntry)
-				entry.Email = email
-				entry.UserID = userID
-				entry.Name = name
-				entry.AvatarURL = avatarURL
-				entry.Provider = providerName
-				entry.Completed = true
-			}
+	// Device flow: complete the device code only — no SSO is signed.
+	if st.Mode == "device" {
+		entry, ok := deviceEntryByUserCode(st.UserCode)
+		if !ok || entry.Aud != st.Aud {
+			http.Error(w, "invalid or expired code", http.StatusBadRequest)
+			return
 		}
+		entry.complete(id)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
 <body style="font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5">
@@ -2138,22 +2022,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signed, err := signForwardJWT(userID, email, name, avatarURL, providerName)
-	if err != nil {
-		http.Error(w, "sign error", http.StatusInternalServerError)
-		return
-	}
-	issueFwdSession(w, r, signed)
-
-	redirect := postLoginRedirect(r)
-	if fwdState {
-		redirect = boundPostLoginRedirect(r, boundHost)
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_redirect", Value: "", MaxAge: -1,
-		HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-	})
-	http.Redirect(w, r, redirect, http.StatusFound)
+	finishCentralSignIn(w, r, st, id)
 }
 
 // ---------------------------------------------------------------------------
@@ -2162,7 +2031,13 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 // deviceFlowEntry holds the state of a pending device authorization request.
 type deviceFlowEntry struct {
-	UserCode  string
+	mu       sync.Mutex
+	UserCode string
+	// Aud and Host are the subsite the CLI started the flow on (its routed
+	// X-Muvee-Aud and host): the token is only valid there, and only that
+	// host's activate page can complete it (BACKLOG-20261117-007).
+	Aud       string
+	Host      string
 	Email     string // populated after OAuth completes; empty when the IdP has none
 	UserID    string // muvee-server users.id — the key for an email-less identity
 	Name      string
@@ -2173,10 +2048,43 @@ type deviceFlowEntry struct {
 }
 
 var (
-	deviceFlows     sync.Map // deviceCode → *deviceFlowEntry
-	deviceByUser    sync.Map // userCode  → deviceCode (reverse lookup)
-	devicePending   sync.Map // oauthState → deviceCode (link OAuth callback to device flow)
+	deviceFlows  sync.Map // deviceCode → *deviceFlowEntry
+	deviceByUser sync.Map // userCode  → deviceCode (reverse lookup)
 )
+
+func normalizeUserCode(s string) string {
+	return strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(s)), "-", "")
+}
+
+// deviceEntryByUserCode returns the live entry for a user code.
+func deviceEntryByUserCode(userCode string) (*deviceFlowEntry, bool) {
+	dc, ok := deviceByUser.Load(userCode)
+	if !ok {
+		return nil, false
+	}
+	v, ok := deviceFlows.Load(dc)
+	if !ok {
+		return nil, false
+	}
+	e := v.(*deviceFlowEntry)
+	if time.Now().After(e.ExpiresAt) {
+		return nil, false
+	}
+	return e, true
+}
+
+func (e *deviceFlowEntry) complete(id fwdIdentity) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.Email, e.UserID, e.Name, e.AvatarURL, e.Provider = id.Email, id.UserID, id.Name, id.AvatarURL, id.Provider
+	e.Completed = true
+}
+
+func (e *deviceFlowEntry) snapshot() (fwdIdentity, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return fwdIdentity{UserID: e.UserID, Email: e.Email, Name: e.Name, AvatarURL: e.AvatarURL, Provider: e.Provider}, e.Completed
+}
 
 const (
 	deviceCodeExpiry = 10 * time.Minute
@@ -2197,12 +2105,27 @@ func generateCode(n int) string {
 
 // handleDeviceCode initiates the device authorization flow.
 // CLI calls this to get a user code to display and a device code to poll with.
+//
+// The flow is bound to the subsite it was started on: its routed audience
+// (X-Muvee-Aud) scopes the CLI token, and the verification URI is that
+// subsite's own activate page (BACKLOG-20261117-007). A request without a
+// routed audience (the central host, an unrouted path) is refused.
 func handleDeviceCode(w http.ResponseWriter, r *http.Request) {
+	aud := routeAudience(r)
+	if aud == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_request", "error_description": "device flow must start on a project host"})
+		return
+	}
+	host := domains.NormalizeHost(inboundHost(r))
 	deviceCode := generateCode(32)
 	userCode := generateCode(8)
 
 	entry := &deviceFlowEntry{
 		UserCode:  userCode,
+		Aud:       aud,
+		Host:      host,
 		ExpiresAt: time.Now().Add(deviceCodeExpiry),
 	}
 	deviceFlows.Store(deviceCode, entry)
@@ -2215,7 +2138,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		deviceByUser.Delete(userCode)
 	}()
 
-	verificationURI := forwardAuthBase + "/_oauth/device/activate"
+	verificationURI := platformScheme() + "://" + host + "/_oauth/device/activate"
 	formattedCode := fmt.Sprintf("%s-%s", userCode[:4], userCode[4:])
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2232,18 +2155,16 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 // handleDeviceActivate shows a page where the user enters their user code (or
 // auto-fills from ?code=), then redirects to the OAuth provider.
 func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
-	codeParam := strings.ReplaceAll(strings.ToUpper(r.URL.Query().Get("code")), "-", "")
+	codeParam := normalizeUserCode(r.URL.Query().Get("code"))
 	providerParam := r.URL.Query().Get("provider")
+	cfg, _ := fetchProjectAuthConfigByHost(r.Context(), inboundHost(r))
+	allowed := allowedProvidersFromConfig(cfg)
 
-	// If a valid code was provided, start the OAuth flow directly when either
-	// a provider was selected or there's only one provider configured.
-	if codeParam != "" {
-		if _, ok := deviceByUser.Load(codeParam); ok {
-			if providerParam != "" || len(providers()) == 1 {
-				startDeviceOAuth(w, r, codeParam, providerParam)
-				return
-			}
-		}
+	// Start only on an explicit provider choice: the page names the host the
+	// CLI will get access to, and the user has to confirm it by clicking.
+	if codeParam != "" && providerParam != "" {
+		startDeviceOAuth(w, r, codeParam, providerParam, allowed)
+		return
 	}
 
 	const pageTmpl = `<!DOCTYPE html>
@@ -2270,6 +2191,7 @@ func handleDeviceActivate(w http.ResponseWriter, r *http.Request) {
 <div class="card">
   <h1>{{if eq .Lang "en"}}Device login{{else}}设备登录{{end}}</h1>
   <p>{{if eq .Lang "en"}}Enter the code shown in your terminal{{else}}请输入终端中显示的验证码{{end}}</p>
+  <p>{{if eq .Lang "en"}}This grants the command line access to <b>{{.Host}}</b>.{{else}}授权后命令行将可访问 <b>{{.Host}}</b>。{{end}}</p>
   <form id="form" onsubmit="return go()">
     <input type="text" id="code" maxlength="9" placeholder="XXXX-XXXX" value="{{.Code}}" autofocus autocomplete="off">
     <div class="error" id="err">{{if eq .Lang "en"}}Invalid or expired code{{else}}验证码无效或已过期{{end}}</div>
@@ -2307,7 +2229,7 @@ function go(){
 		DisplayName string
 	}
 	var items []providerItem
-	for name, p := range providers() {
+	for name, p := range allowed {
 		items = append(items, providerItem{Name: name, DisplayName: p.DisplayName()})
 	}
 
@@ -2320,42 +2242,27 @@ function go(){
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = t.Execute(w, struct {
 		Code      string
+		Host      string
 		Providers []providerItem
 		Lang      string
-	}{Code: formatted, Providers: items, Lang: acceptLang(r)})
+	}{Code: formatted, Host: domains.NormalizeHost(inboundHost(r)), Providers: items, Lang: acceptLang(r)})
 	return
 }
 
-// startDeviceOAuth validates the user code and kicks off the OAuth flow,
-// linking the OAuth state back to the device flow entry.
-func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, providerName string) {
-	if _, ok := deviceByUser.Load(userCode); !ok {
+// startDeviceOAuth validates the user code against this subsite and hands the
+// provider round trip to the central host (mode=device): its callback only
+// completes the device code and signs no SSO.
+func startDeviceOAuth(w http.ResponseWriter, r *http.Request, userCode, providerName string, allowed map[string]auth.Provider) {
+	entry, ok := deviceEntryByUserCode(userCode)
+	if !ok || entry.Host != domains.NormalizeHost(inboundHost(r)) || entry.Aud != routeAudience(r) {
 		http.Error(w, "invalid or expired code", http.StatusBadRequest)
 		return
 	}
-	current := providers()
-	if providerName == "" {
-		// Pick the first (only) provider.
-		for name := range current {
-			providerName = name
-			break
-		}
-	}
-	p, ok := current[providerName]
-	if !ok {
+	if _, ok := allowed[providerName]; !ok {
 		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return
 	}
-
-	state := "device-" + newStateNonce()
-	devicePending.Store(state, userCode)
-
-	http.SetCookie(w, &http.Cookie{
-		Name: "fwd_oauth_state", Value: state,
-		MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-		SameSite: http.SameSiteLaxMode, Secure: true,
-	})
-	http.Redirect(w, r, p.AuthCodeURL(state, oauthRedirectForHost(inboundHost(r), providerName)), http.StatusFound)
+	redirectToCentral(w, r, "/_oauth/start", url.Values{"provider": {providerName}, "mode": {"device"}, "user_code": {userCode}})
 }
 
 // handleDeviceToken is polled by the CLI to check whether the user has completed
@@ -2404,7 +2311,8 @@ func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !entry.Completed {
+	id, completed := entry.snapshot()
+	if !completed {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
@@ -2412,7 +2320,7 @@ func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Success — issue a long-lived JWT for CLI use.
-	token, err := signForwardCLIJWT(entry.UserID, entry.Email, entry.Name, entry.AvatarURL, entry.Provider, cliTokenExpiry)
+	token, err := signCLIToken(id, entry.Aud)
 	if err != nil {
 		http.Error(w, "sign error", http.StatusInternalServerError)
 		return
@@ -2452,12 +2360,11 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// (whichever Set-Cookie the browser applies last wins). The user then
 	// gets bounced to /favicon.ico after OAuth. Skipping the cookie write for
 	// sub-resources leaves the navigation's cookie intact.
+	// The cookie is host-only on the subsite (BACKLOG-20261117-007) and keeps
+	// the original query — an invite_token in it is consumed by the first
+	// verify after sign-in.
 	if isNavigationRequest(r) {
-		http.SetCookie(w, &http.Cookie{
-			Name: "fwd_oauth_redirect", Value: originalURL,
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-			SameSite: http.SameSiteLaxMode, Secure: true,
-		})
+		setPostLoginRedirect(w, originalURL)
 	}
 	// Keep the login page on the project subdomain so handleLoginPage's
 	// inboundHost() resolves to the project — otherwise the apex host
@@ -2839,10 +2746,18 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	claims, err := resolveAuthClaims(w, r)
+	claims, err := resolveAuthClaims(w, r, routeAudience(r))
 	if errors.Is(err, errRevocationCheck) {
 		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
+		})
+		return
+	}
+	if err == nil && routeAudience(r) != "project:"+projectID {
+		// The session belongs to this host's project; a request for another
+		// project's access is not this session's to make.
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
+			"Phase": "error", "Error": "This page belongs to another project.",
 		})
 		return
 	}
@@ -2860,12 +2775,7 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 		if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
 			host = xfh
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name: "fwd_oauth_redirect",
-			Value: proto + "://" + host + "/_oauth/request-access?project=" + url.QueryEscape(projectID),
-			MaxAge: 300, HttpOnly: true, Path: "/", Domain: cookieDomainForRequest(r),
-			SameSite: http.SameSiteLaxMode, Secure: true,
-		})
+		setPostLoginRedirect(w, proto+"://"+host+"/_oauth/request-access?project="+url.QueryEscape(projectID))
 		http.Redirect(w, r, "/_oauth/login", http.StatusFound)
 		return
 	}
@@ -2896,7 +2806,7 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 // caller's email comes from the JWT (not a form field) so a user can't open
 // a request on someone else's behalf.
 func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
-	claims, err := resolveAuthClaims(w, r)
+	claims, err := resolveAuthClaims(w, r, routeAudience(r))
 	if errors.Is(err, errRevocationCheck) {
 		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
@@ -2918,6 +2828,13 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 	if projectID == "" {
 		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
 			"Phase": "error", "Error": "Missing project id.",
+		})
+		return
+	}
+	// A session may only request access to the project it belongs to.
+	if routeAudience(r) != "project:"+projectID {
+		renderRequestAccessPage(w, r, http.StatusBadRequest, map[string]string{
+			"Phase": "error", "Error": "This page belongs to another project.",
 		})
 		return
 	}
@@ -2979,82 +2896,6 @@ func cookieSafeAvatar(avatarURL string) string {
 	log.Printf("authservice: avatar of %d bytes exceeds the %d byte session-cookie budget; signing the session without it",
 		len(avatarURL), maxCookieAvatarBytes)
 	return ""
-}
-
-func signForwardJWT(userID, email, name, avatarURL, provider string) (string, error) {
-	return signForwardJWTWithExpiry(userID, email, name, avatarURL, provider, 7*24*time.Hour)
-}
-
-// signForwardPasswordJWT signs a project-scoped session for a demo account.
-// The email is a passthrough attribute: it is baked into the claim so
-// downstream services get a populated X-Forwarded-User header, but access is
-// still admitted via the ProjectID binding in handleVerify, NOT the
-// email-keyed ACL that OAuth sessions use.
-func signForwardPasswordJWT(email, name, avatarURL, projectID string) (string, error) {
-	return signForwardProjectJWT(email, name, avatarURL, "password", projectID)
-}
-
-// signForwardProjectJWT signs a project-scoped session (provider "password" or
-// "phone"). ProjectID binds the session to the single project that
-// authenticated it -- handleVerify enforces the binding and skips the
-// email-keyed ACL that roaming OAuth sessions use.
-func signForwardProjectJWT(email, name, avatarURL, provider, projectID string) (string, error) {
-	claims := authClaims{
-		Email:     email,
-		Name:      name,
-		AvatarURL: cookieSafeAvatar(avatarURL),
-		Provider:  provider,
-		ProjectID: projectID,
-		Kind:      fwdKindSession,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
-}
-
-// signForwardJWTWithExpiry signs a browser subsite session: kind "session",
-// with an issued-at time that console-logout revocation compares against.
-func signForwardJWTWithExpiry(userID, email, name, avatarURL, provider string, expiry time.Duration) (string, error) {
-	return signForwardKindJWT(userID, email, name, avatarURL, provider, fwdKindSession, expiry)
-}
-
-// signForwardCLIJWT signs a CLI device-flow Bearer token (kind "cli"), which
-// console logout does not revoke (BACKLOG-20261117-007).
-func signForwardCLIJWT(userID, email, name, avatarURL, provider string, expiry time.Duration) (string, error) {
-	return signForwardKindJWT(userID, email, name, avatarURL, provider, fwdKindCLI, expiry)
-}
-
-func signForwardKindJWT(userID, email, name, avatarURL, provider, kind string, expiry time.Duration) (string, error) {
-	now := time.Now()
-	claims := authClaims{
-		Email:     email,
-		UserID:    userID,
-		Name:      name,
-		AvatarURL: cookieSafeAvatar(avatarURL),
-		Provider:  provider,
-		Kind:      kind,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
-			IssuedAt:  jwt.NewNumericDate(now),
-		},
-	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
-}
-
-func parseForwardJWT(tokenStr string) (*authClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &authClaims{}, func(t *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	c, ok := token.Claims.(*authClaims)
-	if !ok || !token.Valid {
-		return nil, fmt.Errorf("invalid")
-	}
-	return c, nil
 }
 
 func emailMatchesDomains(email, allowedDomains string) bool {
