@@ -184,6 +184,10 @@ services:
       - muvee-net
     labels:
       - "traefik.enable=true"
+      # Central sign-in host. muvee-server's HTTP provider also emits this
+      # rule (priority 200, X-Muvee-Aud cleared) for every ACME base domain,
+      # which takes precedence; this label keeps /_oauth reachable while
+      # muvee-server is down.
       - "traefik.http.routers.muvee-authservice.rule=Host(`${BASE_DOMAIN}`) && PathPrefix(`/_oauth`)"
       - "traefik.http.routers.muvee-authservice.entrypoints=websecure"
       - "traefik.http.routers.muvee-authservice.tls.certresolver=letsencrypt"
@@ -228,6 +232,18 @@ services:
       - "traefik.http.routers.traefik-dashboard.tls.domains[0].main=traefik.${BASE_DOMAIN}"
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.middlewares=muvee-forward-auth-admin@file"
+      # Dashboard sign-in: /_oauth on traefik.<base> goes to authservice like
+      # any subsite's, with the dashboard's audience injected (the headers
+      # middleware overwrites any client-sent X-Muvee-Aud). authservice binds
+      # the dashboard session to host:traefik.<base> (BACKLOG-20261117-007).
+      - "traefik.http.routers.traefik-dashboard-oauth.rule=Host(`traefik.${BASE_DOMAIN}`) && PathPrefix(`/_oauth`)"
+      - "traefik.http.routers.traefik-dashboard-oauth.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard-oauth.priority=200"
+      - "traefik.http.routers.traefik-dashboard-oauth.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard-oauth.tls.domains[0].main=traefik.${BASE_DOMAIN}"
+      - "traefik.http.routers.traefik-dashboard-oauth.service=muvee-authservice@docker"
+      - "traefik.http.routers.traefik-dashboard-oauth.middlewares=traefik-dashboard-aud"
+      - "traefik.http.middlewares.traefik-dashboard-aud.headers.customrequestheaders.X-Muvee-Aud=host:traefik.${BASE_DOMAIN}"
       # Let watchtower recreate Traefik when a new muvee-traefik:latest ships,
       # so the embed-bridge plugin reloads on release without a manual restart.
       - "com.centurylinklabs.watchtower.enable=true"

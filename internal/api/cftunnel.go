@@ -184,10 +184,14 @@ func (s *Server) addCFTunnelPanelRouters(cfg *traefikDynamicConfig) {
 		Service:     cfTunnelPanelService,
 		Middlewares: []string{"strip-internal-key@file", "block-internal-api@file"},
 	}
+	// The panel hosts include the central sign-in host (the base apex), which
+	// is never a subsite: clear any client-sent X-Muvee-Aud.
+	ensureClearAudMiddleware(cfg)
 	cfg.HTTP.Routers["panel-oauth"+cfTunnelRouterSuffix] = traefikRouter{
 		Rule:        rule + " && PathPrefix(`/_oauth`)",
 		EntryPoints: []string{cfTunnelEntryPoint},
 		Service:     deviceFlowServiceName,
+		Middlewares: []string{clearAudMiddlewareName},
 		Priority:    200,
 	}
 	if _, ok := cfg.HTTP.Services[deviceFlowServiceName]; !ok {

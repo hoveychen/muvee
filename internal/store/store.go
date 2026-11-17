@@ -801,18 +801,28 @@ type AccessCheckResult struct {
 	// same query that resolves the user so the per-request access check costs
 	// no extra round trip (BACKLOG-20261117-008).
 	FwdSessionsRevokedAt *time.Time
+	// SessionIDRevoked is true when any of the session ids passed to the
+	// lookup (the credential's sid and, for a subsite session, its sso_sid) is
+	// listed in fwd_session_revocations (BACKLOG-20261117-007). Answered by the
+	// same query that resolves the user row.
+	SessionIDRevoked bool
 }
+
+// sidRevokedExpr is the per-session revocation predicate shared by the access
+// check and the standalone revocation lookup; %s is the text[] parameter.
+const sidRevokedExpr = `EXISTS (SELECT 1 FROM fwd_session_revocations WHERE sid = ANY(%s) AND expires_at > NOW())`
 
 // IsProjectAccessAllowedByEmail decides whether a user (looked up by email)
 // is permitted to reach the project's downstream service via Traefik
 // ForwardAuth. Allow rules: admin users always pass; public projects pass any
 // registered user; private projects only pass the owner or users explicitly
 // listed in project_access_users.
-func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string, projectID uuid.UUID) (AccessCheckResult, error) {
+func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string, projectID uuid.UUID, sids []string) (AccessCheckResult, error) {
 	var res AccessCheckResult
 	var role UserRole
 	var revokedAt *time.Time
-	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at FROM users WHERE email = $1`, email).Scan(&res.UserID, &role, &revokedAt)
+	var sidRevoked bool
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE email = $1`, email, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &sidRevoked)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
@@ -821,6 +831,7 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 	}
 	res, err = s.projectAccessForUser(ctx, res.UserID, role, projectID)
 	res.FwdSessionsRevokedAt = revokedAt
+	res.SessionIDRevoked = sidRevoked
 	return res, err
 }
 
@@ -833,11 +844,12 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 // whitelist (there is no address to match), so the caller skips the domain
 // check for them: reaching a private project requires an explicit
 // project_access_users grant, and a public project admits any registered user.
-func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.UUID, projectID uuid.UUID) (AccessCheckResult, error) {
+func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.UUID, projectID uuid.UUID, sids []string) (AccessCheckResult, error) {
 	var res AccessCheckResult
 	var role UserRole
 	var revokedAt *time.Time
-	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at FROM users WHERE id = $1`, userID).Scan(&res.UserID, &role, &revokedAt)
+	var sidRevoked bool
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE id = $1`, userID, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &sidRevoked)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
@@ -846,6 +858,7 @@ func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.
 	}
 	res, err = s.projectAccessForUser(ctx, res.UserID, role, projectID)
 	res.FwdSessionsRevokedAt = revokedAt
+	res.SessionIDRevoked = sidRevoked
 	return res, err
 }
 
@@ -895,17 +908,62 @@ func (s *Store) RevokeFwdSessions(ctx context.Context, userID uuid.UUID) error {
 // found by email (preferred) or id. nil means no revocation on record, or no
 // such user.
 func (s *Store) FwdSessionsRevokedAt(ctx context.Context, email string, userID uuid.UUID) (*time.Time, error) {
-	var revokedAt *time.Time
-	var err error
-	if email != "" {
-		err = s.db.QueryRow(ctx, `SELECT fwd_sessions_revoked_at FROM users WHERE email = $1`, email).Scan(&revokedAt)
-	} else {
-		err = s.db.QueryRow(ctx, `SELECT fwd_sessions_revoked_at FROM users WHERE id = $1`, userID).Scan(&revokedAt)
-	}
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
+	revokedAt, _, err := s.FwdSessionRevocation(ctx, email, userID, nil)
 	return revokedAt, err
+}
+
+// FwdSessionRevocation answers both revocation questions for one credential in
+// a single query: the user's console-logout time point (when email or userID
+// identifies a user; nil otherwise, or when no such user exists) and whether
+// any of sids is listed in fwd_session_revocations. Password / SMS sessions
+// have no user row, so a lookup with neither email nor userID only checks sids.
+func (s *Store) FwdSessionRevocation(ctx context.Context, email string, userID uuid.UUID, sids []string) (*time.Time, bool, error) {
+	var revokedAt *time.Time
+	var sidRevoked bool
+	expr := fmt.Sprintf(sidRevokedExpr, "$1")
+	var err error
+	switch {
+	case email != "":
+		err = s.db.QueryRow(ctx, `SELECT (SELECT fwd_sessions_revoked_at FROM users WHERE email = $2), `+expr, nonNilSIDs(sids), email).Scan(&revokedAt, &sidRevoked)
+	case userID != uuid.Nil:
+		err = s.db.QueryRow(ctx, `SELECT (SELECT fwd_sessions_revoked_at FROM users WHERE id = $2), `+expr, nonNilSIDs(sids), userID).Scan(&revokedAt, &sidRevoked)
+	default:
+		err = s.db.QueryRow(ctx, `SELECT `+expr, nonNilSIDs(sids)).Scan(&sidRevoked)
+	}
+	return revokedAt, sidRevoked, err
+}
+
+// RevokeFwdSessionIDs lists session ids in fwd_session_revocations until ttl
+// from now (re-revoking only ever extends a row) and deletes expired rows.
+// Blank ids are ignored.
+func (s *Store) RevokeFwdSessionIDs(ctx context.Context, sids []string, ttl time.Duration) error {
+	clean := make([]string, 0, len(sids))
+	for _, sid := range sids {
+		if sid = strings.TrimSpace(sid); sid != "" {
+			clean = append(clean, sid)
+		}
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO fwd_session_revocations (sid, expires_at)
+		SELECT unnest($1::text[]), $2
+		ON CONFLICT (sid) DO UPDATE SET expires_at = GREATEST(fwd_session_revocations.expires_at, EXCLUDED.expires_at)`,
+		clean, time.Now().Add(ttl)); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(ctx, `DELETE FROM fwd_session_revocations WHERE expires_at <= NOW()`)
+	return err
+}
+
+// nonNilSIDs passes an empty text[] instead of NULL for a nil slice so the
+// revocation predicate stays a plain "no ids → not revoked".
+func nonNilSIDs(sids []string) []string {
+	if sids == nil {
+		return []string{}
+	}
+	return sids
 }
 
 // ─── Project Visits (downstream service hit counter) ─────────────────────────

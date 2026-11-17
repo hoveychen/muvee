@@ -32,10 +32,14 @@ Two pieces:
    upstream that gzips anyway is decompressed first. Other encodings
    (brotli, zstd) sent despite that pass through without the script.
 2. **Auto-attach in `muvee-server`** — `handleTraefikConfig` (in
-   `internal/api/server.go`) appends `embed-bridge@file` to the middleware
-   chain of every user-facing project router (deployments, live tunnels,
-   and domain-only placeholders). System routers (OAuth bypass, device-flow,
-   authservice) are intentionally excluded.
+   `internal/api/server.go`) appends the `muvee-embed-bridge` middleware to
+   the middleware chain of every user-facing project router (deployments,
+   live tunnels, and domain-only placeholders). System routers (OAuth
+   bypass, device-flow, authservice) are intentionally excluded.
+   `muvee-server` declares this middleware itself through the HTTP provider,
+   with an explicit `stripCookies` list (see below); it no longer references
+   `embed-bridge@file`, so it does not depend on `dynamic.yml` or on the
+   plugin's built-in default list.
 
 The SDK itself is served by the plugin from `/_embed-bridge.js`, so the
 injected `<script src=…>` resolves regardless of whether your project's
@@ -85,6 +89,18 @@ It only reacts to that header, so projects without muvee login and an app's
 own `401`s are unaffected. A second reload within 30 seconds is skipped, so it
 cannot loop.
 
+## Cookie stripping
+
+The same middleware removes every ForwardAuth cookie from the request before it is
+forwarded to your project, so tenant code never sees muvee's session credentials. The list
+(`FwdAuthCookieNames` in `internal/api/server.go`) covers the host-only `__Host-` cookies
+(`__Host-muvee_fwd`, `__Host-muvee_sso`, `__Host-fwd_state`, `__Host-fwd_apex_state`,
+`__Host-muvee_fwd_signed_out`, `__Host-fwd_oauth_redirect`), their plain-http development names
+without the prefix, and the legacy base-domain cookies of earlier releases (`muvee_fwd_session`,
+`fwd_oauth_state`, `fwd_oauth_host`, `muvee_invite_token`). Routers that skip ForwardAuth (bypass
+paths) get a strip-only instance with the same list. See
+[ForwardAuth → Session Flow](./forward-auth#session-flow).
+
 ## Verifying
 
 After your project deploys, you can verify the injection from a shell:
@@ -119,4 +135,4 @@ implemented.
 - Plugin: [traefik/plugins-local/src/github.com/hoveychen/embed-bridge/](https://github.com/hoveychen/muvee/tree/main/traefik/plugins-local/src/github.com/hoveychen/embed-bridge)
 - Standalone SDK file (mirror, kept in sync): `web/public/_embed-bridge.js`
 - Auto-attach: [`attachEmbedBridge`](https://github.com/hoveychen/muvee/blob/main/internal/api/server.go) in `internal/api/server.go`
-- Traefik config: `traefik/traefik.yml` (`experimental.localPlugins`) + `traefik/dynamic.yml` (`embed-bridge` middleware)
+- Traefik config: `traefik/traefik.yml` (`experimental.localPlugins`); the `muvee-embed-bridge` middleware instance comes from `muvee-server`'s HTTP provider

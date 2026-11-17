@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hoveychen/muvee/internal/auth"
@@ -22,10 +24,12 @@ type fakeSubjectProvider struct {
 	gotRedirect   string
 }
 
-func (p *fakeSubjectProvider) Name() string                 { return "faketwitter" }
-func (p *fakeSubjectProvider) DisplayName() string          { return "Fake X" }
-func (p *fakeSubjectProvider) OrgScoped() bool              { return false }
-func (p *fakeSubjectProvider) CanonicalRedirectURL() string { return "https://example.com/_oauth/faketwitter" }
+func (p *fakeSubjectProvider) Name() string        { return "faketwitter" }
+func (p *fakeSubjectProvider) DisplayName() string { return "Fake X" }
+func (p *fakeSubjectProvider) OrgScoped() bool     { return false }
+func (p *fakeSubjectProvider) CanonicalRedirectURL() string {
+	return "https://example.com/_oauth/faketwitter"
+}
 func (p *fakeSubjectProvider) AuthCodeURL(state, redirectURL string) string {
 	return "https://idp.example/authorize?state=" + state
 }
@@ -62,6 +66,87 @@ func installFakeProvider(t *testing.T, p auth.Provider) {
 	t.Cleanup(func() { fwdProvidersAtomic.Store(prev) })
 }
 
+// -007: provider callbacks land on the CENTRAL host (here example.com, the
+// forwardAuthBase host) with the sign-in context in the central host's own
+// __Host-fwd_apex_state cookie and the provider state f1 = apexStateF1(nonce),
+// and they no longer sign a subsite session: they sign the central
+// __Host-muvee_sso and 302 to <subsite>/_oauth/session?code=&state=, where the
+// subsite exchanges the code for its own audience-bound session.
+const (
+	callbackSubsiteHost = "myproj.example.com"
+	callbackSubsiteAud  = "project:11111111-1111-1111-1111-111111111111"
+	callbackCentralHost = "example.com"
+)
+
+// centralCallback builds the provider's redirect back to the central host for
+// a login-mode sign-in started by a browser on callbackSubsiteHost. It returns
+// the callback request, the subsite's __Host-fwd_state cookie (the browser
+// still holds it) and the provider state (f1) the request carries.
+func centralCallback(t *testing.T, provider string) (*http.Request, *http.Cookie, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	sr := httptest.NewRequest(http.MethodGet, "/_oauth/login", nil)
+	sr.Host = callbackSubsiteHost
+	nonce := writeSubsiteState(rec, sr, 0, false)
+	subsite := findCookie(rec.Result().Cookies(), fwdCookieName(fwdStateCookieBase))
+	if subsite == nil {
+		t.Fatal("writeSubsiteState set no subsite state cookie")
+	}
+
+	st := apexState{Host: callbackSubsiteHost, Aud: callbackSubsiteAud, State: nonce, Nonce: randomToken(18), Mode: "login", Provider: provider}
+	f1 := apexStateF1(st.Nonce)
+	r := httptest.NewRequest(http.MethodGet, "/_oauth/"+provider+"?code=authcode&state="+url.QueryEscape(f1), nil)
+	r.Host = callbackCentralHost
+	r.AddCookie(&http.Cookie{Name: fwdCookieName(apexStateCookieBase), Value: sealValue("apex-state", st)})
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("provider", provider)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx)), subsite, f1
+}
+
+// ssoClaims returns the claims of the central SSO session the callback set.
+func ssoClaims(t *testing.T, w *httptest.ResponseRecorder) (*http.Cookie, *authClaims) {
+	t.Helper()
+	c, ok := namedCookie(w, fwdCookieName(ssoCookieBase))
+	if !ok || c.Value == "" {
+		t.Fatalf("callback issued no %s cookie (status %d body %q)", fwdCookieName(ssoCookieBase), w.Code, w.Body.String())
+	}
+	claims, err := parseFwdToken(c.Value, ssoAudience(callbackCentralHost), fwdKindSSO)
+	if err != nil {
+		t.Fatalf("parse SSO session: %v", err)
+	}
+	return c, claims
+}
+
+// exchangeAtSubsite follows the callback's 302 the way the browser does: the
+// subsite's /_oauth/session with the code, the state and its own state cookie.
+// It returns the subsite session cookie and its claims.
+func exchangeAtSubsite(t *testing.T, w *httptest.ResponseRecorder, subsiteState *http.Cookie) (*http.Cookie, *authClaims) {
+	t.Helper()
+	loc, err := url.Parse(w.Header().Get("Location"))
+	if err != nil || loc.Scheme != "https" || loc.Host != callbackSubsiteHost || loc.Path != "/_oauth/session" ||
+		loc.Query().Get("code") == "" || loc.Query().Get("state") == "" {
+		t.Fatalf("callback Location = %q, want https://%s/_oauth/session?code=&state=", w.Header().Get("Location"), callbackSubsiteHost)
+	}
+	r := httptest.NewRequest(http.MethodGet, loc.RequestURI(), nil)
+	r.Host = callbackSubsiteHost
+	r.Header.Set(routeAudienceHeader, callbackSubsiteAud)
+	r.AddCookie(&http.Cookie{Name: subsiteState.Name, Value: subsiteState.Value})
+	sw := httptest.NewRecorder()
+	handleSSOSession(sw, r)
+	if sw.Code != http.StatusFound {
+		t.Fatalf("subsite code exchange: status %d body %q, want 302", sw.Code, sw.Body.String())
+	}
+	c, ok := namedCookie(sw, fwdCookieName(fwdSessionCookieBase))
+	if !ok || c.Value == "" {
+		t.Fatalf("subsite exchange issued no %s cookie", fwdCookieName(fwdSessionCookieBase))
+	}
+	claims, err := parseFwdToken(c.Value, callbackSubsiteAud, fwdKindSession)
+	if err != nil {
+		t.Fatalf("parse subsite session: %v", err)
+	}
+	return c, claims
+}
+
 // TestHandleOAuthCallback_SubjectProviderTakesSubjectPath is the regression
 // test for the email-less downstream login: before the SubjectProvider
 // dispatch existed, handleOAuthCallback called p.UserInfo unconditionally, so
@@ -90,14 +175,7 @@ func TestHandleOAuthCallback_SubjectProviderTakesSubjectPath(t *testing.T) {
 		forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret = prevBase, prevCookie, prevServer, prevSecret
 	})
 
-	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
-	r := httptest.NewRequest(http.MethodGet, "/_oauth/faketwitter?code=authcode&state="+state, nil)
-	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
-	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
-	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("provider", "faketwitter")
-	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	r, subsiteState, state := centralCallback(t, "faketwitter")
 
 	w := httptest.NewRecorder()
 	handleOAuthCallback(w, r)
@@ -108,14 +186,24 @@ func TestHandleOAuthCallback_SubjectProviderTakesSubjectPath(t *testing.T) {
 	if w.Code != http.StatusFound {
 		t.Fatalf("callback status = %d, want %d (body=%s)", w.Code, http.StatusFound, w.Body.String())
 	}
+	// -007: the provider state handed to UserInfoWithSubject was the signed
+	// host-bound state → it is the central f1 state (apexStateF1(nonce)), which
+	// is exactly what the provider echoed in the query.
 	if p.gotState != state {
 		t.Errorf("state passed to UserInfoWithSubject:\n  got:  %q\n  want: %q\n(PKCE providers recompute code_verifier from it)", p.gotState, state)
 	}
 	if want := "https://example.com/_oauth/faketwitter"; p.gotRedirect != want {
 		t.Errorf("redirect URL passed to UserInfoWithSubject:\n  got:  %q\n  want: %q", p.gotRedirect, want)
 	}
-	if _, ok := namedCookie(w, "muvee_fwd_session"); !ok {
-		t.Error("callback must issue the muvee_fwd_session cookie for an email-less identity too")
+	// -007: the callback issued the muvee_fwd_session cookie for an email-less
+	// identity → it issues the central SSO session (and the 302 hands a code to
+	// the subsite, which then signs the host-only session): both must carry the
+	// email-less identity.
+	if _, sso := ssoClaims(t, w); sso.UserID != testUserID || sso.Email != "" || sso.Name != "Fake User" || sso.Provider != "faketwitter" {
+		t.Errorf("SSO identity = %+v, want user_id %s, no email, name Fake User, provider faketwitter", sso, testUserID)
+	}
+	if _, sess := exchangeAtSubsite(t, w, subsiteState); sess.UserID != testUserID || sess.Email != "" || sess.Name != "Fake User" {
+		t.Errorf("subsite session identity = %+v, want the same email-less identity", sess)
 	}
 	if upsertBody["provider_user_id"] != "sub-4242" {
 		t.Errorf("identity upsert provider_user_id = %q, want %q — the users row can only be keyed on the subject", upsertBody["provider_user_id"], "sub-4242")
@@ -154,10 +242,12 @@ type fakePlainProvider struct {
 	calls       int
 }
 
-func (p *fakePlainProvider) Name() string                 { return "fakeplain" }
-func (p *fakePlainProvider) DisplayName() string          { return "Fake Plain" }
-func (p *fakePlainProvider) OrgScoped() bool              { return false }
-func (p *fakePlainProvider) CanonicalRedirectURL() string { return "https://example.com/_oauth/fakeplain" }
+func (p *fakePlainProvider) Name() string        { return "fakeplain" }
+func (p *fakePlainProvider) DisplayName() string { return "Fake Plain" }
+func (p *fakePlainProvider) OrgScoped() bool     { return false }
+func (p *fakePlainProvider) CanonicalRedirectURL() string {
+	return "https://example.com/_oauth/fakeplain"
+}
 func (p *fakePlainProvider) AuthCodeURL(state, redirectURL string) string {
 	return "https://idp.example/authorize?state=" + state
 }
@@ -197,39 +287,44 @@ func newRecordingUpstream(t *testing.T) *recordingUpstream {
 	return u
 }
 
-// callbackWithInvite drives handleOAuthCallback for the given provider with an
-// invite-token cookie attached, the way a verify hop would have left one.
-func callbackWithInvite(t *testing.T, p auth.Provider, inviteToken string) *httptest.ResponseRecorder {
+// -007: the invite token no longer rides a muvee_invite_token cookie
+// (deleted) through the provider round trip. It stays in the return URL's
+// query, so after sign-in the first /verify consumes it in place
+// (handleVerify, X-Forwarded-Uri ?invite_token=). The two tests below keep
+// the original intents — an email-less identity consumes the link against its
+// user id via project-invite, an email identity through auth/upsert — but
+// assert them at /verify; callback_doesNotConsume pins that the callback
+// itself no longer touches the link, even for a leftover legacy cookie.
+
+// inviteVerify drives handleVerify for an already signed-in subsite session
+// opening the invitation link.
+func inviteVerify(t *testing.T, id fwdIdentity, inviteToken string) *httptest.ResponseRecorder {
 	t.Helper()
-	installFakeProvider(t, p)
-	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
-	r := httptest.NewRequest(http.MethodGet, "/_oauth/"+p.Name()+"?code=authcode&state="+state, nil)
-	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
-	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
-	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
-	r.AddCookie(&http.Cookie{Name: inviteTokenCookieName, Value: inviteToken})
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("provider", p.Name())
-	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	tok, err := signSubsiteSession(id, callbackSubsiteAud, "sso-i", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/verify?project_id="+callbackSubsiteAud[len("project:"):], nil)
+	r.Header.Set("X-Forwarded-Host", callbackSubsiteHost)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Uri", "/?invite_token="+inviteToken)
+	r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdSessionCookieBase), Value: tok})
 	w := httptest.NewRecorder()
-	handleOAuthCallback(w, r)
+	handleVerify(w, r)
 	return w
 }
 
-// TestHandleOAuthCallback_EmailLessIdentityConsumesProjectInvite covers the
+// TestHandleVerify_EmailLessIdentityConsumesProjectInvite covers the
 // invitation link for an identity with no email. The email-keyed auth/upsert
 // cannot serve it — the invitee would silently lose the grant and land on
-// request-access — so the callback consumes the link against the user id the
-// identity upsert just returned.
-func TestHandleOAuthCallback_EmailLessIdentityConsumesProjectInvite(t *testing.T) {
+// request-access — so the link is consumed against the user id the session
+// carries.
+func TestHandleVerify_EmailLessIdentityConsumesProjectInvite(t *testing.T) {
 	upstream := newRecordingUpstream(t)
-	w := callbackWithInvite(t, &fakeSubjectProvider{}, "INVITE-TOK")
+	w := inviteVerify(t, fwdIdentity{UserID: testUserID, Name: "Fake User", Provider: "faketwitter"}, "INVITE-TOK")
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("callback status = %d, want 302 (body=%s)", w.Code, w.Body.String())
-	}
-	if _, ok := upstream.hits["/api/internal/auth/identity-upsert"]; !ok {
-		t.Fatalf("expected the identity to be upserted first; hits=%v", upstream.hits)
+	if w.Code == http.StatusBadGateway {
+		t.Fatalf("verify failed upstream (body=%s)", w.Body.String())
 	}
 	invite, ok := upstream.hits["/api/internal/auth/project-invite"]
 	if !ok {
@@ -246,15 +341,15 @@ func TestHandleOAuthCallback_EmailLessIdentityConsumesProjectInvite(t *testing.T
 	}
 }
 
-// TestHandleOAuthCallback_EmailIdentityKeepsInviteUpsert guards the untouched
-// path: an identity with an email still consumes its link through auth/upsert,
-// which additionally applies the platform-side invite bookkeeping.
-func TestHandleOAuthCallback_EmailIdentityKeepsInviteUpsert(t *testing.T) {
+// TestHandleVerify_EmailIdentityKeepsInviteUpsert guards the untouched path:
+// an identity with an email still consumes its link through auth/upsert, which
+// additionally applies the platform-side invite bookkeeping.
+func TestHandleVerify_EmailIdentityKeepsInviteUpsert(t *testing.T) {
 	upstream := newRecordingUpstream(t)
-	w := callbackWithInvite(t, &fakePlainProvider{email: "alice@corp.example", name: "Alice"}, "INVITE-TOK")
+	w := inviteVerify(t, fwdIdentity{UserID: testUserID, Email: "alice@corp.example", Name: "Alice", Provider: "fakeplain"}, "INVITE-TOK")
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("callback status = %d, want 302 (body=%s)", w.Code, w.Body.String())
+	if w.Code == http.StatusBadGateway {
+		t.Fatalf("verify failed upstream (body=%s)", w.Body.String())
 	}
 	upsert, ok := upstream.hits["/api/internal/auth/upsert"]
 	if !ok {
@@ -265,5 +360,38 @@ func TestHandleOAuthCallback_EmailIdentityKeepsInviteUpsert(t *testing.T) {
 	}
 	if _, ok := upstream.hits["/api/internal/auth/project-invite"]; ok {
 		t.Error("the email path must not also hit the user-id project-invite endpoint")
+	}
+}
+
+// -007: the callback consumed a muvee_invite_token cookie → the callback never
+// consumes an invite (the cookie is not read, not set); it only syncs the
+// identity. A stale legacy invite cookie riding the callback changes nothing.
+func TestHandleOAuthCallback_DoesNotConsumeInvite(t *testing.T) {
+	for _, p := range []auth.Provider{&fakeSubjectProvider{}, &fakePlainProvider{email: "alice@corp.example", name: "Alice"}} {
+		t.Run(p.Name(), func(t *testing.T) {
+			upstream := newRecordingUpstream(t)
+			installFakeProvider(t, p)
+			r, _, _ := centralCallback(t, p.Name())
+			r.AddCookie(&http.Cookie{Name: "muvee_invite_token", Value: "INVITE-TOK"})
+			w := httptest.NewRecorder()
+			handleOAuthCallback(w, r)
+
+			if w.Code != http.StatusFound {
+				t.Fatalf("callback status = %d, want 302 (body=%s)", w.Code, w.Body.String())
+			}
+			if _, ok := upstream.hits["/api/internal/auth/identity-upsert"]; !ok {
+				t.Fatalf("expected the identity to be upserted; hits=%v", upstream.hits)
+			}
+			for _, path := range []string{"/api/internal/auth/upsert", "/api/internal/auth/project-invite"} {
+				if _, ok := upstream.hits[path]; ok {
+					t.Errorf("callback consumed an invite via %s; the link is consumed at /verify now (hits=%v)", path, upstream.hits)
+				}
+			}
+			for _, c := range w.Result().Cookies() {
+				if c.Value != "" && (c.Name == "muvee_invite_token" || c.Name == fwdCookieName("muvee_invite_token")) {
+					t.Errorf("callback set an invite cookie: %+v", c)
+				}
+			}
+		})
 	}
 }

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/hoveychen/muvee/internal/auth"
 )
@@ -39,21 +41,62 @@ func TestOAuthRedirectFollowsRequestHost(t *testing.T) {
 	fwdProvidersAtomic.Store(&provs)
 	t.Cleanup(func() { fwdProvidersAtomic.Store(prev) })
 
-	const userCode = "TESTCODE"
-	deviceByUser.Store(userCode, "devicecode")
-	t.Cleanup(func() { deviceByUser.Delete(userCode) })
+	// -007: the device flow no longer leaves for the provider from the
+	// subsite; activate hands off to the central sign-in host of the request's
+	// base domain, whose /_oauth/start builds the provider URL. The contract
+	// under test is unchanged: the redirect_uri follows the request's base
+	// domain (app.muvee.ai), never the canonical app.muveeai.com.
+	const userCode, deviceCode, subsite = "TESTCODE", "devicecode", "proj.muvee.ai"
+	deviceFlows.Store(deviceCode, &deviceFlowEntry{
+		UserCode: userCode, Aud: "project:p1", Host: subsite,
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	deviceByUser.Store(userCode, deviceCode)
+	t.Cleanup(func() { deviceByUser.Delete(userCode); deviceFlows.Delete(deviceCode) })
+
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/internal/projects/by-host" && r.URL.Query().Get("host") == subsite {
+			_, _ = w.Write([]byte(`{"project_id":"p1","aud":"project:p1"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stub.Close)
+	prevServer := muveeServerURL
+	muveeServerURL = stub.URL
+	t.Cleanup(func() { muveeServerURL = prevServer })
 
 	req := httptest.NewRequest("GET",
-		"https://app.muvee.ai/_oauth/device/activate?code="+userCode+"&provider=feishu", nil)
-	req.Host = "app.muvee.ai"
-	req.Header.Set("X-Forwarded-Host", "app.muvee.ai")
+		"https://"+subsite+"/_oauth/device/activate?code="+userCode+"&provider=feishu", nil)
+	req.Host = subsite
+	req.Header.Set("X-Forwarded-Host", subsite)
+	req.Header.Set(routeAudienceHeader, "project:p1")
 	w := httptest.NewRecorder()
 
 	handleDeviceActivate(w, req)
 
+	hop := w.Result().Header.Get("Location")
+	if hop == "" {
+		t.Fatalf("no redirect; status=%d body=%s", w.Code, w.Body.String())
+	}
+	hu, err := url.Parse(hop)
+	if err != nil {
+		t.Fatalf("parse Location %q: %v", hop, err)
+	}
+	if hu.Host != "app.muvee.ai" || hu.Path != "/_oauth/start" {
+		t.Fatalf("activate hand-off = %q, want https://app.muvee.ai/_oauth/start", hop)
+	}
+
+	req = httptest.NewRequest("GET", hop, nil)
+	req.Host = hu.Host
+	req.Header.Set("X-Forwarded-Host", hu.Host)
+	w = httptest.NewRecorder()
+	handleSSOStart(w, req)
+
 	loc := w.Result().Header.Get("Location")
 	if loc == "" {
-		t.Fatalf("no redirect; status=%d body=%s", w.Code, w.Body.String())
+		t.Fatalf("central start: no redirect; status=%d body=%s", w.Code, w.Body.String())
 	}
 	u, err := url.Parse(loc)
 	if err != nil {

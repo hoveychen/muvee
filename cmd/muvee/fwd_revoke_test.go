@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,15 +15,30 @@ import (
 )
 
 // revokeStub is a muvee-server stand-in for the console-logout revocation
-// tests (BACKLOG-20261117-008). It answers both the per-project access check
-// and the standalone session check, revoking sessions with iat <= revokedIAT
-// when revoked is set, and records every call.
+// tests (BACKLOG-20261117-008, -007). It answers both the per-project access
+// check and the standalone session check. A credential is revoked when
+//   - revoked is set and the session_iat it sends (the credential's auth_time,
+//     falling back to its iat) is <= revokedIAT (console logout), or
+//   - any of the comma-separated sids it sends is in revokedSIDs (a sign-out
+//     that revoked its sid / sso_sid),
+//
+// and every call is recorded.
 type revokeStub struct {
-	mu         sync.Mutex
-	calls      []string // path?query
-	revoked    bool
-	revokedIAT int64
-	fail       bool
+	mu          sync.Mutex
+	calls       []string // path?query
+	revoked     bool
+	revokedIAT  int64
+	revokedSIDs map[string]bool
+	fail        bool
+}
+
+func (s *revokeStub) revokeSID(sid string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revokedSIDs == nil {
+		s.revokedSIDs = map[string]bool{}
+	}
+	s.revokedSIDs[sid] = true
 }
 
 func (s *revokeStub) record(r *http.Request) {
@@ -46,6 +62,13 @@ func (s *revokeStub) callsTo(path string) []url.Values {
 }
 
 func (s *revokeStub) isRevoked(q url.Values) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sid := range strings.Split(q.Get("sids"), ",") {
+		if sid != "" && s.revokedSIDs[sid] {
+			return true
+		}
+	}
 	raw := q.Get("session_iat")
 	if raw == "" || !s.revoked {
 		return false
@@ -107,41 +130,67 @@ func revokeEnv(t *testing.T) *revokeStub {
 
 const revokeProjectID = "11111111-1111-1111-1111-111111111111"
 
-// sessionIssuedAtTime signs a roaming session whose iat is at.
-func sessionIssuedAtTime(t *testing.T, at time.Time) string {
+const revokeAud = "project:" + revokeProjectID
+
+var revokeIdentity = fwdIdentity{UserID: testUserID, Email: "a@corp.example", Name: "A", Provider: "google"}
+
+// sessionAuthTimeAt signs a roaming subsite session for the revoke project
+// whose auth_time is at (the sign-in time console logout is compared with).
+func sessionAuthTimeAt(t *testing.T, at time.Time) string {
 	t.Helper()
-	tok, err := signForwardJWT(testUserID, "a@corp.example", "A", "", "google")
+	tok, err := signSubsiteSession(revokeIdentity, revokeAud, "sso-"+randomToken(6), at.Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _ := parseForwardJWT(tok)
-	c.IssuedAt = jwt.NewNumericDate(at)
-	return mustSign(t, c)
+	return tok
 }
 
-// assertSessionCleared checks the response deleted muvee_fwd_session and set
-// the signed-out hint (so a single-provider login page shows the selection
-// page instead of riding the provider's SSO straight back in).
+// revokeVerifyRequest is the ForwardAuth request Traefik sends for the revoke
+// project, carrying session as the host-only __Host-muvee_fwd cookie.
+func revokeVerifyRequest(session string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/verify?project_id="+revokeProjectID, nil)
+	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdSessionCookieBase), Value: session})
+	return r
+}
+
+func revokeSessionCookie(w *httptest.ResponseRecorder) *http.Cookie {
+	return findCookie(w.Result().Cookies(), fwdCookieName(fwdSessionCookieBase))
+}
+
+// assertSessionCleared checks the response deleted the host-only session
+// cookie and set the signed-out hint (so a single-provider login page shows
+// the selection page instead of riding the provider's SSO straight back in).
+// -007: the cleared cookie had Domain=example.com (shared base-domain cookie)
+// → the session cookie is __Host-muvee_fwd, host-only (no Domain); the legacy
+// base-domain muvee_fwd_session is deleted too, with Domain=example.com.
 func assertSessionCleared(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
-	c := sessionCookieFrom(w)
+	c := revokeSessionCookie(w)
 	if c == nil || c.MaxAge >= 0 || c.Value != "" {
-		t.Errorf("muvee_fwd_session not cleared: %+v", c)
+		t.Errorf("%s not cleared: %+v", fwdCookieName(fwdSessionCookieBase), c)
 	}
-	if c != nil && c.Domain != "example.com" {
-		t.Errorf("cleared cookie domain = %q, want example.com", c.Domain)
+	if c != nil && (c.Domain != "" || !c.Secure) {
+		t.Errorf("cleared cookie must be host-only and Secure (__Host- contract): %+v", c)
 	}
-	if h := findCookie(w.Result().Cookies(), signedOutHintCookie); h == nil || h.MaxAge <= 0 {
+	if old := findCookie(w.Result().Cookies(), "muvee_fwd_session"); old == nil || old.MaxAge >= 0 || old.Domain != "example.com" {
+		t.Errorf("legacy muvee_fwd_session not deleted on the base domain: %+v", old)
+	}
+	if h := findCookie(w.Result().Cookies(), fwdCookieName(signedOutHintCookie)); h == nil || h.MaxAge <= 0 {
 		t.Errorf("signed-out hint not set: %+v", h)
 	}
 }
 
+// -008/-007: console logout was compared with the session's iat → it is now
+// compared with auth_time (sessionAuthTimeAt sets it; the stub receives it as
+// session_iat).
 func TestVerify_RevokedSessionRejected(t *testing.T) {
 	stub := revokeEnv(t)
 	logout := time.Now().Add(-time.Hour)
 	stub.revoked, stub.revokedIAT = true, logout.Unix()
 
-	r := verifyRequest(sessionIssuedAtTime(t, logout.Add(-time.Minute)), revokeProjectID, "")
+	r := revokeVerifyRequest(sessionAuthTimeAt(t, logout.Add(-time.Minute)))
 	r.Header.Set("Sec-Fetch-Dest", "document")
 	r.Header.Set("Sec-Fetch-Mode", "navigate")
 	r.Header.Set("X-Forwarded-Uri", "/dash")
@@ -171,23 +220,72 @@ func TestVerify_SessionAfterLogoutAccepted(t *testing.T) {
 	stub.revoked, stub.revokedIAT = true, logout.Unix()
 
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(sessionIssuedAtTime(t, logout.Add(time.Minute)), revokeProjectID, ""))
+	handleVerify(w, revokeVerifyRequest(sessionAuthTimeAt(t, logout.Add(time.Minute))))
 	if w.Code != http.StatusOK {
-		t.Fatalf("session issued after the logout: status %d, want 200", w.Code)
+		t.Fatalf("session signed in after the logout: status %d, want 200", w.Code)
 	}
 }
 
-// A session signed before sessions carried iat counts as issued at 0: any
-// revocation on record voids it; with none on record it keeps working.
+// -007 (new): the access check carries the credential's sid and sso_sid, and a
+// sign-out that revoked either one voids the session — the sid of this very
+// session (single-site logout), or the sso_sid it was minted from (central
+// sign-out kills every subsite session of that SSO) — even though the user's
+// console logout time is untouched.
+func TestVerify_SIDRevocation(t *testing.T) {
+	for _, which := range []string{"sid", "sso_sid"} {
+		t.Run(which, func(t *testing.T) {
+			stub := revokeEnv(t)
+			tok := sessionAuthTimeAt(t, time.Now())
+			c, err := parseFwdToken(tok, revokeAud, fwdKindSession)
+			if err != nil || c.SID == "" || c.SSOSID == "" {
+				t.Fatalf("session claims = %+v err=%v, want both sid and sso_sid", c, err)
+			}
+
+			// Not revoked yet: passes, and the check carried both ids.
+			w := httptest.NewRecorder()
+			handleVerify(w, revokeVerifyRequest(tok))
+			if w.Code != http.StatusOK {
+				t.Fatalf("live session: status %d, want 200", w.Code)
+			}
+			sent := stub.callsTo(pathAccessCheck)
+			if len(sent) != 1 || sent[0].Get("sids") != c.SID+","+c.SSOSID {
+				t.Fatalf("access check sids = %v, want %q", sent, c.SID+","+c.SSOSID)
+			}
+
+			if which == "sid" {
+				stub.revokeSID(c.SID)
+			} else {
+				stub.revokeSID(c.SSOSID)
+			}
+			w = httptest.NewRecorder()
+			handleVerify(w, revokeVerifyRequest(tok))
+			if w.Code == http.StatusOK {
+				t.Fatalf("session with a revoked %s must be rejected", which)
+			}
+			assertSessionCleared(t, w)
+			if w.Header().Get("X-Forwarded-User") != "" {
+				t.Errorf("revoked session leaked identity headers")
+			}
+		})
+	}
+}
+
+// A session signed before sessions carried iat / auth_time counts as issued at
+// 0: any revocation on record voids it; with none on record it keeps working.
+// (-007: it still needs aud and kind=session, which every session since
+// BACKLOG-20261117-007 carries; only iat / auth_time / sid are absent here.)
 func TestVerify_LegacySessionWithoutIAT(t *testing.T) {
 	stub := revokeEnv(t)
 	legacy := mustSign(t, &authClaims{
-		Email: "a@corp.example", UserID: testUserID, Provider: "google",
-		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(6 * 24 * time.Hour))},
+		Email: "a@corp.example", UserID: testUserID, Provider: "google", Kind: fwdKindSession,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{revokeAud},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(6 * time.Hour)),
+		},
 	})
 
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(legacy, revokeProjectID, ""))
+	handleVerify(w, revokeVerifyRequest(legacy))
 	if w.Code != http.StatusOK {
 		t.Fatalf("legacy session, no revocation: status %d, want 200", w.Code)
 	}
@@ -197,63 +295,194 @@ func TestVerify_LegacySessionWithoutIAT(t *testing.T) {
 
 	stub.revoked, stub.revokedIAT = true, time.Now().Add(-24*time.Hour).Unix()
 	w = httptest.NewRecorder()
-	handleVerify(w, verifyRequest(legacy, revokeProjectID, ""))
+	handleVerify(w, revokeVerifyRequest(legacy))
 	if w.Code == http.StatusOK {
 		t.Fatalf("legacy session after a console logout must be rejected")
 	}
 	assertSessionCleared(t, w)
 }
 
-// Sliding renewal must not run for a revoked session, and must keep iat so a
-// renewal never carries a session past a later logout.
-func TestVerify_RenewalKeepsIATAndSkipsRevoked(t *testing.T) {
+// -007 (new): a session without auth_time (but with iat) is compared by its
+// iat, so a token minted before auth_time existed is still voided by a logout.
+func TestVerify_AuthTimeFallsBackToIAT(t *testing.T) {
 	stub := revokeEnv(t)
-	issued := time.Now().Add(-3 * 24 * time.Hour)
-	tok, _ := signForwardJWTWithExpiry(testUserID, "a@corp.example", "A", "", "google", 4*24*time.Hour)
-	c, _ := parseForwardJWT(tok)
+	issued := time.Now().Add(-2 * time.Hour)
+	tok := mustSign(t, &authClaims{
+		Email: "a@corp.example", UserID: testUserID, Provider: "google", Kind: fwdKindSession,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{revokeAud},
+			IssuedAt:  jwt.NewNumericDate(issued),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(6 * time.Hour)),
+		},
+	})
+	w := httptest.NewRecorder()
+	handleVerify(w, revokeVerifyRequest(tok))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", w.Code)
+	}
+	if got := stub.callsTo(pathAccessCheck)[0].Get("session_iat"); got != strconv.FormatInt(issued.Unix(), 10) {
+		t.Errorf("session_iat = %q, want the iat %d", got, issued.Unix())
+	}
+}
+
+// Sliding renewal must not run for a revoked session, and must keep sid,
+// sso_sid, iat and auth_time so a renewal never carries a session past a later
+// logout. -007: the old test pinned only iat (the logout comparison point);
+// the comparison point is now auth_time, so it pins auth_time too, and a
+// renewal that would move it is the regression to catch.
+func TestVerify_RenewalKeepsAuthTimeAndSkipsRevoked(t *testing.T) {
+	stub := revokeEnv(t)
+	issued := time.Now().Add(-7 * time.Hour)
+	tok, err := signSubsiteSession(revokeIdentity, revokeAud, "sso-keep", issued.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseFwdToken(tok, revokeAud, fwdKindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
 	c.IssuedAt = jwt.NewNumericDate(issued)
+	c.ExpiresAt = jwt.NewNumericDate(time.Now().Add(5 * time.Hour)) // < 6h left: due for renewal
 	aging := mustSign(t, c)
 
 	w := httptest.NewRecorder()
-	handleVerify(w, verifyRequest(aging, revokeProjectID, ""))
-	renewed := sessionCookieFrom(w)
+	handleVerify(w, revokeVerifyRequest(aging))
+	renewed := revokeSessionCookie(w)
 	if w.Code != http.StatusOK || renewed == nil || renewed.Value == "" {
 		t.Fatalf("aging session not renewed: status %d cookie %+v", w.Code, renewed)
 	}
-	rc, err := parseForwardJWT(renewed.Value)
+	rc, err := parseFwdToken(renewed.Value, revokeAud, fwdKindSession)
 	if err != nil || rc.IssuedAt == nil || rc.IssuedAt.Unix() != issued.Unix() || rc.Kind != fwdKindSession {
 		t.Fatalf("renewal changed iat/kind: %+v err=%v", rc, err)
 	}
+	if rc.AuthTime != issued.Unix() || rc.SID != c.SID || rc.SSOSID != "sso-keep" {
+		t.Errorf("renewal must keep auth_time/sid/sso_sid: got auth_time=%d sid=%q sso_sid=%q, want %d %q sso-keep",
+			rc.AuthTime, rc.SID, rc.SSOSID, issued.Unix(), c.SID)
+	}
+	if !rc.ExpiresAt.After(c.ExpiresAt.Time) {
+		t.Errorf("renewal did not extend the expiry: %v vs %v", rc.ExpiresAt, c.ExpiresAt)
+	}
 
+	// Console logout after the sign-in: the renewed session (fresh expiry, old
+	// auth_time) is voided and not renewed again.
 	stub.revoked, stub.revokedIAT = true, time.Now().Add(-time.Hour).Unix()
 	w = httptest.NewRecorder()
-	handleVerify(w, verifyRequest(renewed.Value, revokeProjectID, ""))
+	handleVerify(w, revokeVerifyRequest(renewed.Value))
 	if w.Code == http.StatusOK {
-		t.Fatalf("renewed session issued before the logout must be rejected")
+		t.Fatalf("renewed session signed in before the logout must be rejected")
 	}
-	if c := sessionCookieFrom(w); c == nil || c.Value != "" {
+	if c := revokeSessionCookie(w); c == nil || c.Value != "" {
 		t.Errorf("revoked session got renewed instead of cleared: %+v", c)
 	}
 }
 
+// -007 (new): re-signing a session (renewal) refreshes its iat, but console
+// logout compares auth_time: a session whose iat is after the logout yet whose
+// auth_time is before it is revoked. (Comparing iat, as before, would let a
+// renewal after the logout resurrect the session.)
+func TestVerify_LogoutComparesAuthTimeNotIAT(t *testing.T) {
+	stub := revokeEnv(t)
+	logout := time.Now().Add(-time.Hour)
+	stub.revoked, stub.revokedIAT = true, logout.Unix()
+
+	tok, err := signSubsiteSession(revokeIdentity, revokeAud, "sso-x", logout.Add(-time.Minute).Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := parseFwdToken(tok, revokeAud, fwdKindSession)
+	if c.IssuedAt.Unix() <= logout.Unix() {
+		t.Fatalf("test setup: iat %d must be after the logout %d", c.IssuedAt.Unix(), logout.Unix())
+	}
+	w := httptest.NewRecorder()
+	handleVerify(w, revokeVerifyRequest(tok))
+	if w.Code == http.StatusOK {
+		t.Fatalf("fresh iat with an auth_time before the logout must be rejected")
+	}
+	assertSessionCleared(t, w)
+}
+
 // Verify without a project (unbound tunnel) has no access check to ride, so it
-// asks the session endpoint.
+// asks the session endpoint. -007: the audience is host:<tunnel_host> from the
+// verify URL (it used to come from X-Forwarded-Host + the shared cookie), and
+// the session endpoint now also receives the credential's sids.
 func TestVerify_NoProjectUsesSessionCheck(t *testing.T) {
 	stub := revokeEnv(t)
 	stub.revoked, stub.revokedIAT = true, time.Now().Unix()
 
-	r := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	tunAud := "host:tun.example.com"
+	tok, err := signSubsiteSession(revokeIdentity, tunAud, "sso-t", time.Now().Add(-time.Hour).Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/verify?tunnel_host=tun.example.com", nil)
 	r.Header.Set("X-Forwarded-Host", "tun.example.com")
-	r.AddCookie(&http.Cookie{Name: "muvee_fwd_session", Value: sessionIssuedAtTime(t, time.Now().Add(-time.Hour))})
+	r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdSessionCookieBase), Value: tok})
 	w := httptest.NewRecorder()
 	handleVerify(w, r)
 	if w.Code == http.StatusOK {
 		t.Fatalf("revoked session passed project-less verify")
 	}
 	assertSessionCleared(t, w)
-	if n := len(stub.callsTo(pathSessionRevoked)); n != 1 {
-		t.Errorf("session-check calls = %d, want 1", n)
+	calls := stub.callsTo(pathSessionRevoked)
+	if len(calls) != 1 {
+		t.Fatalf("session-check calls = %d, want 1", len(calls))
 	}
+	if calls[0].Get("sids") == "" {
+		t.Errorf("session check carried no sids: %v", calls[0])
+	}
+}
+
+// A session minted for another audience never authenticates here, and never
+// reaches the revocation endpoint (-007 (new): per-aud isolation).
+func TestVerify_WrongAudienceSessionRejectedWithoutChecks(t *testing.T) {
+	stub := revokeEnv(t)
+	other, err := signSubsiteSession(revokeIdentity, "project:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "sso-o", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	handleVerify(w, revokeVerifyRequest(other))
+	if w.Code == http.StatusOK {
+		t.Fatalf("another project's session passed verify")
+	}
+	if len(stub.calls) != 0 {
+		t.Errorf("unauthenticated request reached muvee-server: %v", stub.calls)
+	}
+}
+
+// -007 (new): password / phone sessions are project-bound with no users row
+// behind them, so console logout never voids them (no session_iat is sent),
+// but their own sid can still be revoked.
+func TestVerify_ProjectSessionRevokedBySIDOnly(t *testing.T) {
+	stub := revokeEnv(t)
+	tok, err := signProjectSession("demo@acct", "Demo", "", "password", revokeProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseFwdToken(tok, revokeAud, fwdKindSession)
+	if err != nil || c.SID == "" {
+		t.Fatalf("project session claims = %+v err=%v", c, err)
+	}
+
+	stub.revoked, stub.revokedIAT = true, time.Now().Add(time.Hour).Unix() // console logout "after" everything
+	w := httptest.NewRecorder()
+	handleVerify(w, revokeVerifyRequest(tok))
+	if w.Code != http.StatusOK {
+		t.Fatalf("console logout must not void a password session: status %d", w.Code)
+	}
+	for _, q := range stub.callsTo(pathSessionRevoked) {
+		if q.Get("session_iat") != "" || q.Get("email") != "" {
+			t.Errorf("password session check carried a console-logout key: %v", q)
+		}
+	}
+
+	stub.revokeSID(c.SID)
+	w = httptest.NewRecorder()
+	handleVerify(w, revokeVerifyRequest(tok))
+	if w.Code == http.StatusOK {
+		t.Fatalf("password session with a revoked sid must be rejected")
+	}
+	assertSessionCleared(t, w)
 }
 
 // A revoked session must not consume an invite on the user's behalf.
@@ -261,7 +490,7 @@ func TestVerify_RevokedSessionDoesNotConsumeInvite(t *testing.T) {
 	stub := revokeEnv(t)
 	stub.revoked, stub.revokedIAT = true, time.Now().Unix()
 
-	r := verifyRequest(sessionIssuedAtTime(t, time.Now().Add(-time.Hour)), revokeProjectID, "")
+	r := revokeVerifyRequest(sessionAuthTimeAt(t, time.Now().Add(-time.Hour)))
 	r.Header.Set("X-Forwarded-Uri", "/?invite_token=tok123")
 	w := httptest.NewRecorder()
 	handleVerify(w, r)
@@ -279,8 +508,12 @@ func TestVerify_RevokedSessionDoesNotConsumeInvite(t *testing.T) {
 func TestVerify_RevocationCheckFailureFailsClosed(t *testing.T) {
 	stub := revokeEnv(t)
 	stub.fail = true
-	r := httptest.NewRequest(http.MethodGet, "/verify", nil)
-	r.AddCookie(&http.Cookie{Name: "muvee_fwd_session", Value: sessionIssuedAtTime(t, time.Now())})
+	r := httptest.NewRequest(http.MethodGet, "/verify?tunnel_host=tun.example.com", nil)
+	tok, err := signSubsiteSession(revokeIdentity, "host:tun.example.com", "sso-f", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdSessionCookieBase), Value: tok})
 	w := httptest.NewRecorder()
 	handleVerify(w, r)
 	if w.Code != http.StatusBadGateway {
@@ -288,26 +521,37 @@ func TestVerify_RevocationCheckFailureFailsClosed(t *testing.T) {
 	}
 }
 
-// kind=cli device-flow tokens are out of scope (BACKLOG-20261117-007) and are
-// not checked. An unmarked Bearer token is: sessions and CLI tokens signed
-// before the kind claim are indistinguishable, so treating it as CLI would let
-// a pre-upgrade session cookie replayed as Bearer dodge console logout. A
-// session-kind JWT replayed as Bearer is checked too.
+// kind=cli device-flow tokens are out of scope for console logout
+// (BACKLOG-20261117-007) and are not checked against it. A session-kind JWT
+// replayed as Bearer is checked too. -007: an unmarked token (no kind claim,
+// signed before kind existed) used to be treated like a session so a replayed
+// pre-upgrade cookie could not dodge console logout; now parseFwdToken accepts
+// only kind=session|cli, so it is refused outright (still ok=false, never
+// admitted). New: a CLI token's own sid is revocable.
 func TestVerify_BearerRevocationByKind(t *testing.T) {
 	stub := revokeEnv(t)
 	stub.revoked, stub.revokedIAT = true, time.Now().Unix()
 
-	cli, _ := signForwardCLIJWT(testUserID, "a@corp.example", "A", "", "google", time.Hour)
+	cli, _ := signCLIToken(revokeIdentity, revokeAud)
+	cliRevoked, _ := signCLIToken(revokeIdentity, revokeAud)
+	crc, _ := parseFwdToken(cliRevoked, revokeAud, fwdKindCLI)
+	stub.revokeSID(crc.SID)
 	legacyCLI := mustSign(t, &authClaims{
 		Email: "a@corp.example", UserID: testUserID, Provider: "google",
-		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{revokeAud},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
 	})
-	session := sessionIssuedAtTime(t, time.Now().Add(-time.Hour))
+	session := sessionAuthTimeAt(t, time.Now().Add(-time.Hour))
 
 	for name, tc := range map[string]struct {
 		token string
 		ok    bool
-	}{"cli": {cli, true}, "legacy-unmarked": {legacyCLI, false}, "session-as-bearer": {session, false}} {
+	}{
+		"cli": {cli, true}, "cli-sid-revoked": {cliRevoked, false},
+		"legacy-unmarked": {legacyCLI, false}, "session-as-bearer": {session, false},
+	} {
 		r := httptest.NewRequest(http.MethodGet, "/verify?project_id="+revokeProjectID, nil)
 		r.Header.Set("X-Forwarded-Host", "myproj.example.com")
 		r.Header.Set("Authorization", "Bearer "+tc.token)
@@ -321,32 +565,43 @@ func TestVerify_BearerRevocationByKind(t *testing.T) {
 
 func TestDeviceTokenIsCLIKind(t *testing.T) {
 	revokeEnv(t)
-	tok, err := signForwardCLIJWT(testUserID, "a@corp.example", "A", "", "google", time.Hour)
+	tok, err := signCLIToken(revokeIdentity, revokeAud)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _ := parseForwardJWT(tok)
-	if c.Kind != fwdKindCLI || c.IssuedAt == nil {
-		t.Errorf("cli token claims = %+v", c)
+	c, err := parseFwdToken(tok, revokeAud, fwdKindCLI)
+	if err != nil || c.Kind != fwdKindCLI || c.IssuedAt == nil || c.SID == "" {
+		t.Errorf("cli token claims = %+v err=%v", c, err)
+	}
+	if _, err := parseFwdToken(tok, revokeAud, fwdKindSession); err == nil {
+		t.Errorf("a cli token must not parse as a session")
 	}
 	src, err := os.ReadFile("authservice.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "token, err := signForwardCLIJWT(entry.UserID") {
-		t.Errorf("handleDeviceToken must sign kind=cli tokens via signForwardCLIJWT")
+	if !strings.Contains(string(src), "token, err := signCLIToken(id, entry.Aud)") {
+		t.Errorf("handleDeviceToken must sign kind=cli tokens via signCLIToken")
 	}
 }
 
 // Every other consumer of resolveAuthClaims rejects a revoked session.
+// -007: subsite endpoints take their audience from the X-Muvee-Aud header
+// Traefik injects (the request Host must not be the central host), and
+// /verify-admin from X-Forwarded-Host (host:traefik.<base>), so each case
+// carries a session minted for its own audience.
 func TestRevokedSession_OtherConsumers(t *testing.T) {
 	stub := revokeEnv(t)
 	adminEmails = map[string]struct{}{"a@corp.example": {}}
 	t.Cleanup(func() { adminEmails = nil })
 	stub.revoked, stub.revokedIAT = true, time.Now().Unix()
-	revoked := sessionIssuedAtTime(t, time.Now().Add(-time.Hour))
+	authTime := time.Now().Add(-time.Hour).Unix()
 
-	withSession := func(method, target string) *http.Request {
+	withSession := func(method, target, host, aud string) *http.Request {
+		tok, err := signSubsiteSession(revokeIdentity, aud, "sso-o", authTime)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var r *http.Request
 		if method == http.MethodPost {
 			r = httptest.NewRequest(method, target, strings.NewReader("project_id="+revokeProjectID+"&reason=x"))
@@ -354,10 +609,17 @@ func TestRevokedSession_OtherConsumers(t *testing.T) {
 		} else {
 			r = httptest.NewRequest(method, target, nil)
 		}
-		r.Host = "myproj.example.com"
-		r.Header.Set("X-Forwarded-Host", "myproj.example.com")
-		r.AddCookie(&http.Cookie{Name: "muvee_fwd_session", Value: revoked})
+		r.Host = host
+		r.Header.Set("X-Forwarded-Host", host)
+		r.Header.Set(routeAudienceHeader, aud)
+		r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdSessionCookieBase), Value: tok})
 		return r
+	}
+	proj := func(method, target string) *http.Request {
+		return withSession(method, target, "myproj.example.com", revokeAud)
+	}
+	admin := func() *http.Request {
+		return withSession(http.MethodGet, "/verify-admin", "traefik.example.com", "host:traefik.example.com")
 	}
 
 	cases := []struct {
@@ -366,15 +628,15 @@ func TestRevokedSession_OtherConsumers(t *testing.T) {
 		req   *http.Request
 		check func(*httptest.ResponseRecorder) bool
 	}{
-		{"verify-admin", handleVerifyAdmin, withSession(http.MethodGet, "/verify-admin"),
+		{"verify-admin", handleVerifyAdmin, admin(),
 			func(w *httptest.ResponseRecorder) bool { return w.Code != http.StatusOK }},
-		{"userinfo", handleUserInfo, withSession(http.MethodGet, "/_oauth/userinfo"),
+		{"userinfo", handleUserInfo, proj(http.MethodGet, "/_oauth/userinfo"),
 			func(w *httptest.ResponseRecorder) bool { return w.Code == http.StatusUnauthorized }},
-		{"request-access page", handleRequestAccessPage, withSession(http.MethodGet, "/_oauth/request-access?project="+revokeProjectID),
+		{"request-access page", handleRequestAccessPage, proj(http.MethodGet, "/_oauth/request-access?project="+revokeProjectID),
 			func(w *httptest.ResponseRecorder) bool {
 				return w.Code == http.StatusFound && w.Header().Get("Location") == "/_oauth/login"
 			}},
-		{"request-access submit", handleRequestAccessSubmit, withSession(http.MethodPost, "/_oauth/request-access"),
+		{"request-access submit", handleRequestAccessSubmit, proj(http.MethodPost, "/_oauth/request-access"),
 			func(w *httptest.ResponseRecorder) bool {
 				return w.Code == http.StatusFound && w.Header().Get("Location") == "/_oauth/login"
 			}},
@@ -397,12 +659,12 @@ func TestRevokedSession_OtherConsumers(t *testing.T) {
 	// Not revoked → each passes as before.
 	stub.revoked = false
 	w := httptest.NewRecorder()
-	handleUserInfo(w, withSession(http.MethodGet, "/_oauth/userinfo"))
+	handleUserInfo(w, proj(http.MethodGet, "/_oauth/userinfo"))
 	if w.Code != http.StatusOK {
 		t.Errorf("userinfo with a live session: status %d", w.Code)
 	}
 	w = httptest.NewRecorder()
-	handleVerifyAdmin(w, withSession(http.MethodGet, "/verify-admin"))
+	handleVerifyAdmin(w, admin())
 	if w.Code != http.StatusOK {
 		t.Errorf("verify-admin with a live session: status %d", w.Code)
 	}
@@ -411,11 +673,16 @@ func TestRevokedSession_OtherConsumers(t *testing.T) {
 // Drift guard: resolveRequestClaims skips the revocation check, so only
 // handleVerify (which runs it itself, piggybacking on the access check) may
 // call it; everything else goes through resolveAuthClaims.
+// -007: the call gained an aud argument (`resolveRequestClaims(r, aud)`), so
+// the match is on the `resolveRequestClaims(r,` prefix — matching the old
+// `(r)` text would have made this guard silently vacuous. It also now fails if
+// it finds no call at all.
 func TestResolveRequestClaimsOnlyInVerify(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
+	calls := 0
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -430,12 +697,16 @@ func TestResolveRequestClaimsOnlyInVerify(t *testing.T) {
 			if strings.HasPrefix(line, "func ") {
 				fn = line
 			}
-			if !strings.Contains(line, "resolveRequestClaims(r)") {
+			if !strings.Contains(line, "resolveRequestClaims(r,") || strings.HasPrefix(line, "func ") {
 				continue
 			}
+			calls++
 			if !strings.HasPrefix(fn, "func handleVerify(") && !strings.HasPrefix(fn, "func resolveAuthClaims(") {
 				t.Errorf("%s: %q calls resolveRequestClaims directly; use resolveAuthClaims", name, fn)
 			}
 		}
+	}
+	if calls < 2 {
+		t.Errorf("found %d resolveRequestClaims calls, want >= 2 (handleVerify, resolveAuthClaims): the guard no longer matches the call shape", calls)
 	}
 }

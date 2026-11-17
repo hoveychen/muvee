@@ -11,10 +11,13 @@ npm run dev          # http://localhost:5173
 ```
 
 For the SDK to talk to a real muvee instance, point the browser at a host that
-is a muvee project subdomain (so `/_oauth/providers`, `/_oauth/login-token`
-etc. resolve). Easiest path is the deployed demo on muveeai.com; for local
-iteration set `MuveeAuth.configure({ baseUrl: 'https://your-project.muveeai.com' })`
-and accept that cookies will be third-party.
+is a muvee project subdomain (so `/_oauth/providers`, `/_oauth/login`,
+`/_oauth/userinfo` etc. resolve). Sign-in opens a popup on that host, so call
+`signIn` from a click handler (the demo does). `baseUrl` must be the same
+origin as the page: in 0.2.0 you cannot point a `localhost` page at a remote
+project (the popup notification, `BroadcastChannel` and cookie-based
+`getUser()` are same-origin only). Debug by deploying the demo under a project
+subdomain on your muvee instance.
 
 ## Deploy to muvee
 

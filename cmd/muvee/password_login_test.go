@@ -7,21 +7,21 @@ import (
 	"testing"
 )
 
-// TestSignForwardPasswordJWT_CarriesEmail is the regression guard for the
+// TestSignProjectSession_PasswordCarriesEmail is the regression guard for the
 // demo-account email gap: a demo login must bake the account's email into the
-// forward JWT so setUserHeaders can populate X-Forwarded-User for downstream
+// project session JWT so setUserHeaders can populate X-Forwarded-User for downstream
 // services. Before this fix the password JWT carried no email and downstream
 // got an empty identity.
-func TestSignForwardPasswordJWT_CarriesEmail(t *testing.T) {
+func TestSignProjectSession_PasswordCarriesEmail(t *testing.T) {
 	prev := jwtSecret
 	jwtSecret = []byte("test-secret-for-password-jwt")
 	defer func() { jwtSecret = prev }()
 
-	signed, err := signForwardPasswordJWT("demo@example.com", "Demo User", "", "proj-123")
+	signed, err := signProjectSession("demo@example.com", "Demo User", "", "password", "proj-123")
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	claims, err := parseForwardJWT(signed)
+	claims, err := parseFwdToken(signed, "project:proj-123", fwdKindSession)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -30,6 +30,10 @@ func TestSignForwardPasswordJWT_CarriesEmail(t *testing.T) {
 	}
 	if claims.Provider != "password" || claims.ProjectID != "proj-123" {
 		t.Errorf("provider/project binding changed: provider=%q project=%q", claims.Provider, claims.ProjectID)
+	}
+
+	if len(claims.Audience) != 1 || claims.Audience[0] != "project:proj-123" {
+		t.Errorf("aud = %v, want [project:proj-123]", claims.Audience)
 	}
 
 	// The claim must surface as X-Forwarded-User so the downstream app can read

@@ -46,7 +46,12 @@ func TestRedirectToLogin_PreservesProjectSubdomain(t *testing.T) {
 // on the response, or "" if the cookie was not set (or was cleared).
 func redirectCookieValue(w *httptest.ResponseRecorder) (string, bool) {
 	for _, c := range w.Result().Cookies() {
-		if c.Name == "fwd_oauth_redirect" {
+		// -007: the return URL cookie is host-only (__Host-fwd_oauth_redirect),
+		// no longer the base-domain fwd_oauth_redirect.
+		if c.Name == fwdCookieName(fwdRedirectCookieBase) {
+			if c.Domain != "" || !c.Secure || c.Path != "/" {
+				return "", false
+			}
 			if c.MaxAge < 0 {
 				return "", false
 			}

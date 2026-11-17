@@ -4,19 +4,20 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 )
 
 // withRedirectDomains pins the platform base domains for a test: two aliases,
-// mirroring a BASE_DOMAINS=opencws.top,sigma-fi.com deployment.
+// mirroring a BASE_DOMAINS=site-a.test,site-b.test deployment.
 func withRedirectDomains(t *testing.T) {
 	t.Helper()
 	prevBase, prevDomain, prevBases := forwardAuthBase, cookieDomain, cookieBaseDomains
-	forwardAuthBase = "https://opencws.top"
-	cookieDomain = "opencws.top"
-	cookieBaseDomains = []string{"opencws.top", "sigma-fi.com"}
+	forwardAuthBase = "https://site-a.test"
+	cookieDomain = "site-a.test"
+	cookieBaseDomains = []string{"site-a.test", "site-b.test"}
 	t.Cleanup(func() {
 		forwardAuthBase, cookieDomain, cookieBaseDomains = prevBase, prevDomain, prevBases
 	})
@@ -32,32 +33,32 @@ func TestSafeReturnURL(t *testing.T) {
 		host string // inbound host
 		ok   bool
 	}{
-		{"/", "datamap.sigma-fi.com", true},
-		{"/deep/link?x=1#f", "datamap.sigma-fi.com", true},
-		{"https://datamap.sigma-fi.com/after", "datamap.sigma-fi.com", true},
-		{"https://other.opencws.top/", "datamap.sigma-fi.com", true},
-		{"https://sigma-fi.com/", "datamap.sigma-fi.com", true},
-		{"http://proj.opencws.top/", "proj.opencws.top", false}, // platform runs on https
+		{"/", "datamap.site-b.test", true},
+		{"/deep/link?x=1#f", "datamap.site-b.test", true},
+		{"https://datamap.site-b.test/after", "datamap.site-b.test", true},
+		{"https://other.site-a.test/", "datamap.site-b.test", true},
+		{"https://site-b.test/", "datamap.site-b.test", true},
+		{"http://proj.site-a.test/", "proj.site-a.test", false},    // platform runs on https
 		{"https://tunnel.cfdemo.com/x", "tunnel.cfdemo.com", true}, // same host, outside bases
-		{"", "proj.opencws.top", false},
-		{"//evil.com", "proj.opencws.top", false},
-		{"//evil.com/path", "proj.opencws.top", false},
-		{"/\\evil.com", "proj.opencws.top", false},
-		{"\\\\evil.com", "proj.opencws.top", false},
-		{"/\t/evil.com", "proj.opencws.top", false},
-		{"/\n/evil.com", "proj.opencws.top", false},
-		{"https://evil.com/", "proj.opencws.top", false},
-		{"https://evilopencws.top/", "proj.opencws.top", false},
-		{"https://opencws.top.evil.com/", "proj.opencws.top", false},
-		{"https://user@evil.com/", "proj.opencws.top", false},
-		{"https://opencws.top@evil.com/", "proj.opencws.top", false},
-		{"https://evil.com\\@proj.opencws.top/", "proj.opencws.top", false},
-		{"javascript:alert(1)", "proj.opencws.top", false},
-		{"data:text/html,x", "proj.opencws.top", false},
-		{"evil.com", "proj.opencws.top", false},
-		{"ftp://proj.opencws.top/", "proj.opencws.top", false},
-		{"https:evil.com", "proj.opencws.top", false},
-		{"https:/evil.com", "proj.opencws.top", false},
+		{"", "proj.site-a.test", false},
+		{"//evil.com", "proj.site-a.test", false},
+		{"//evil.com/path", "proj.site-a.test", false},
+		{"/\\evil.com", "proj.site-a.test", false},
+		{"\\\\evil.com", "proj.site-a.test", false},
+		{"/\t/evil.com", "proj.site-a.test", false},
+		{"/\n/evil.com", "proj.site-a.test", false},
+		{"https://evil.com/", "proj.site-a.test", false},
+		{"https://evilsite-a.test/", "proj.site-a.test", false},
+		{"https://site-a.test.evil.com/", "proj.site-a.test", false},
+		{"https://user@evil.com/", "proj.site-a.test", false},
+		{"https://site-a.test@evil.com/", "proj.site-a.test", false},
+		{"https://evil.com\\@proj.site-a.test/", "proj.site-a.test", false},
+		{"javascript:alert(1)", "proj.site-a.test", false},
+		{"data:text/html,x", "proj.site-a.test", false},
+		{"evil.com", "proj.site-a.test", false},
+		{"ftp://proj.site-a.test/", "proj.site-a.test", false},
+		{"https:evil.com", "proj.site-a.test", false},
+		{"https:/evil.com", "proj.site-a.test", false},
 	}
 	for _, tt := range tests {
 		got, ok := safeReturnURL(tt.raw, tt.host)
@@ -86,8 +87,8 @@ func doLogout(t *testing.T, host, query string) *http.Response {
 // port 80 in clear text.
 func TestSafeReturnURL_HTTPOnlyOnHTTPPlatform(t *testing.T) {
 	withRedirectDomains(t)
-	forwardAuthBase = "http://opencws.top"
-	if _, ok := safeReturnURL("http://proj.opencws.top/", "proj.opencws.top"); !ok {
+	forwardAuthBase = "http://site-a.test"
+	if _, ok := safeReturnURL("http://proj.site-a.test/", "proj.site-a.test"); !ok {
 		t.Fatal("http return URL refused on an http platform")
 	}
 }
@@ -97,13 +98,13 @@ func TestFwdLogout_RedirectTargets(t *testing.T) {
 	tests := []struct {
 		name, host, query, want string
 	}{
-		{"default lands on logged-out page", "datamap.sigma-fi.com", "", "/_oauth/logged-out"},
-		{"relative path kept", "datamap.sigma-fi.com", "?redirect=/bye", "/bye"},
-		{"same-platform absolute kept", "datamap.sigma-fi.com", "?redirect=https://www.opencws.top/", "https://www.opencws.top/"},
-		{"external host refused", "datamap.sigma-fi.com", "?redirect=https://evil.com/", "/_oauth/logged-out"},
-		{"protocol-relative refused", "datamap.sigma-fi.com", "?redirect=//evil.com", "/_oauth/logged-out"},
-		{"backslash trick refused", "datamap.sigma-fi.com", "?redirect=/%5Cevil.com", "/_oauth/logged-out"},
-		{"tab trick refused", "datamap.sigma-fi.com", "?redirect=/%09/evil.com", "/_oauth/logged-out"},
+		{"default lands on logged-out page", "datamap.site-b.test", "", "/_oauth/logged-out"},
+		{"relative path kept", "datamap.site-b.test", "?redirect=/bye", "/bye"},
+		{"same-platform absolute kept", "datamap.site-b.test", "?redirect=https://www.site-a.test/", "https://www.site-a.test/"},
+		{"external host refused", "datamap.site-b.test", "?redirect=https://evil.com/", "/_oauth/logged-out"},
+		{"protocol-relative refused", "datamap.site-b.test", "?redirect=//evil.com", "/_oauth/logged-out"},
+		{"backslash trick refused", "datamap.site-b.test", "?redirect=/%5Cevil.com", "/_oauth/logged-out"},
+		{"tab trick refused", "datamap.site-b.test", "?redirect=/%09/evil.com", "/_oauth/logged-out"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -118,58 +119,83 @@ func TestFwdLogout_RedirectTargets(t *testing.T) {
 	}
 }
 
-// Logout must keep clearing the session exactly as before: same cookie name,
-// Max-Age<0, scoped to the base domain the request arrived on.
-func TestFwdLogout_ClearsSessionOnRequestBaseDomain(t *testing.T) {
+// -007: 登出清除 muvee_fwd_session，Domain=请求所在基域 → 登出清除的是 host-only 的 __Host-muvee_fwd
+// （Max-Age<0、无 Domain、Path=/、HttpOnly、Secure）；旧的基域 muvee_fwd_session 仍会按请求所在基域被删除，
+// 让升级前遗留的 cookie 不再随请求带给租户。
+func TestFwdLogout_ClearsSessionHostOnlyAndLegacyOnRequestBaseDomain(t *testing.T) {
 	withRedirectDomains(t)
-	for host, wantDomain := range map[string]string{
-		"datamap.sigma-fi.com": "sigma-fi.com",
-		"proj.opencws.top":     "opencws.top",
+	for host, wantLegacyDomain := range map[string]string{
+		"datamap.site-b.test": "site-b.test",
+		"proj.site-a.test":    "site-a.test",
 	} {
 		res := doLogout(t, host, "?redirect=https://evil.com/")
-		var got *http.Cookie
-		for _, c := range res.Cookies() {
-			if c.Name == "muvee_fwd_session" {
-				got = c
-			}
+		got := findCookie(res.Cookies(), "__Host-muvee_fwd")
+		if got == nil || got.MaxAge >= 0 || got.Value != "" || got.Domain != "" || got.Path != "/" || !got.HttpOnly || !got.Secure {
+			t.Fatalf("%s: session cookie not cleared host-only: %+v", host, got)
 		}
-		if got == nil || got.MaxAge >= 0 || got.Value != "" || got.Domain != wantDomain || got.Path != "/" || !got.HttpOnly {
-			t.Fatalf("%s: session cookie not cleared as before: %+v", host, got)
+		old := findCookie(res.Cookies(), "muvee_fwd_session")
+		if old == nil || old.MaxAge >= 0 || old.Value != "" || old.Domain != wantLegacyDomain || old.Path != "/" {
+			t.Fatalf("%s: legacy cookie not deleted on %s: %+v", host, wantLegacyDomain, old)
 		}
 	}
 }
 
-// The post-login return URL arrives in a base-domain-wide cookie that any
-// project subdomain (tenant code) can write. A tossed value pointing off the
-// platform must not be followed after sign-in.
+// The post-login return URL is read from the subsite's own host-only cookie
+// (__Host-fwd_oauth_redirect) by takePostLoginRedirect, which only follows
+// same-host targets and deletes the cookie.
+//
+// -007: postLoginRedirect(r) 在回调主机（基域）读基域共享 cookie，允许任意平台域名（含别名基域的其他项目）→
+// takePostLoginRedirect(w, r) 在子站读 host-only cookie，只允许本站（同 host）路径/绝对地址，其它平台域名一律退回 "/"；
+// 旧名 fwd_oauth_redirect 的 cookie 完全不读。
 func TestPostLoginRedirect(t *testing.T) {
 	withRedirectDomains(t)
 	tests := []struct {
 		name, cookie, want string
 	}{
 		{"no cookie", "", "/"},
-		{"project page kept", "https://datamap.sigma-fi.com/deep?x=1", "https://datamap.sigma-fi.com/deep?x=1"},
-		{"alias base kept", "https://proj.opencws.top/", "https://proj.opencws.top/"},
+		{"same-host page kept", "https://datamap.site-b.test/deep?x=1", "https://datamap.site-b.test/deep?x=1"},
+		{"relative kept", "/deep?x=1", "/deep?x=1"},
+		{"other platform host refused (was: alias base kept)", "https://proj.site-a.test/", "/"},
+		{"sibling refused", "https://evil.site-b.test/phish", "/"},
 		{"tossed external refused", "https://evil.com/phish", "/"},
 		{"tossed protocol-relative refused", "//evil.com", "/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/_oauth/google?code=x", nil)
-			r.Host = "sigma-fi.com"
-			r.Header.Set("X-Forwarded-Host", "sigma-fi.com")
+			r := subsiteReq("datamap.site-b.test")
+			r.URL = &url.URL{Path: "/_oauth/session"}
 			if tt.cookie != "" {
-				r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: tt.cookie})
+				r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: tt.cookie})
 			}
-			if got := postLoginRedirect(r); got != tt.want {
-				t.Fatalf("postLoginRedirect = %q, want %q", got, tt.want)
+			w := httptest.NewRecorder()
+			if got := takePostLoginRedirect(w, r); got != tt.want {
+				t.Fatalf("takePostLoginRedirect = %q, want %q", got, tt.want)
 			}
 		})
 	}
+	t.Run("legacy shared cookie name ignored", func(t *testing.T) {
+		r := subsiteReq("datamap.site-b.test")
+		r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://datamap.site-b.test/deep"})
+		if got := takePostLoginRedirect(httptest.NewRecorder(), r); got != "/" {
+			t.Fatalf("legacy cookie followed: %q", got)
+		}
+	})
+	t.Run("single use", func(t *testing.T) {
+		r := subsiteReq("datamap.site-b.test")
+		r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: "/deep"})
+		w := httptest.NewRecorder()
+		takePostLoginRedirect(w, r)
+		if c := findCookie(w.Result().Cookies(), fwdCookieName(fwdRedirectCookieBase)); c == nil || c.MaxAge >= 0 {
+			t.Fatalf("return cookie not deleted after use: %+v", c)
+		}
+	})
 }
 
 // The password / SMS handlers must route their final redirect through
-// postLoginRedirect. Drive the real SMS-less path: password login success.
+// takePostLoginRedirect. Drive the real SMS-less path: password login success.
+//
+// -007: 被甩入的回跳 cookie 名 fwd_oauth_redirect（基域）→ __Host-fwd_oauth_redirect（子站 host-only），
+// 断言不变（不跟随 evil.com），并补充落点就是本站 "/"。
 func TestPasswordLogin_TossedReturnCookieRefused(t *testing.T) {
 	withRedirectDomains(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -188,14 +214,15 @@ func TestPasswordLogin_TossedReturnCookieRefused(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/_oauth/password", strings.NewReader("username=u&password=p"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Host = "datamap.sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
+	r.Host = "datamap.site-b.test"
+	r.Header.Set("X-Forwarded-Host", "datamap.site-b.test")
+	r.AddCookie(&http.Cookie{Name: fwdCookieName(fwdRedirectCookieBase), Value: "https://evil.com/phish"})
 	r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.com/phish"})
 	w := httptest.NewRecorder()
 	handlePasswordLogin(w, r)
 	res := w.Result()
 	loc := res.Header.Get("Location")
-	if res.StatusCode != http.StatusSeeOther || strings.Contains(loc, "evil.com") {
+	if res.StatusCode != http.StatusSeeOther || strings.Contains(loc, "evil.com") || loc != "/" {
 		t.Fatalf("status=%d Location=%q; tossed return URL must not be followed", res.StatusCode, loc)
 	}
 }
@@ -220,8 +247,8 @@ func TestLoggedOutPage(t *testing.T) {
 
 	for _, lang := range []string{"zh-CN", "en-US"} {
 		r := httptest.NewRequest("GET", "/_oauth/logged-out", nil)
-		r.Host = "datamap.sigma-fi.com"
-		r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
+		r.Host = "datamap.site-b.test"
+		r.Header.Set("X-Forwarded-Host", "datamap.site-b.test")
 		r.Header.Set("Accept-Language", lang)
 		w := httptest.NewRecorder()
 		handleLoggedOutPage(w, r)
@@ -233,7 +260,9 @@ func TestLoggedOutPage(t *testing.T) {
 			t.Fatalf("%s: logged-out page must not set cookies, got %v", lang, res.Cookies())
 		}
 		body := w.Body.String()
-		for _, want := range []string{"Sigma DataMap", "#123456", `href="/_oauth/login"`} {
+		// -007: 「重新登录」链接 /_oauth/login → /_oauth/login?sso=none（点击后跳过静默中心登录，
+		// 否则中心 SSO 仍有效时会立刻被静默登回）。
+		for _, want := range []string{"Sigma DataMap", "#123456", `href="/_oauth/login?sso=none"`} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s: body missing %q", lang, want)
 			}
@@ -262,54 +291,43 @@ func TestRequestAccessSignOutLink(t *testing.T) {
 	}
 }
 
-// A return URL planted by another subdomain must not block the project-root
-// backfill (else the user would land on "/" of the auth host — the console).
-func TestSeedLoginReturnURL_OverwritesTossedValue(t *testing.T) {
-	withRedirectDomains(t)
-	r := httptest.NewRequest("GET", "/_oauth/login", nil)
-	r.Host = "datamap.sigma-fi.com"
-	r.Header.Set("X-Forwarded-Host", "datamap.sigma-fi.com")
-	r.Header.Set("X-Forwarded-Proto", "https")
-	r.AddCookie(&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.com/"})
-	w := httptest.NewRecorder()
-	seedLoginReturnURL(w, r)
-	for _, c := range w.Result().Cookies() {
-		if c.Name == "fwd_oauth_redirect" && c.Value == "https://datamap.sigma-fi.com/" {
-			return
-		}
-	}
-	t.Fatalf("tossed fwd_oauth_redirect not replaced: %v", w.Result().Cookies())
-}
-
-// Drift guard: the fwd_oauth_redirect cookie is attacker-writable from any
-// sibling subdomain, so its value may only be read inside the two vetted
-// helpers. A new handler that reads it directly must go through
-// postLoginRedirect instead — update this guard only alongside such a review.
+// Drift guard: the return-URL cookie decides where a fresh session lands, so
+// it is only read inside takePostLoginRedirect (which vets it with
+// sameHostReturnURL and deletes it). A new handler that reads it directly must
+// go through takePostLoginRedirect instead — update this guard only alongside
+// such a review.
+//
+// -007: 旧守卫扫描 authservice.go 中 `.Cookie("fwd_oauth_redirect")` 的读取点（postLoginRedirect +
+// seedLoginReturnURL 共 2 处）→ 现在只允许 takePostLoginRedirect 通过 hostCookie(r, fwdRedirectCookieBase)
+// 读取（恰好 1 处，扫描 authservice.go / fwd_sso.go / login_token.go），并且旧名 fwd_oauth_redirect 的
+// 任何读取（r.Cookie("fwd_oauth_redirect")）都不得存在。
 func TestFwdOAuthRedirectCookieReadOnlyViaVettedHelpers(t *testing.T) {
-	src, err := os.ReadFile("authservice.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var readers []string
-	fn := ""
-	for _, line := range strings.Split(string(src), "\n") {
-		if strings.HasPrefix(line, "func ") {
-			fn = line
+	for _, file := range []string{"authservice.go", "fwd_sso.go", "login_token.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if strings.Contains(line, `.Cookie("fwd_oauth_redirect")`) {
-			readers = append(readers, fn)
+		fn := ""
+		for _, line := range strings.Split(string(src), "\n") {
+			if strings.HasPrefix(line, "func ") {
+				fn = line
+			}
+			if strings.Contains(line, `.Cookie("fwd_oauth_redirect")`) {
+				t.Errorf("%s: legacy fwd_oauth_redirect cookie is read in %q", file, fn)
+			}
+			if strings.Contains(line, "hostCookie(") && strings.Contains(line, "fwdRedirectCookieBase") {
+				readers = append(readers, fn)
+			}
 		}
 	}
-	allowed := map[string]bool{
-		"func postLoginRedirect(r *http.Request) string {":                  true,
-		"func seedLoginReturnURL(w http.ResponseWriter, r *http.Request) {": true,
-	}
+	allowed := "func takePostLoginRedirect(w http.ResponseWriter, r *http.Request) string {"
 	for _, f := range readers {
-		if !allowed[f] {
-			t.Errorf("fwd_oauth_redirect read outside vetted helpers in %q; use postLoginRedirect", f)
+		if f != allowed {
+			t.Errorf("return-URL cookie read outside the vetted helper in %q; use takePostLoginRedirect", f)
 		}
 	}
-	if len(readers) != 2 {
-		t.Errorf("expected exactly 2 vetted reads, found %d: %v", len(readers), readers)
+	if len(readers) != 1 {
+		t.Errorf("expected exactly 1 vetted read, found %d: %v", len(readers), readers)
 	}
 }

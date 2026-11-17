@@ -17,19 +17,19 @@ import (
 )
 
 func TestProjectPrefixForHost(t *testing.T) {
-	bases := []string{"opencws.top", "sigma-fi.com"}
+	bases := []string{"site-a.test", "site-b.test"}
 	cases := []struct {
 		host            string
 		prefix          string
 		apex, underBase bool
 	}{
-		{"app.opencws.top", "app", false, true},
-		{"app.sigma-fi.com", "app", false, true},
-		{"APP.Sigma-Fi.com:443", "app", false, true},
-		{"sigma-fi.com", "", true, true},
-		{"opencws.top", "", true, true},
+		{"app.site-a.test", "app", false, true},
+		{"app.site-b.test", "app", false, true},
+		{"APP.Site-B.test:443", "app", false, true},
+		{"site-b.test", "", true, true},
+		{"site-a.test", "", true, true},
 		{"shop.example.com", "", false, false},
-		{"evilsigma-fi.com", "", false, false},
+		{"evilsite-b.test", "", false, false},
 	}
 	for _, c := range cases {
 		prefix, apex, under := projectPrefixForHost(strings.ToLower(c.host), bases)
@@ -94,8 +94,8 @@ func TestMultiDomainPortal_PG(t *testing.T) {
 	}
 	s := &Server{
 		store: st, auth: authSvc, tunnels: newTunnelRegistry(),
-		baseDomain:  "opencws.top",
-		baseDomains: []string{"opencws.top", "sigma-fi.com"},
+		baseDomain:  "site-a.test",
+		baseDomains: []string{"site-a.test", "site-b.test"},
 	}
 
 	if _, err := pool.Exec(ctx,
@@ -179,16 +179,16 @@ func TestMultiDomainPortal_PG(t *testing.T) {
 		return ""
 	}
 	for host, want := range map[string]string{
-		"sigma-fi.com":     "https://mdp-pg-test.sigma-fi.com",
-		"www.sigma-fi.com": "https://mdp-pg-test.sigma-fi.com",
-		"opencws.top":      "https://mdp-pg-test.opencws.top",
-		"10.0.0.1:8080":    "https://mdp-pg-test.opencws.top", // unknown host → canonical
+		"site-b.test":     "https://mdp-pg-test.site-b.test",
+		"www.site-b.test": "https://mdp-pg-test.site-b.test",
+		"site-a.test":     "https://mdp-pg-test.site-a.test",
+		"10.0.0.1:8080":   "https://mdp-pg-test.site-a.test", // unknown host → canonical
 	} {
 		if u := urlFor(host); u != want {
 			t.Errorf("public url on %s = %q, want %q", host, u, want)
 		}
 	}
-	for host, want := range map[string]string{"sigma-fi.com": "sigma-fi.com", "opencws.top": "opencws.top"} {
+	for host, want := range map[string]string{"site-b.test": "site-b.test", "site-a.test": "site-a.test"} {
 		var cfg struct {
 			BaseDomain string `json:"base_domain"`
 		}
@@ -216,10 +216,10 @@ func TestMultiDomainPortal_PG(t *testing.T) {
 		return w.Code
 	}
 	for host, want := range map[string]int{
-		"mdp-pg-test.opencws.top":  http.StatusOK,
-		"mdp-pg-test.sigma-fi.com": http.StatusOK,
-		"sigma-fi.com":             http.StatusNotFound,
-		"nope.sigma-fi.com":        http.StatusNotFound,
+		"mdp-pg-test.site-a.test": http.StatusOK,
+		"mdp-pg-test.site-b.test": http.StatusOK,
+		"site-b.test":             http.StatusNotFound,
+		"nope.site-b.test":        http.StatusNotFound,
 	} {
 		if code := byHost(host); code != want {
 			t.Errorf("project-by-host %s = %d, want %d", host, code, want)

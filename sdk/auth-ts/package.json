@@ -1,7 +1,7 @@
 {
   "name": "@muvee/auth",
-  "version": "0.1.0",
-  "description": "Sign-in SDK for muvee projects. Polled login_token flow over OAuth; works in web SPAs, Tauri, Electron, and React Native.",
+  "version": "0.2.0",
+  "description": "Sign-in SDK for muvee projects: popup sign-in through muvee's project login page, session kept in the project's own host-only cookie.",
   "license": "MIT",
   "repository": {
     "type": "git",

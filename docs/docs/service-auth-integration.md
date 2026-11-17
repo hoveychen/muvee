@@ -25,7 +25,17 @@ Every authenticated request that reaches your service includes the following hea
 
 These headers are set by Traefik, not by the end user — they **cannot be forged** as long as your service is only reachable through Traefik. Your service does not need to parse cookies, validate JWTs, or talk to any OAuth provider.
 
-muvee's own session cookies (`muvee_fwd_session`, `muvee_invite_token`, `fwd_oauth_state`) are removed from the request before it reaches your service, so another project on the same base domain can never receive — and replay — a user's session. Your own cookies are forwarded unchanged. Use `/_oauth/*` from the browser (for example `/_oauth/userinfo`) rather than forwarding the session cookie from your backend.
+muvee's own auth cookies (the per-project session `__Host-muvee_fwd`, the central sign-in session `__Host-muvee_sso`, and the short-lived login helper cookies, plus the legacy names of earlier releases) are removed from the request before it reaches your service, so your service never receives a user's session. Your own cookies are forwarded unchanged. Use `/_oauth/*` from the browser (for example `/_oauth/userinfo`) rather than forwarding the session cookie from your backend.
+
+## Sessions Are Per Project
+
+Each project host gets its own session cookie, `__Host-muvee_fwd`. It is host-only (no `Domain`), so the browser never sends it to another subdomain, and the session itself is bound to that one project: **a session from one project is not valid on any other project**. In particular, a `fetch(..., { credentials: "include" })` from `a.example.com` to `b.example.com/_oauth/userinfo` no longer carries a usable session — call `/_oauth/*` on the project's own host instead.
+
+Signing in is still seamless across projects. muvee keeps a separate central sign-in session (`__Host-muvee_sso`, 7 days, sliding) on the base domain's apex host, which is never sent to any project. When a user opens a second project, it silently asks the apex host for a one-time code and mints its own session from it — the user does not see a login page. An OAuth-based project session lasts 12 hours and renews while in use; a password / SMS session lasts 7 days and does not renew, and does not create a central session (so it does not sign the user in to other projects).
+
+OAuth providers still call back on the apex host, so no new redirect URI needs to be registered. The apex host serves no login page of its own. Custom domains (aliases) outside the platform's base domains do not support sign-in, and a base domain's apex cannot be registered as a project alias.
+
+**Upgrade impact.** Session tokens must now carry the project they were issued for, so on upgrade every existing project session stops working at once. Each user signs in through the provider once on their next visit to any project; after that, other projects sign them in without another prompt. Device-flow tokens issued before this release carry no such binding and are rejected immediately: CLI users must run the device flow again against the project's host.
 
 ```python
 # Python / Flask
@@ -53,10 +63,10 @@ const provider = req.headers["x-forwarded-user-provider"];
 
 ## Reading User Identity (Client-Side)
 
-Frontend JavaScript running in the browser cannot see these headers — they exist only between Traefik and your backend. To get user info from the frontend, call the auth gateway's userinfo endpoint:
+Frontend JavaScript running in the browser cannot see these headers — they exist only between Traefik and your backend. To get user info from the frontend, call the auth gateway's userinfo endpoint on your app's own host (a relative path, so it is same-origin):
 
 ```javascript
-const resp = await fetch("https://{BASE_DOMAIN}/_oauth/userinfo", {
+const resp = await fetch("/_oauth/userinfo", {
   credentials: "include",
 });
 if (resp.ok) {
@@ -66,6 +76,23 @@ if (resp.ok) {
 
 Returns `401` if the user is not authenticated.
 
+In a browser you can also use the `@muvee/auth` SDK (0.2.0). `MuveeAuth.getUser()` wraps `/_oauth/userinfo` and `MuveeAuth.signOut()` wraps `/_oauth/logout`.
+
+### Sign in from a pop-up (`@muvee/auth` 0.2.0)
+
+`signIn(provider)` opens a pop-up that goes through the central sign-in host straight into the chosen provider (it does not show the project's login page) and returns a handle **synchronously**:
+
+```javascript
+const handle = auth.signIn("google");   // call from a click handler, before any await
+const user = await handle.wait();       // resolves with the signed-in user
+```
+
+`handle` has `url` (the sign-in start URL; `oauthUrl` is a deprecated alias), `popup` (the window, or `null` if the browser blocked it — then let the user open `handle.url` from a link), `wait()` and `cancel()`. `cancel()` closes the pop-up and rejects `wait()` with `AuthError('cancelled')`. Options: `popup` (a window you already opened in the click handler) and `timeoutMs` (default 10 minutes; on timeout `wait()` rejects with `AuthError('expired')`). Once sign-in completes, the pop-up notifies your page and `wait()` resolves with `getUser()`'s result.
+
+The session is a cookie set in that browser, so since 0.2.0 `signIn` is not supported in non-browser hosts such as Tauri, React Native or Electron; do not call it there. Only an environment with no global `window` at all throws `AuthError('unsupported')` (if `baseUrl` was never configured, `not_configured` is thrown first). `baseUrl` must be the same origin as the page. `minPollIntervalSec` is deprecated and ignored. Upgrading from 0.1.x: replace `await signIn(p)` with `const h = signIn(p); await h.wait()`; a 0.1.x `signIn` against current muvee resolves `wait()` with `undefined` and establishes no session.
+
+The legacy `POST /_oauth/login-token` and `/poll` endpoints still exist, but a successful poll only returns `{"status":"success"}` — it never returns identity or credentials.
+
 ## Logout
 
 The simplest sign-out needs no code: link to `/_oauth/logout` on your app's own host (Traefik routes `/_oauth/*` on every project host to the auth gateway):
@@ -74,7 +101,7 @@ The simplest sign-out needs no code: link to `/_oauth/logout` on your app's own 
 <a href="/_oauth/logout">Sign out</a>
 ```
 
-This clears the `muvee_fwd_session` cookie and lands on a branded "You've signed out" page with a **Sign in again** button. It does not send the user back to `/`: for a project with a single OAuth provider that would immediately sign them back in through the provider's still-active session.
+This signs the user out of this project and ends their central sign-in session on the base domain, then lands on a branded "You've signed out" page with a **Sign in again** button. It does not send the user back to `/`: for a project with a single OAuth provider that would immediately sign them back in through the provider's still-active session.
 
 To send the user somewhere else after sign-out, pass `redirect`:
 
@@ -82,28 +109,30 @@ To send the user somewhere else after sign-out, pass `redirect`:
 https://myapp.example.com/_oauth/logout?redirect=/goodbye
 ```
 
-`redirect` must be a path on the same site (starting with `/`, not `//`) or an `https` URL on this platform's domains. Any other value is ignored and the user lands on the signed-out page.
+`redirect` must be a path on the same site (starting with `/`, not `//`) or an `https` URL on this platform's domains; values containing backslashes or control characters are also rejected. Any other value is ignored and the user lands on the signed-out page.
 
-Sign-out also leaves a `muvee_fwd_signed_out` marker cookie. Until the user signs in again, the login page shows the sign-in button instead of jumping straight to a single OAuth provider, so an old tab that reloads after sign-out (e.g. the auth-guard noticing the expired session) does not quietly sign the user back in.
+Sign-out also leaves a `__Host-muvee_fwd_signed_out` marker cookie (host-only, on this project). Until the user signs in again, the login page shows the sign-in button instead of jumping straight to a single OAuth provider, so an old tab that reloads after sign-out (e.g. the auth-guard noticing the expired session) does not quietly sign the user back in.
 
-The session cookie is shared by every project under the same base domain, so signing out of one project signs the user out of all of them. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console. The reverse does apply: signing out of the muvee console also ends the user's project sessions on every device and every base domain — the next request to any project asks them to sign in again. Bearer tokens obtained through the device flow below are not affected (tokens issued before muvee v1.40.6 are, since they cannot be told apart from sessions).
+Sign-out revokes this project's session and the central session it was minted from, so every other project's session minted from the same central session stops working on its next request (it shows the signed-out page): signing out of one project still signs the user out of all projects on that base domain. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console. The reverse does apply: signing out of the muvee console also ends the user's project sessions on every device and every base domain — the next request to any project asks them to sign in again. Bearer tokens obtained through the device flow below are not affected; device-flow tokens issued before this release are no longer accepted, so obtain a new one.
+
+If `/_oauth/logout` is opened from another origin — for example a link or image embedded in another page, detected through the `Sec-Fetch-Site` header — muvee first shows a confirmation page and only signs the user out when they click confirm. Requests without that header (curl, old browsers) sign out directly.
 
 ## CLI / Headless Access (Device Flow)
 
-For CLI tools or headless environments that need to access your auth-protected service without a browser session, muvee provides a Device Flow similar to `gh auth login`.
+For CLI tools or headless environments that need to access your auth-protected service without a browser session, muvee provides a Device Flow similar to `gh auth login`. Run the flow against the project's own host (shown below as `myapp.example.com`): the resulting token is bound to that project.
 
 ### Step 1 — Request a device code
 
 ```bash
-curl -X POST https://{BASE_DOMAIN}/_oauth/device/code
+curl -X POST https://myapp.example.com/_oauth/device/code
 ```
 
 ```json
 {
   "device_code": "XXXXXXXXXXX...",
   "user_code": "ABCD-1234",
-  "verification_uri": "https://{BASE_DOMAIN}/_oauth/device/activate",
-  "verification_uri_complete": "https://{BASE_DOMAIN}/_oauth/device/activate?code=ABCD-1234",
+  "verification_uri": "https://myapp.example.com/_oauth/device/activate",
+  "verification_uri_complete": "https://myapp.example.com/_oauth/device/activate?code=ABCD-1234",
   "expires_in": 600,
   "interval": 5
 }
@@ -114,15 +143,15 @@ curl -X POST https://{BASE_DOMAIN}/_oauth/device/code
 Print a message with the complete URL so the user can click or copy-paste it directly:
 
 ```
-Authorize this device: https://{BASE_DOMAIN}/_oauth/device/activate?code=ABCD-1234
+Authorize this device: https://myapp.example.com/_oauth/device/activate?code=ABCD-1234
 ```
 
-Opening this URL takes the user to the OAuth login page. After login the browser shows a confirmation page, and the user can close the tab.
+Opening this URL shows a device login page that names the host the CLI will get access to; the user has to click a provider button to confirm and continue to the OAuth login. After login the browser shows a confirmation page, and the user can close the tab.
 
 ### Step 3 — Poll for the token
 
 ```bash
-curl -X POST https://{BASE_DOMAIN}/_oauth/device/token \
+curl -X POST https://myapp.example.com/_oauth/device/token \
   -H "Content-Type: application/json" \
   -d '{"device_code": "XXXXXXXXXXX..."}'
 ```
@@ -151,4 +180,4 @@ Pass the token as a Bearer header on every request:
 curl -H "Authorization: Bearer eyJhbGciOiJI..." https://myapp.example.com/api/data
 ```
 
-The token is valid for 90 days and works with all auth-protected projects under the same `BASE_DOMAIN`.
+The token is valid for 90 days and works only for the project whose host started the device flow; it is rejected by other projects.

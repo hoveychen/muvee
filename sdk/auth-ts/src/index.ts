@@ -1,20 +1,28 @@
 // muvee project sign-in SDK.
 //
-// Flow: SDK posts /_oauth/login-token → server returns { login_token, oauth_url }.
-// The host environment opens oauth_url (window.open, Tauri shell, RN Linking).
-// The SDK polls /_oauth/login-token/poll until the OAuth callback flips the
-// server-side entry to "success", at which point poll returns the user. The
-// completion window auto-closes; no postMessage, no cross-origin handshake.
+// Flow (0.2.0): signIn(provider) opens `{baseUrl}/_oauth/login?provider=p&popup=1`
+// in a popup. The popup runs muvee's standard browser sign-in — the project's
+// own login page, the platform's central sign-in host, the provider — and
+// lands on `{baseUrl}/_oauth/popup-done`, which tells this page through
+// postMessage (target origin pinned to the project origin) and
+// BroadcastChannel('muvee-auth'). The SDK then reads the signed-in user from
+// /_oauth/userinfo. If neither message arrives (an identity provider's
+// Cross-Origin-Opener-Policy can sever window.opener), the SDK re-checks
+// /_oauth/userinfo whenever this window regains focus.
+//
+// The session itself is the project's host-only cookie set by the popup's
+// final redirect; the SDK never handles a credential. 0.1.x polled
+// /_oauth/login-token for the identity — muvee no longer reveals the identity
+// there (anyone holding the oauth_url could otherwise read the victim's
+// identity), so 0.1.x signIn no longer completes.
 //
 // SDK consumers never see the OAuth client_id or scopes — muvee assembles the
-// authorization URL on the server. The SDK is intentionally agnostic to how
-// the URL is opened so the same package works for web SPAs, Tauri desktop
-// apps, Electron, and React Native.
+// authorization URL on the server.
 
 export interface MuveeAuthConfig {
   /** Base URL of the project subdomain, e.g. "https://my-app.example.com". Defaults to window.location.origin. */
   baseUrl?: string;
-  /** Floor on the poll loop in seconds. Server-supplied poll_interval still wins when larger. */
+  /** @deprecated No-op since 0.2.0 (sign-in no longer polls). */
   minPollIntervalSec?: number;
 }
 
@@ -30,15 +38,28 @@ export interface ProviderInfo {
   display_name: string;
 }
 
-export interface SignInHandle {
+export interface SignInOptions {
   /**
-   * OAuth authorization URL the host should open. Web: window.open(url, '_blank').
-   * Tauri: import('@tauri-apps/api/shell').open(url). RN: Linking.openURL(url).
+   * A window you already opened (e.g. `window.open('', 'muvee-sign-in')` in
+   * your click handler) for the SDK to navigate. By default signIn opens the
+   * popup itself — call it synchronously from the click handler, before any
+   * `await`, so the browser does not block the popup.
    */
+  popup?: Window | null;
+  /** How long wait() waits for the sign-in to finish. Defaults to 10 minutes. */
+  timeoutMs?: number;
+}
+
+export interface SignInHandle {
+  /** The sign-in page the popup was pointed at. */
+  url: string;
+  /** @deprecated Alias of `url`. signIn already opened it — do not open it again. */
   oauthUrl: string;
-  /** Resolves with the authenticated user once the OAuth round-trip completes. */
+  /** The popup window, or null when the browser blocked it (open `url` from a click to retry). */
+  popup: Window | null;
+  /** Resolves with the authenticated user once the popup finishes signing in. */
   wait(): Promise<MuveeUser>;
-  /** Stop polling. The login_token expires server-side on its own TTL. */
+  /** Stop waiting and close the popup. */
   cancel(): void;
 }
 
@@ -53,21 +74,24 @@ class AuthError extends Error {
 
 interface InternalState {
   baseUrl: string;
-  minPollSec: number;
   listeners: Set<AuthChangeListener>;
   lastUser: MuveeUser | null;
   channel: BroadcastChannel | null;
+  signInSignals: Set<() => void>;
 }
 
 const BROADCAST_CHANNEL = 'muvee-auth';
 const STORAGE_KEY = 'muvee-auth:lastChange';
+// Matches authservice's sign-in state lifetime: a popup left open longer than
+// this can no longer complete.
+const DEFAULT_SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
 
 const state: InternalState = {
   baseUrl: '',
-  minPollSec: 2,
   listeners: new Set(),
   lastUser: null,
   channel: null,
+  signInSignals: new Set(),
 };
 
 function ensureConfigured(): void {
@@ -82,10 +106,40 @@ function ensureConfigured(): void {
   }
 }
 
+function baseOrigin(): string {
+  try {
+    return new URL(state.baseUrl).origin;
+  } catch {
+    return '';
+  }
+}
+
+// isSignInSignal recognises the popup-done page's message. The same
+// BroadcastChannel also carries this SDK's cross-tab user sync (a MuveeUser or
+// null), which never has a `type` field.
+function isSignInSignal(data: unknown): boolean {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { type?: unknown }).type === 'muvee-auth' &&
+    (data as { status?: unknown }).status === 'signed-in'
+  );
+}
+
+function notifySignIn(): void {
+  for (const signal of Array.from(state.signInSignals)) {
+    signal();
+  }
+}
+
 function attachBroadcast(): void {
   if (state.channel || typeof BroadcastChannel === 'undefined') return;
   state.channel = new BroadcastChannel(BROADCAST_CHANNEL);
   state.channel.onmessage = (ev) => {
+    if (isSignInSignal(ev.data)) {
+      notifySignIn();
+      return;
+    }
     const next = (ev.data ?? null) as MuveeUser | null;
     emit(next, false);
   };
@@ -101,6 +155,12 @@ function attachBroadcast(): void {
       } catch {
         // ignore malformed payloads
       }
+    });
+    // The popup-done page posts to its opener with the target origin pinned
+    // to the project origin; still check the sender's origin here.
+    window.addEventListener('message', (ev) => {
+      if (ev.origin !== baseOrigin() || !isSignInSignal(ev.data)) return;
+      notifySignIn();
     });
   }
 }
@@ -146,19 +206,12 @@ async function jsonFetch<T>(url: string, init: RequestInit): Promise<T> {
   return (await resp.json()) as T;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export const MuveeAuth = {
   configure(config: MuveeAuthConfig = {}): void {
     if (config.baseUrl) {
       state.baseUrl = config.baseUrl.replace(/\/+$/, '');
     } else if (!state.baseUrl && typeof window !== 'undefined') {
       state.baseUrl = window.location.origin;
-    }
-    if (config.minPollIntervalSec && config.minPollIntervalSec > 0) {
-      state.minPollSec = config.minPollIntervalSec;
     }
     attachBroadcast();
   },
@@ -170,69 +223,104 @@ export const MuveeAuth = {
     });
   },
 
-  async signIn(provider: string): Promise<SignInHandle> {
+  /**
+   * Opens the project's sign-in page for `provider` in a popup and returns at
+   * once (synchronously, so it can run inside a click handler without the
+   * popup being blocked). `await handle.wait()` for the signed-in user.
+   * Browser only: the session is a cookie the popup sets in this browser.
+   */
+  signIn(provider: string, opts: SignInOptions = {}): SignInHandle {
     ensureConfigured();
+    if (typeof window === 'undefined') {
+      throw new AuthError('unsupported', 'MuveeAuth.signIn needs a browser window (the session is a browser cookie).');
+    }
     attachBroadcast();
-    const created = await jsonFetch<{
-      login_token: string;
-      oauth_url: string;
-      expires_in: number;
-      poll_interval: number;
-    }>(`${state.baseUrl}/_oauth/login-token`, {
-      method: 'POST',
-      body: JSON.stringify({ provider }),
+    const u = new URL(`${state.baseUrl}/_oauth/login`);
+    u.searchParams.set('provider', provider);
+    u.searchParams.set('popup', '1');
+    const url = u.toString();
+
+    let popup: Window | null = opts.popup ?? null;
+    if (popup) {
+      popup.location.href = url;
+    } else {
+      popup = window.open(url, 'muvee-sign-in', 'popup,width=520,height=680');
+    }
+
+    let settled = false;
+    let cleanup = (): void => {};
+    let rejectWait: ((err: AuthError) => void) | null = null;
+
+    const waitPromise = new Promise<MuveeUser>((resolve, reject) => {
+      rejectWait = reject;
+      let checking = false;
+      const check = async (): Promise<void> => {
+        if (settled || checking) return;
+        checking = true;
+        try {
+          const user = await MuveeAuth.getUser();
+          if (user && !settled) {
+            settled = true;
+            cleanup();
+            resolve(user);
+          }
+        } catch {
+          // Transient failure: the next signal or focus retries.
+        } finally {
+          checking = false;
+        }
+      };
+      const onFocus = (): void => {
+        void check();
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new AuthError('expired', 'sign-in timed out'));
+      }, opts.timeoutMs ?? DEFAULT_SIGN_IN_TIMEOUT_MS);
+
+      state.signInSignals.add(check);
+      window.addEventListener('focus', onFocus);
+      cleanup = () => {
+        clearTimeout(timer);
+        state.signInSignals.delete(check);
+        window.removeEventListener('focus', onFocus);
+      };
     });
-
-    const pollIntervalSec = Math.max(state.minPollSec, created.poll_interval || state.minPollSec);
-    const deadline = Date.now() + created.expires_in * 1000;
-    let cancelled = false;
-
-    const wait = async (): Promise<MuveeUser> => {
-      while (!cancelled) {
-        if (Date.now() > deadline) {
-          throw new AuthError('expired', 'sign-in timed out');
-        }
-        await delay(pollIntervalSec * 1000);
-        if (cancelled) {
-          throw new AuthError('cancelled', 'sign-in cancelled');
-        }
-        const status = await jsonFetch<
-          | { status: 'pending' }
-          | { status: 'success'; user: MuveeUser }
-          | { status: 'error'; error: string }
-          | { status: 'expired' }
-        >(`${state.baseUrl}/_oauth/login-token/poll`, {
-          method: 'POST',
-          body: JSON.stringify({ login_token: created.login_token }),
-        });
-        if (status.status === 'pending') continue;
-        if (status.status === 'success') {
-          emit(status.user, true);
-          return status.user;
-        }
-        if (status.status === 'expired') {
-          throw new AuthError('expired', 'sign-in expired before completion');
-        }
-        throw new AuthError('provider_error', status.error || 'provider error');
-      }
-      throw new AuthError('cancelled', 'sign-in cancelled');
-    };
+    // Callers that never call wait() must not see an unhandled rejection.
+    waitPromise.catch(() => undefined);
 
     return {
-      oauthUrl: created.oauth_url,
-      wait,
+      url,
+      oauthUrl: url,
+      popup,
+      wait: () => waitPromise,
       cancel() {
-        cancelled = true;
+        if (settled) return;
+        settled = true;
+        cleanup();
+        try {
+          popup?.close();
+        } catch {
+          // ignore
+        }
+        rejectWait?.(new AuthError('cancelled', 'sign-in cancelled'));
       },
     };
   },
 
+  /**
+   * Signs out of this project and ends the platform's central sign-in session
+   * for this base domain, so other muvee projects under the same domain ask
+   * again on their next request (the user sees their "signed out" page; the
+   * identity provider's own session, e.g. Google, is untouched). The page is
+   * left in control: the logout redirect is not followed.
+   */
   async signOut(opts: { redirect?: string } = {}): Promise<void> {
     ensureConfigured();
     const url = new URL(`${state.baseUrl}/_oauth/logout`);
     if (opts.redirect) url.searchParams.set('redirect', opts.redirect);
-    // /_oauth/logout responds with a 302 — we don't follow it so the SPA
-    // stays in control. Just hitting the endpoint clears the cookie.
     await fetch(url.toString(), {
       method: 'GET',
       credentials: 'include',

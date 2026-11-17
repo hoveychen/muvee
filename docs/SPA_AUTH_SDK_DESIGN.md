@@ -2,16 +2,49 @@
 
 > 草稿状态，等老板过目后拆 TASKS.md。文件放在 `docs/` 根（非 `docs/docs/`），不进 docusaurus 站点。
 
+## 0.2.0 变更（BACKLOG-20261117-007）
+
+> 下文 §0–§9 保留 0.1.x 的原始设计作为历史记录；凡与本节冲突之处以本节为准（相应位置已加「0.2.0 已变」标注）。
+
+**动因**：0.1.x 的 poll 会向持有 `login_token` 的一方下发身份，且 oauth_url 泄漏即可被劫持。同时子站会话改为按子站隔离（host-only `__Host-muvee_fwd`，JWT 带 aud；见 -007 总体方案），SDK 不再依赖共享 `Domain=<基域>` cookie。
+
+**SDK 行为变化（`@muvee/auth` 0.2.0，真相源 `sdk/auth-ts/src/index.ts`）**
+
+- `MuveeAuth.signIn(provider, opts?)` **同步**返回 `SignInHandle`：`{ url, oauthUrl（弃用别名 = url）, popup: Window | null, wait(): Promise<MuveeUser>, cancel() }`。不再是 `Promise<SignInHandle>`，宿主也不再自己打开 `oauthUrl`。
+- 弹窗流程：SDK 自己 `window.open('{baseUrl}/_oauth/login?provider=<p>&popup=1', 'muvee-sign-in', 'popup,width=520,height=680')`，由于总带 `provider=`，弹窗经中心登录主机直接进入所选 provider（不渲染项目登录页，也不先走静默登录），完成后弹窗落在 `/_oauth/popup-done`。该页面通过 `postMessage`（targetOrigin = 本站 origin，载荷 `{type:'muvee-auth', status:'signed-in'}`）和 `BroadcastChannel('muvee-auth')` 通知 opener；SDK 收到后调 `getUser()`（`/_oauth/userinfo`）resolve `wait()`。收不到消息时（如 provider 的 COOP 切断 `window.opener`），窗口重获焦点时兜底再调 `getUser()`。
+- `SignInOptions`：`popup?: Window | null`（预先在点击事件里打开的窗口，SDK 负责导航它）、`timeoutMs?`（默认 10 分钟，超时 `wait()` 以 `AuthError('expired')` reject）。`cancel()` 关闭弹窗并以 `AuthError('cancelled')` reject。
+- 弹窗被浏览器拦截时 `handle.popup === null`，宿主应把 `handle.url` 渲染成链接让用户点击打开。`signIn` 必须在点击处理器里同步调用（之前不能有 `await`），否则弹窗会被拦截。
+- 0.2.0 起不支持 Tauri/RN/Electron 等非浏览器宿主，不要在其中调用 `signIn`——会话是浏览器 cookie。只有完全没有全局 `window` 的环境才会抛 `AuthError('unsupported')`（未配置 `baseUrl` 时先抛 `not_configured`）；Tauri/Electron webview 有 `window` 会走到 `window.open`，RN 通常在 `window.open` 处 TypeError。
+- `baseUrl` 必须与页面同源（弹窗完成通知的 targetOrigin 是本站、SDK 校验 `ev.origin === baseUrl` 的 origin、BroadcastChannel 同源、跨站 `getUser` 不带 Lax cookie）。
+- `getUser()` 把 401 转成 `null`，其他 HTTP 失败以 `http_<status>` reject；`signOut()` 吞掉网络错误，不 reject。
+- `MuveeAuthConfig.minPollIntervalSec` 弃用（no-op）；SDK 不再轮询。
+- `signOut()` 新语义：登出本站，并结束本基域的中心 SSO 会话；同基域内由同一次 SSO 签出的其他子站会话在下次请求时失效。不登出 Google 等 provider 本身。调用 `/_oauth/logout` 时不跟随重定向，页面保持控制权。
+- 0.1.x → 0.2.0 迁移：
+  ```diff
+  -const handle = await MuveeAuth.signIn(provider);
+  -window.open(handle.oauthUrl, '_blank');
+  -const user = await handle.wait();
+  +const handle = MuveeAuth.signIn(provider); // 同步，自动开弹窗
+  +if (!handle.popup) { /* 被拦截：让用户点开 handle.url */ }
+  +const user = await handle.wait();
+  ```
+
+**服务端接口变化（SDK 相关部分）**
+
+- `POST /_oauth/login-token` 与 `/_oauth/login-token/poll` 保留，但 poll 成功只回 `{"status":"success"}`，**永不下发身份或凭证**（修复劫持缺陷）。0.1.x 的 `signIn` 因此不会抛错但也不会登录：`wait()` 以 `undefined` resolve 且不建立会话。
+- `/_oauth/userinfo`、`/_oauth/logout`、`/_oauth/providers` 仍是子站同源相对路径可用。
+- 子站会话 cookie 改为 host-only `__Host-muvee_fwd`（不再有 `Domain=<基域>` 的共享 `muvee_fwd_session`），按子站隔离；基域外的自定义域名（别名）不支持登录。
+
 ## 0. 背景与决策（2026-05-11 拍板）
 
 | 决策点 | 选项 |
 |---|---|
 | Provider 存储 | `projects.enabled_providers` 列（逗号分隔，空 = 沿用全局启用集）|
-| 登陆通信机制 | **Polled login_token**（统一覆盖 web/desktop/mobile，零跨域）|
+| 登陆通信机制 | **Polled login_token**（统一覆盖 web/desktop/mobile，零跨域）（**0.2.0 已变**：改为弹窗 + popup-done 通知，仅浏览器，见「0.2.0 变更」）|
 | State cookie | HMAC 签名，载荷含 mode + return_to |
 | SDK 仓库位置 | `sdk/auth-ts/`（独立 npm 包，**非 monorepo**）|
 | Migration 编号 | 037（最新 036，034 缺号保留给 033 follow-up）|
-| Device flow 内宿主行为 | SDK 仅返回 `oauth_url` + 轮询 token，宿主自己决定怎么打开（new tab / popup / 外部浏览器）|
+| Device flow 内宿主行为 | SDK 仅返回 `oauth_url` + 轮询 token，宿主自己决定怎么打开（new tab / popup / 外部浏览器）（**0.2.0 已变**：SDK 自己开弹窗，不再轮询，见「0.2.0 变更」）|
 | npm 包名 | `@muvee/auth`（备选 `muvee-auth`，scope 占用待 publish 时确认）|
 | 桌面端 bearer token | **不返**。SDK 面向 project 下游用户，这群人与 muvee 平台用户不是同一群，无需调 muvee 平台 API |
 | login_token TTL / poll interval | 10 min / 2s |
@@ -22,7 +55,7 @@
 ### 1.1 两套 OAuth 链路
 
 - **平台登陆**：`/auth/{provider}/callback` → `auth.Service.HandleCallback()` → `EnsurePlatformMember()` 强制 `ALLOWED_DOMAINS` + invite/access-mode gate；写 `users` + `platform_members`。
-- **项目子域登陆**：`/_oauth/{provider}` → `handleOAuthCallback()` → `upsertUserUpstream()`（绕过平台策略），写 `users`；session 是 `muvee_fwd_session` JWT cookie，cookie 域 = `cookieDomain`（BASE_DOMAIN）。
+- **项目子域登陆**：`/_oauth/{provider}` → `handleOAuthCallback()` → `upsertUserUpstream()`（绕过平台策略），写 `users`；session 是 `muvee_fwd_session` JWT cookie，cookie 域 = `cookieDomain`（BASE_DOMAIN）。（**0.2.0 已变**：改为每个子站 host-only 的 `__Host-muvee_fwd`，按 aud 隔离。）
 - 两套链路**共用同一份** OAuth provider 配置。
 
 ### 1.2 已经能复用的资产
@@ -105,6 +138,8 @@ SDK 轮询。
 ```json
 { "login_token": "..." }
 ```
+
+> **0.2.0 已变**：poll 成功只回 `{"status":"success"}`，不再带 `user`；下面的 success 带 `user` 描述仅为 0.1.x 历史设计。SDK 0.2.0 也不再调用 poll。
 
 响应（任选其一）：
 - `{ "status": "pending" }`
@@ -201,9 +236,11 @@ export class MuveeAuth {
 }
 ```
 
+> **0.2.0 已变**：`signIn` 同步返回 `SignInHandle`（含 `url` / `popup` / `wait()` / `cancel()`），SDK 自己开弹窗，`pollInterval` 配置已弃用，非浏览器宿主不再支持；见「0.2.0 变更」。以下为 0.1.x 历史设计。
+>
 > 关键：SDK **不**自动开窗口 —— 宿主拿到 `oauthUrl` 后自己决定。Web 通常 `window.open(oauthUrl, '_blank')` 或 `location.href = oauthUrl`；Tauri 调 `@tauri-apps/api/shell.open`；RN 调 `Linking.openURL`。这是老板明确要求的，SDK 不绑定环境 API。
 
-### 4.3 典型 web 用法
+### 4.3 典型 web 用法（0.1.x 历史写法，0.2.0 写法见「0.2.0 变更」迁移示例）
 
 ```ts
 async function handleLogin(provider: string) {
@@ -218,7 +255,7 @@ async function handleLogin(provider: string) {
 }
 ```
 
-### 4.4 Tauri 用法
+### 4.4 Tauri 用法（0.2.0 起不再支持 `signIn`）
 
 ```ts
 import { open } from '@tauri-apps/api/shell';
@@ -234,7 +271,7 @@ const user = await handle.wait();
 |---|---|
 | 服务端代码 | Traefik 注入的 `X-Forwarded-User` / `X-Forwarded-Email` header |
 | SPA 前端 | `GET /_oauth/userinfo` with `credentials: 'include'` |
-| 桌面 / RN | 从 `signIn().wait()` 直接拿 user 字段；这群下游用户不需要调 muvee 平台 API，所以不签发 bearer token |
+| 桌面 / RN | 从 `signIn().wait()` 直接拿 user 字段；这群下游用户不需要调 muvee 平台 API，所以不签发 bearer token（**0.2.0 已变**：`signIn` 仅浏览器可用，非浏览器宿主不再支持，见「0.2.0 变更」）|
 
 ## 6. 集成示例（待写）
 
@@ -252,7 +289,7 @@ const user = await handle.wait();
 
 | 风险 | 对策 |
 |---|---|
-| login_token 泄露被人替换登陆 | login_token 仅 SDK 持有（POST 响应，不落 cookie / URL）；TTL 默认 10 min；一次性消费；同 token 重复 poll 拿到 success 后立即失效 |
+| login_token 泄露被人替换登陆（0.2.0 起 poll 不再下发身份，此风险面已消除）| login_token 仅 SDK 持有（POST 响应，不落 cookie / URL）；TTL 默认 10 min；一次性消费；同 token 重复 poll 拿到 success 后立即失效 |
 | state 伪造 | HMAC 签名 + server 端 `state → login_token` 内存映射双重校验 |
 | oauth_url 被泄漏给第三方 | 即使泄漏，第三方完成 OAuth 也只能填进**已申请**的 login_token；攻击者没 login_token 拿不到结果。这等价于 device flow 本身的威胁模型 |
 | enabled_providers 改了但已有 oauth_url 在飞 | callback 阶段（3.4）二次校验 provider ∈ enabled set，拒绝 |

@@ -3,10 +3,14 @@ package main
 import (
 	"encoding/base64"
 	"testing"
+	"time"
 )
 
+// avatarTestAud is the subsite audience the avatar-size tests mint sessions for.
+const avatarTestAud = "project:3f9b1c62-0000-4000-8000-0000000000aa"
+
 // entraDataURI builds the exact avatar string shape the Entra provider hands to
-// signForwardJWT: "data:<mime>;base64," + base64(photo bytes). See
+// signSubsiteSession: "data:<mime>;base64," + base64(photo bytes). See
 // internal/auth/entra.go fetchAvatar — Entra ID tokens carry no `picture`
 // claim, so the Graph photo bytes are inlined instead of referenced by URL.
 func entraDataURI(photoBytes int) string {
@@ -16,14 +20,14 @@ func entraDataURI(photoBytes int) string {
 // browserCookieLimit is the per-cookie byte budget every major browser
 // enforces on name=value (RFC 6265 §6.1 floor; Chrome/Firefox/Safari all cap
 // at 4096). A Set-Cookie beyond it is dropped silently — no error reaches the
-// page — which for muvee_fwd_session means the freshly signed session never
+// page — which for the __Host-muvee_fwd session means the freshly signed session never
 // sticks and the project subdomain bounces the user straight back to login.
 const browserCookieLimit = 4096
 
 // cookieBytes returns what the browser actually measures for the session
 // cookie: the name, the "=", and the signed JWT.
 func cookieBytes(signed string) int {
-	return len("muvee_fwd_session") + 1 + len(signed)
+	return len(fwdCookieName(fwdSessionCookieBase)) + 1 + len(signed)
 }
 
 func withTestJWTSecret(t *testing.T) {
@@ -37,7 +41,7 @@ func withTestJWTSecret(t *testing.T) {
 // avatar is a base64 data URI of the Graph photo, and entra.go's own comment
 // puts 96x96 JPEGs at 2-8 KB. Base64 inflates that by 4/3, then the JWT
 // payload base64 inflates it again by 4/3, so anything above a ~2 KB photo
-// pushes muvee_fwd_session past the 4096-byte cookie limit and the session is
+// pushes __Host-muvee_fwd past the 4096-byte cookie limit and the session is
 // silently dropped by the browser.
 func TestForwardSessionCookieFitsWithEntraAvatar(t *testing.T) {
 	withTestJWTSecret(t)
@@ -45,13 +49,13 @@ func TestForwardSessionCookieFitsWithEntraAvatar(t *testing.T) {
 	// 4 KB and 8 KB sit squarely inside the size range entra.go documents, and
 	// 256 KB is the cap fetchAvatar itself allows through.
 	for _, photoBytes := range []int{4 << 10, 8 << 10, 256 << 10} {
-		signed, err := signForwardJWT(
-			"3f9b1c62-0000-4000-8000-000000000001",
-			"user@contoso.com",
-			"Contoso User",
-			entraDataURI(photoBytes),
-			"entra",
-		)
+		signed, err := signSubsiteSession(fwdIdentity{
+			UserID:    "3f9b1c62-0000-4000-8000-000000000001",
+			Email:     "user@contoso.com",
+			Name:      "Contoso User",
+			AvatarURL: entraDataURI(photoBytes),
+			Provider:  "entra",
+		}, avatarTestAud, "sso-sid-avatar-test", time.Now().Unix())
 		if err != nil {
 			t.Fatalf("sign (%d byte photo): %v", photoBytes, err)
 		}
@@ -69,7 +73,7 @@ func TestForwardSessionCookieFitsWithEntraAvatar(t *testing.T) {
 func TestForwardProjectSessionCookieFitsWithEntraAvatar(t *testing.T) {
 	withTestJWTSecret(t)
 
-	signed, err := signForwardProjectJWT(
+	signed, err := signProjectSession(
 		"user@contoso.com",
 		"Contoso User",
 		entraDataURI(8<<10),
@@ -93,17 +97,17 @@ func TestForwardSessionKeepsNormalAvatarURL(t *testing.T) {
 	withTestJWTSecret(t)
 
 	const avatar = "https://lh3.googleusercontent.com/a/ACg8ocKQ0000000000000000000000000000000000000000000000=s96-c"
-	signed, err := signForwardJWT(
-		"3f9b1c62-0000-4000-8000-000000000003",
-		"user@example.com",
-		"Example User",
-		avatar,
-		"google",
-	)
+	signed, err := signSubsiteSession(fwdIdentity{
+		UserID:    "3f9b1c62-0000-4000-8000-000000000003",
+		Email:     "user@example.com",
+		Name:      "Example User",
+		AvatarURL: avatar,
+		Provider:  "google",
+	}, avatarTestAud, "sso-sid-avatar-test", time.Now().Unix())
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	claims, err := parseForwardJWT(signed)
+	claims, err := parseFwdToken(signed, avatarTestAud, fwdKindSession)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

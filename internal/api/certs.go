@@ -156,7 +156,7 @@ func (s *Server) expectedDomains(ctx context.Context) []CertStatus {
 	// unlike prefixes they are not multiplied across base domains.
 	if aliases, err := s.store.ListAllProjectAliases(ctx); err == nil {
 		for _, a := range aliases {
-			if !running[a.ProjectID.String()] {
+			if !running[a.ProjectID.String()] || s.isBaseDomainApex(a.Host) {
 				continue
 			}
 			items = append(items, CertStatus{Domain: a.Host, Kind: "alias"})

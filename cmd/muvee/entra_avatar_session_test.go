@@ -9,8 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/go-chi/chi/v5"
 )
 
 // fakeEntraProvider mirrors the real Entra provider's distinguishing trait: it
@@ -28,10 +26,12 @@ func newFakeEntraProvider(photoBytes int) *fakeEntraProvider {
 	}
 }
 
-func (p *fakeEntraProvider) Name() string                 { return "fakeentra" }
-func (p *fakeEntraProvider) DisplayName() string          { return "Fake Microsoft" }
-func (p *fakeEntraProvider) OrgScoped() bool              { return true }
-func (p *fakeEntraProvider) CanonicalRedirectURL() string { return "https://example.com/_oauth/fakeentra" }
+func (p *fakeEntraProvider) Name() string        { return "fakeentra" }
+func (p *fakeEntraProvider) DisplayName() string { return "Fake Microsoft" }
+func (p *fakeEntraProvider) OrgScoped() bool     { return true }
+func (p *fakeEntraProvider) CanonicalRedirectURL() string {
+	return "https://example.com/_oauth/fakeentra"
+}
 func (p *fakeEntraProvider) AuthCodeURL(state, redirectURL string) string {
 	return "https://login.microsoftonline.test/authorize?state=" + state
 }
@@ -71,15 +71,7 @@ func TestEntraCallbackSessionCookieCarriesStoredURL(t *testing.T) {
 		forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret = prevBase, prevCookie, prevServer, prevSecret
 	})
 
-	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
-	r := httptest.NewRequest(http.MethodGet, "/_oauth/fakeentra?code=authcode&state="+state, nil)
-	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
-	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
-	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("provider", "fakeentra")
-	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
-
+	r, subsiteState, _ := centralCallback(t, "fakeentra")
 	w := httptest.NewRecorder()
 	handleOAuthCallback(w, r)
 
@@ -93,17 +85,20 @@ func TestEntraCallbackSessionCookieCarriesStoredURL(t *testing.T) {
 		t.Errorf("identity upsert avatar_url = %.40q..., want the inlined data URI so the server can store it", sentAvatar)
 	}
 
-	cookie, ok := namedCookie(w, "muvee_fwd_session")
-	if !ok {
-		t.Fatal("callback issued no muvee_fwd_session cookie")
+	// -007: the callback issued the muvee_fwd_session cookie → it issues the
+	// central __Host-muvee_sso, then the subsite exchange issues its own
+	// __Host-muvee_fwd. Both cookies are measured against the browser limit
+	// and both must carry the stored URL, not the data URI.
+	sso, ssoC := ssoClaims(t, w)
+	if got := len(sso.Name) + 1 + len(sso.Value); got > browserCookieLimit {
+		t.Errorf("SSO cookie is %d bytes, over the %d byte browser limit", got, browserCookieLimit)
 	}
-	if got := len("muvee_fwd_session") + 1 + len(cookie.Value); got > browserCookieLimit {
+	if ssoC.AvatarURL != storedURL {
+		t.Errorf("SSO avatar_url = %q, want the stored URL %q", ssoC.AvatarURL, storedURL)
+	}
+	cookie, claims := exchangeAtSubsite(t, w, subsiteState)
+	if got := len(cookie.Name) + 1 + len(cookie.Value); got > browserCookieLimit {
 		t.Errorf("session cookie is %d bytes, over the %d byte browser limit", got, browserCookieLimit)
-	}
-
-	claims, err := parseForwardJWT(cookie.Value)
-	if err != nil {
-		t.Fatalf("parse session: %v", err)
 	}
 	if claims.AvatarURL != storedURL {
 		t.Errorf("session avatar_url = %q, want the stored URL %q", claims.AvatarURL, storedURL)
@@ -133,32 +128,26 @@ func TestEntraCallbackKeepsProviderAvatarWhenServerReturnsNone(t *testing.T) {
 		forwardAuthBase, cookieDomain, muveeServerURL, jwtSecret = prevBase, prevCookie, prevServer, prevSecret
 	})
 
-	state := signFwdState("myproj.example.com") // signed + host-bound, as production mints it
-	r := httptest.NewRequest(http.MethodGet, "/_oauth/fakeentra?code=authcode&state="+state, nil)
-	r.Header.Set("X-Forwarded-Host", "myproj.example.com")
-	r.AddCookie(&http.Cookie{Name: "fwd_oauth_state", Value: state})
-	r.AddCookie(&http.Cookie{Name: fwdHostCookieName, Value: "myproj.example.com"})
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("provider", "fakeentra")
-	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
-
+	r, subsiteState, _ := centralCallback(t, "fakeentra")
 	w := httptest.NewRecorder()
 	handleOAuthCallback(w, r)
 
 	if w.Code != http.StatusFound {
 		t.Fatalf("callback status = %d, want %d", w.Code, http.StatusFound)
 	}
-	cookie, ok := namedCookie(w, "muvee_fwd_session")
-	if !ok {
-		t.Fatal("callback issued no muvee_fwd_session cookie")
+	// -007: asserted on the SSO cookie and on the subsite session the code
+	// exchange yields (the callback no longer signs a subsite session itself).
+	sso, ssoC := ssoClaims(t, w)
+	// The guard dropped the oversized avatar, so the sessions still fit.
+	if got := len(sso.Name) + 1 + len(sso.Value); got > browserCookieLimit {
+		t.Errorf("SSO cookie is %d bytes, over the %d byte browser limit", got, browserCookieLimit)
 	}
-	// The guard dropped the oversized avatar, so the session still fits.
-	if got := len("muvee_fwd_session") + 1 + len(cookie.Value); got > browserCookieLimit {
+	if ssoC.AvatarURL != "" {
+		t.Errorf("SSO avatar_url = %.40q..., want it dropped by the size guard", ssoC.AvatarURL)
+	}
+	cookie, claims := exchangeAtSubsite(t, w, subsiteState)
+	if got := len(cookie.Name) + 1 + len(cookie.Value); got > browserCookieLimit {
 		t.Errorf("session cookie is %d bytes, over the %d byte browser limit", got, browserCookieLimit)
-	}
-	claims, err := parseForwardJWT(cookie.Value)
-	if err != nil {
-		t.Fatalf("parse session: %v", err)
 	}
 	if claims.AvatarURL != "" {
 		t.Errorf("session avatar_url = %.40q..., want it dropped by the size guard", claims.AvatarURL)
