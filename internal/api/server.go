@@ -313,16 +313,17 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, fmt.Errorf("invalid project_id"), 400)
 		return
 	}
+	sids := parseSessionIDs(r)
 	var res store.AccessCheckResult
 	if email != "" {
-		res, err = s.store.IsProjectAccessAllowedByEmail(r.Context(), email, projectID)
+		res, err = s.store.IsProjectAccessAllowedByEmail(r.Context(), email, projectID, sids)
 	} else {
 		userID, perr := uuid.Parse(userIDStr)
 		if perr != nil {
 			jsonErr(w, fmt.Errorf("invalid user_id"), 400)
 			return
 		}
-		res, err = s.store.IsProjectAccessAllowedByUserID(r.Context(), userID, projectID)
+		res, err = s.store.IsProjectAccessAllowedByUserID(r.Context(), userID, projectID, sids)
 	}
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -332,12 +333,13 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 		"allowed": res.Allowed,
 		"mode":    res.Mode,
 	}
-	// Console-logout revocation (BACKLOG-20261117-008), answered from the
-	// same users row the lookup above already read.
+	// Console-logout revocation (BACKLOG-20261117-008) and per-session sid
+	// revocation (BACKLOG-20261117-007), both answered by the same query that
+	// read the users row above.
 	if iat, ok, perr := parseSessionIAT(r); perr != nil {
 		jsonErr(w, perr, 400)
 		return
-	} else if ok && fwdSessionRevoked(res.FwdSessionsRevokedAt, iat) {
+	} else if (ok && fwdSessionRevoked(res.FwdSessionsRevokedAt, iat)) || res.SessionIDRevoked {
 		resp["session_revoked"] = true
 		jsonOK(w, resp)
 		return
@@ -438,6 +440,18 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if p == nil {
+		// include_tunnel=1 (the central SSO host resolving a sign-in target,
+		// BACKLOG-20261117-007): a live tunnel with no bound project is still
+		// a muvee-routed host. Its credential audience is host:<prefix>, which,
+		// like project:<id>, is the same under every base domain. Other callers
+		// keep the "404 = no project" contract.
+		if underBase && !apex && r.URL.Query().Get("include_tunnel") == "1" && s.tunnels != nil && s.tunnels.get(prefix) != nil {
+			jsonOK(w, map[string]any{
+				"aud":    "host:" + prefix,
+				"tunnel": true,
+			})
+			return
+		}
 		jsonErr(w, nil, http.StatusNotFound)
 		return
 	}
@@ -460,6 +474,7 @@ func (s *Server) handleInternalProjectByHost(w http.ResponseWriter, r *http.Requ
 	}
 	jsonOK(w, map[string]any{
 		"project_id":        p.ID.String(),
+		"aud":               "project:" + p.ID.String(),
 		"project_name":      p.Name,
 		"domain_prefix":     p.DomainPrefix,
 		"enabled_providers": p.EnabledProviders,
@@ -925,6 +940,7 @@ func (s *Server) Router() http.Handler {
 	// Authenticated via X-Muvee-Internal-Key (derived from JWT_SECRET).
 	r.Get("/api/internal/access/check", s.handleInternalAccessCheck)
 	r.Get("/api/internal/auth/session-revoked", s.handleInternalSessionRevoked)
+	r.Post("/api/internal/auth/revoke-sids", s.handleInternalRevokeSessionIDs)
 	// Internal project info + access-request submission endpoints — used by
 	// muvee-authservice to render and process the request-access page directly
 	// on the project subdomain (no platform-domain hop needed).
@@ -1539,10 +1555,35 @@ func parseSessionIAT(r *http.Request) (int64, bool, error) {
 	return v, true, nil
 }
 
+// parseSessionIDs reads the optional comma-separated sids query parameter: the
+// credential's own sid plus, for a subsite session, its sso_sid
+// (BACKLOG-20261117-007). At most a handful are meaningful; extra entries are
+// dropped so a malformed caller cannot inflate the query.
+func parseSessionIDs(r *http.Request) []string {
+	raw := strings.TrimSpace(r.URL.Query().Get("sids"))
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" && len(p) <= 128 {
+			out = append(out, p)
+		}
+		if len(out) == 4 {
+			break
+		}
+	}
+	return out
+}
+
 // handleInternalSessionRevoked answers authservice's revocation check for the
-// subsite-session paths that do not run the per-project access check (verify
-// without a project, verify-admin, /_oauth/userinfo, request-access, invite
-// consumption). One primary-key / unique-email lookup. Internal-key gated.
+// subsite-credential paths that do not run the per-project access check
+// (verify without a project, verify-admin, /_oauth/userinfo, request-access,
+// renewal, the central SSO session). Two independent questions in one query:
+// the user's console-logout time point (session_iat with email or user_id;
+// BACKLOG-20261117-008) and whether any of sids is revoked
+// (BACKLOG-20261117-007). Password / SMS sessions have no user row and send
+// only sids. Internal-key gated.
 func (s *Server) handleInternalSessionRevoked(w http.ResponseWriter, r *http.Request) {
 	expected := internalAPIKey()
 	got := r.Header.Get("X-Muvee-Internal-Key")
@@ -1552,24 +1593,69 @@ func (s *Server) handleInternalSessionRevoked(w http.ResponseWriter, r *http.Req
 	}
 	email := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("email")))
 	userIDStr := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	iat, ok, err := parseSessionIAT(r)
-	if err != nil || !ok || (email == "" && userIDStr == "") {
-		jsonErr(w, fmt.Errorf("session_iat and one of email or user_id are required"), 400)
+	sids := parseSessionIDs(r)
+	iat, hasIAT, err := parseSessionIAT(r)
+	if err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	hasUser := email != "" || userIDStr != ""
+	if hasUser != hasIAT || (!hasUser && len(sids) == 0) {
+		jsonErr(w, fmt.Errorf("session_iat with one of email or user_id, and/or sids, are required"), 400)
 		return
 	}
 	var userID uuid.UUID
-	if email == "" {
+	if email == "" && userIDStr != "" {
 		if userID, err = uuid.Parse(userIDStr); err != nil {
 			jsonErr(w, fmt.Errorf("invalid user_id"), 400)
 			return
 		}
 	}
-	revokedAt, err := s.store.FwdSessionsRevokedAt(r.Context(), email, userID)
+	revokedAt, sidRevoked, err := s.store.FwdSessionRevocation(r.Context(), email, userID, sids)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
-	jsonOK(w, map[string]bool{"revoked": fwdSessionRevoked(revokedAt, iat)})
+	jsonOK(w, map[string]bool{"revoked": sidRevoked || (hasIAT && fwdSessionRevoked(revokedAt, iat))})
+}
+
+// fwdSessionRevocationTTL is how long a revoked sid stays listed: the longest
+// lifetime of any credential that can carry it — the central SSO session's
+// 7 days. A revoked credential is never renewed, so nothing outlives it.
+const fwdSessionRevocationTTL = 7 * 24 * time.Hour
+
+// handleInternalRevokeSessionIDs records sids revoked by a subsite sign-out
+// (the subsite session's sid and its sso_sid; BACKLOG-20261117-007).
+// Body: {"sids": ["…", …]}. Internal-key gated.
+func (s *Server) handleInternalRevokeSessionIDs(w http.ResponseWriter, r *http.Request) {
+	expected := internalAPIKey()
+	got := r.Header.Get("X-Muvee-Internal-Key")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		SIDs []string `json:"sids"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&body); err != nil {
+		jsonErr(w, fmt.Errorf("invalid body"), 400)
+		return
+	}
+	if len(body.SIDs) == 0 || len(body.SIDs) > 4 {
+		jsonErr(w, fmt.Errorf("sids must hold 1 to 4 ids"), 400)
+		return
+	}
+	for _, sid := range body.SIDs {
+		if len(sid) > 128 {
+			jsonErr(w, fmt.Errorf("sid too long"), 400)
+			return
+		}
+	}
+	if err := s.store.RevokeFwdSessionIDs(r.Context(), body.SIDs, fwdSessionRevocationTTL); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
+	jsonOK(w, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -5199,6 +5285,12 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 		// the needsForwardAuth block — captured here by reading the primary
 		// router's Middlewares slice so we apply the same auth chain).
 		for i, a := range aliasesByProject[dep.ProjectID] {
+			// A base-domain apex is the central sign-in host
+			// (BACKLOG-20261117-007) and is never routed to a tenant, even if
+			// a legacy row registered it as an alias.
+			if s.isBaseDomainApex(a.Host) {
+				continue
+			}
 			aliasName := fmt.Sprintf("%s-alias-%d", name, i)
 			aliasTLS := &traefikTLS{
 				CertResolver: "letsencrypt",

@@ -145,6 +145,13 @@ func (s *Server) createProjectAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := normalizeAliasHost(body.Host)
+	// No base domain apex may be a project alias: each apex is the central
+	// sign-in host for its base domain (BACKLOG-20261117-007), and routing it
+	// to a tenant would hand that tenant the SSO cookie path.
+	if s.isBaseDomainApex(host) {
+		jsonErr(w, fmt.Errorf("host %q is a platform base domain", host), 400)
+		return
+	}
 	// For a `<prefix>.<base>` alias, the prefix label must not already be claimed
 	// by a project's domain_prefix — otherwise two Traefik routers would serve the
 	// same host (the project's default router and this alias router).
@@ -205,4 +212,22 @@ func (s *Server) deleteProjectAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// isBaseDomainApex reports whether host is one of the configured platform base
+// domains itself (BASE_DOMAINS, or the single BASE_DOMAIN).
+func (s *Server) isBaseDomainApex(host string) bool {
+	h := normalizeAliasHost(host)
+	if h == "" {
+		return false
+	}
+	if h == strings.ToLower(strings.TrimSpace(s.baseDomain)) {
+		return true
+	}
+	for _, b := range s.baseDomains {
+		if h == strings.ToLower(strings.TrimSpace(b)) {
+			return true
+		}
+	}
+	return false
 }
