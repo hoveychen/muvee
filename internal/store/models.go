@@ -1,6 +1,8 @@
 package store
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -741,4 +743,24 @@ type ContainerMetric struct {
 	NetTxBytes      int64     `db:"net_tx_bytes"     json:"net_tx_bytes"`
 	BlockReadBytes  int64     `db:"block_read_bytes" json:"block_read_bytes"`
 	BlockWriteBytes int64     `db:"block_write_bytes" json:"block_write_bytes"`
+}
+
+// ValidateDatasetName rejects dataset names that are unsafe as a single path
+// component. Agents use the name verbatim as a symlink under the dataset mount
+// base and as the /data/<name> mount point (filepath.Join + os.Remove +
+// os.Symlink as root), so "../" segments would let a tenant delete or replace
+// arbitrary files on the deploy node, and ":" would break the docker -v spec.
+func ValidateDatasetName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("dataset name must not be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid dataset name %q", name)
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || r == '/' || r == '\\' || r == ':' {
+			return fmt.Errorf("dataset name %q must not contain '/', '\\', ':' or control characters", name)
+		}
+	}
+	return nil
 }

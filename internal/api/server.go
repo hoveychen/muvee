@@ -2303,11 +2303,48 @@ func validateIcon(icon string) error {
 	return nil
 }
 
+// validBypassPath reports whether one auth_bypass_paths line is safe to splice
+// into a Traefik rule. Rule strings are backtick-delimited, so a backtick (or
+// whitespace/control chars) would let a tenant append arbitrary matchers such
+// as "|| Host(`victim`)" and hijack other domains. "*" is only meaningful as a
+// trailing PathPrefix marker.
+func validBypassPath(p string) bool {
+	if !strings.HasPrefix(p, "/") {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c <= 0x20 || c == 0x7f || c == '`' || c == '\\' {
+			return false
+		}
+		if c == '*' && i != len(p)-1 {
+			return false
+		}
+	}
+	return true
+}
+
+func validateBypassPaths(raw string) error {
+	for _, line := range strings.Split(raw, "\n") {
+		p := strings.TrimSpace(line)
+		if p == "" {
+			continue
+		}
+		if !validBypassPath(p) {
+			return fmt.Errorf("invalid auth_bypass_paths entry %q: must start with /, contain no spaces, backticks or backslashes, and use * only as a trailing wildcard", p)
+		}
+	}
+	return nil
+}
+
 func validateProject(p *store.Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("project name must not be empty")
 	}
 	if err := validateIcon(p.Icon); err != nil {
+		return err
+	}
+	if err := validateBypassPaths(p.AuthBypassPaths); err != nil {
 		return err
 	}
 	if p.ProjectType == "" {
@@ -3845,6 +3882,10 @@ func (s *Server) createDataset(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
+	if err := store.ValidateDatasetName(d.Name); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
 	subPath, err := validateDatasetSubPath(d.NFSPath)
 	if err != nil {
 		jsonErr(w, err, 400)
@@ -3896,6 +3937,10 @@ func (s *Server) updateDataset(w http.ResponseWriter, r *http.Request) {
 	}
 	var d store.Dataset
 	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := store.ValidateDatasetName(d.Name); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
@@ -5198,6 +5243,11 @@ func addBypassRouters(cfg *traefikDynamicConfig, routerName, serviceName string,
 	for i, raw := range strings.Split(bypassPaths, "\n") {
 		p := strings.TrimSpace(raw)
 		if p == "" {
+			continue
+		}
+		if !validBypassPath(p) {
+			// Rows saved before validation existed; never splice them into a rule.
+			log.Printf("traefik: skipping invalid auth_bypass_paths entry %q on router %s", p, routerName)
 			continue
 		}
 		var pathRule string
