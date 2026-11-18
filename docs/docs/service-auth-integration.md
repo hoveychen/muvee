@@ -113,7 +113,7 @@ https://myapp.example.com/_oauth/logout?redirect=/goodbye
 
 Sign-out also leaves a `__Host-muvee_fwd_signed_out` marker cookie (host-only, on this project). Until the user signs in again, the login page shows the sign-in button instead of jumping straight to a single OAuth provider, so an old tab that reloads after sign-out (e.g. the auth-guard noticing the expired session) does not quietly sign the user back in.
 
-Sign-out revokes this project's session and the central session it was minted from, so every other project's session minted from the same central session stops working on its next request (it shows the signed-out page): signing out of one project still signs the user out of all projects on that base domain. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console. The reverse does apply: signing out of the muvee console also ends the user's project sessions on every device and every base domain — the next request to any project asks them to sign in again. Bearer tokens obtained through the device flow below are not affected; device-flow tokens issued before this release are no longer accepted, so obtain a new one.
+Sign-out revokes this project's session and the central session it was minted from, so every other project's session minted from the same central session stops working on its next request (it shows the signed-out page): signing out of one project still signs the user out of all projects on that base domain. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console. The reverse does apply: signing out of the muvee console also ends the user's project sessions on every device and every base domain — the next request to any project asks them to sign in again. Signing out of the console also revokes every Bearer token the user obtained through the device flow below, on every project; see [Token revocation](#token-revocation) for how to get a new one.
 
 If `/_oauth/logout` is opened from another origin — for example a link or image embedded in another page, detected through the `Sec-Fetch-Site` header — muvee first shows a confirmation page and only signs the user out when they click confirm. Requests without that header (curl, old browsers) sign out directly.
 
@@ -181,3 +181,26 @@ curl -H "Authorization: Bearer eyJhbGciOiJI..." https://myapp.example.com/api/da
 ```
 
 The token is valid for 90 days and works only for the project whose host started the device flow; it is rejected by other projects.
+
+### Token revocation
+
+A device-flow token stops working before its 90 days are up when its user
+
+- signs out of the muvee console, or
+- clicks **Revoke all CLI tokens** on the console's token settings page (this keeps the user signed in to the console and to project sites in the browser).
+
+Either one revokes every device-flow token issued to that user up to that moment, on every project; tokens obtained afterwards work normally. Personal and project API tokens used with `muveectl` are not affected.
+
+A revoked token is answered with `401 Unauthorized`, a `WWW-Authenticate: Bearer error="invalid_token"` header and a JSON body naming the device-flow endpoint of the host it was sent to — never with a redirect to the login page:
+
+```json
+{
+  "error": "token_revoked",
+  "message": "This CLI token has been revoked (console sign-out or \"revoke all CLI tokens\"). Run the device authorization flow again against https://myapp.example.com/_oauth/device/code to get a new token.",
+  "device_code_url": "https://myapp.example.com/_oauth/device/code"
+}
+```
+
+To get a new token, run the device flow again from [Step 1](#step-1--request-a-device-code) against the same host. A CLI should treat `error: "token_revoked"` (or any 401 on a Bearer request) as "sign in again", discard the stored token and restart the flow.
+
+Tokens issued before this feature shipped keep working until their user's next console sign-out or click on the revoke button; an earlier console sign-out does not count.

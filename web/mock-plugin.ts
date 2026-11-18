@@ -1230,6 +1230,7 @@ function buildRoutes(state: ReturnType<typeof buildInitialState>): Route[] {
       state.tokens.push(token)
       return { ...token, token: `mock-token-${makeId()}` }
     }),
+    defineRoute('POST', '/api/me/cli-tokens/revoke', () => ({ status: 'ok' })),
     defineRoute('DELETE', '/api/me/tokens/:id', ({ params }) => {
       const idx = state.tokens.findIndex((t) => t.id === params.id)
       if (idx !== -1) state.tokens.splice(idx, 1)

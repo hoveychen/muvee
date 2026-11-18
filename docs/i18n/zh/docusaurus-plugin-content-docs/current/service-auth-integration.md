@@ -113,7 +113,7 @@ https://myapp.example.com/_oauth/logout?redirect=/goodbye
 
 登出还会留下一个 `__Host-muvee_fwd_signed_out` 标记 Cookie（host-only，仅限本项目）。在用户重新登录之前，登录页会显示登录按钮，而不是直接跳到唯一的 OAuth 登录方式；因此登出后某个旧标签页自行刷新（例如 auth-guard 发现会话失效）时，不会悄悄把用户登回去。
 
-登出会吊销本项目的会话及其所属的中心会话，因此由同一中心会话签出的其他项目会话会在下一次请求时失效（显示已退出页）：退出一个项目仍会同时退出该基域下的所有项目。它不会退出 OAuth 登录方式本身（如 Google），也不会退出 muvee 控制台。反过来则会联动：退出 muvee 控制台会同时作废该用户在所有设备、所有基域上的项目登录态，之后访问任一项目都需要重新登录。通过下文设备流获得的 Bearer 令牌不受影响；本版本之前签发的设备流令牌已不再被接受，请重新获取。
+登出会吊销本项目的会话及其所属的中心会话，因此由同一中心会话签出的其他项目会话会在下一次请求时失效（显示已退出页）：退出一个项目仍会同时退出该基域下的所有项目。它不会退出 OAuth 登录方式本身（如 Google），也不会退出 muvee 控制台。反过来则会联动：退出 muvee 控制台会同时作废该用户在所有设备、所有基域上的项目登录态，之后访问任一项目都需要重新登录。退出控制台还会作废该用户通过下文设备流获得的全部 Bearer 令牌（所有项目）；重新获取的方式见[令牌作废](#令牌作废)。
 
 如果 `/_oauth/logout` 是从其他来源触发的（例如其他页面里嵌入的链接或图片，通过 `Sec-Fetch-Site` 头判断），muvee 会先显示确认页，用户点击确认后才登出。不带该头的请求（curl、旧浏览器）直接登出。
 
@@ -181,3 +181,26 @@ curl -H "Authorization: Bearer eyJhbGciOiJI..." https://myapp.example.com/api/da
 ```
 
 Token 有效期 90 天，仅对发起设备流的那个项目有效，其他项目会拒绝它。
+
+### 令牌作废
+
+在 90 天有效期内，以下任一操作会让设备流令牌提前失效：
+
+- 该用户退出 muvee 控制台；
+- 该用户在控制台令牌设置页点击 **作废全部 CLI 令牌**（不会退出控制台，浏览器里的项目子站登录态也保留）。
+
+两者都会作废该用户截至当时签发的全部设备流令牌（所有项目）；之后新获取的令牌正常可用。`muveectl` 使用的个人 / 项目 API 令牌不受影响。
+
+被作废的令牌会收到 `401 Unauthorized`，带 `WWW-Authenticate: Bearer error="invalid_token"` 响应头和一个 JSON 正文，正文里给出该请求所访问主机的设备流地址——不会被重定向到登录页：
+
+```json
+{
+  "error": "token_revoked",
+  "message": "This CLI token has been revoked (console sign-out or \"revoke all CLI tokens\"). Run the device authorization flow again against https://myapp.example.com/_oauth/device/code to get a new token.",
+  "device_code_url": "https://myapp.example.com/_oauth/device/code"
+}
+```
+
+重新获取令牌：对同一主机从[第 1 步](#第-1-步--请求设备码)重新走一遍设备流。CLI 应把 `error: "token_revoked"`（或 Bearer 请求上的任何 401）视为"需要重新登录"，丢弃已保存的令牌并重新发起流程。
+
+本功能上线之前签发的令牌，会一直有效到该用户下一次退出控制台或点击作废按钮为止；上线前的那次退出不算。

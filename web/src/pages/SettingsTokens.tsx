@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Copy, Check, Key, Trash2, Eye, EyeOff } from 'lucide-react'
+import { Plus, Copy, Check, Key, Trash2, Eye, EyeOff, Terminal } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ApiToken } from '../lib/types'
 import { timeAgo } from '../lib/utils'
@@ -40,6 +40,9 @@ export default function SettingsTokensPage() {
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [cliRevoking, setCLIRevoking] = useState(false)
+  const [cliRevoked, setCLIRevoked] = useState(false)
+  const [cliError, setCLIError] = useState<string | null>(null)
 
   const load = () => {
     api.meTokens.list()
@@ -74,6 +77,21 @@ export default function SettingsTokensPage() {
     if (!confirm(t('settingsTokens.deleteConfirm'))) return
     await api.meTokens.delete(id)
     load()
+  }
+
+  const handleRevokeCLITokens = async () => {
+    if (cliRevoking || !confirm(t('settingsTokens.cliRevokeConfirm'))) return
+    setCLIRevoking(true)
+    setCLIError(null)
+    setCLIRevoked(false)
+    try {
+      await api.meCLITokens.revokeAll()
+      setCLIRevoked(true)
+    } catch (e) {
+      setCLIError((e as Error).message)
+    } finally {
+      setCLIRevoking(false)
+    }
   }
 
   const copy = (val: string) => {
@@ -242,6 +260,31 @@ export default function SettingsTokensPage() {
           </table>
         </div>
       )}
+
+      {/* CLI device-flow tokens: not listed (stateless), only revocable as a whole */}
+      <h2 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '2rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <Terminal size={15} />
+        {t('settingsTokens.cliTitle')}
+      </h2>
+      <div className="card" style={{ padding: '1rem' }}>
+        <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
+          {t('settingsTokens.cliHint')}
+        </p>
+        <button
+          onClick={handleRevokeCLITokens}
+          disabled={cliRevoking}
+          className="btn-secondary"
+          style={{ color: 'var(--danger)', fontSize: '0.875rem', ...(cliRevoking ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}
+        >
+          {cliRevoking ? t('settingsTokens.cliRevoking') : t('settingsTokens.cliRevokeAll')}
+        </button>
+        {cliRevoked && (
+          <p style={{ fontSize: '0.8125rem', color: 'var(--success)', marginTop: '0.5rem' }}>{t('settingsTokens.cliRevoked')}</p>
+        )}
+        {cliError && (
+          <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginTop: '0.5rem' }}>{cliError}</p>
+        )}
+      </div>
     </div>
   )
 }

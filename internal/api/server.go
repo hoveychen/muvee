@@ -333,13 +333,24 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 		"allowed": res.Allowed,
 		"mode":    res.Mode,
 	}
-	// Console-logout revocation (BACKLOG-20261117-008) and per-session sid
-	// revocation (BACKLOG-20261117-007), both answered by the same query that
-	// read the users row above.
-	if iat, ok, perr := parseSessionIAT(r); perr != nil {
+	// Console-logout revocation of browser sessions (session_iat,
+	// BACKLOG-20261117-008), of CLI device-flow tokens (cli_iat,
+	// BACKLOG-20261117-009) and per-session sid revocation
+	// (BACKLOG-20261117-007), all answered by the same query that read the
+	// users row above. Each time point is compared with its own column only.
+	iat, hasIAT, perr := parseSessionIAT(r)
+	if perr != nil {
 		jsonErr(w, perr, 400)
 		return
-	} else if (ok && fwdSessionRevoked(res.FwdSessionsRevokedAt, iat)) || res.SessionIDRevoked {
+	}
+	cliIAT, hasCLIIAT, perr := parseCLIIAT(r)
+	if perr != nil {
+		jsonErr(w, perr, 400)
+		return
+	}
+	if (hasIAT && fwdSessionRevoked(res.FwdSessionsRevokedAt, iat)) ||
+		(hasCLIIAT && fwdSessionRevoked(res.CLITokensRevokedAt, cliIAT)) ||
+		res.SessionIDRevoked {
 		resp["session_revoked"] = true
 		jsonOK(w, resp)
 		return
@@ -1001,6 +1012,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/me/tokens", s.listUserTokens)
 		r.Post("/api/me/tokens", s.createUserToken)
 		r.Delete("/api/me/tokens/{tokenId}", s.deleteUserToken)
+		// Void every CLI device-flow token issued to the caller so far
+		// (BACKLOG-20261117-009); console session and subsite sessions stay.
+		r.Post("/api/me/cli-tokens/revoke", s.handleRevokeCLITokens)
 		r.Get("/api/runtime/config", s.handleRuntimeConfig)
 
 		// Authorization – any authenticated user can check status and submit requests
@@ -1496,17 +1510,37 @@ fetch(%q).catch(function(){});
 // handleLogout signs the user out of the console and, through
 // users.fwd_sessions_revoked_at, out of every project subdomain on every device
 // and base domain (BACKLOG-20261117-008): authservice rejects subsite sessions
-// issued at or before that instant. The route sits outside the auth middleware,
-// so the user is read from the request's own muvee_session; a missing or
-// invalid one just clears the cookie. CLI Bearer tokens and API tokens are not
-// revoked here (BACKLOG-20261117-007).
+// issued at or before that instant. The same statement stamps
+// users.cli_tokens_revoked_at, voiding every CLI device-flow token the user
+// was issued so far (BACKLOG-20261117-009); the CLI gets a 401 telling it to
+// run the device flow again. The route sits outside the auth middleware, so
+// the user is read from the request's own muvee_session; a missing or invalid
+// one just clears the cookie. API tokens (personal / project) are not revoked.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if userID, ok := s.consoleSessionUserID(r); ok {
-		if err := s.store.RevokeFwdSessions(r.Context(), userID); err != nil {
-			log.Printf("logout: revoke subsite sessions for user %s: %v", userID, err)
+		if err := s.store.RevokeConsoleLogout(r.Context(), userID); err != nil {
+			log.Printf("logout: revoke subsite sessions and CLI tokens for user %s: %v", userID, err)
 		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: "muvee_session", MaxAge: -1, Path: "/"})
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// handleRevokeCLITokens voids every CLI device-flow token the signed-in user
+// has been issued so far, on every subsite, by stamping
+// users.cli_tokens_revoked_at (BACKLOG-20261117-009). Unlike logout it keeps
+// the console session and the user's subsite browser sessions. Tokens from a
+// device flow completed after this call work as usual.
+func (s *Server) handleRevokeCLITokens(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromCtx(r.Context())
+	if user == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := s.store.RevokeCLITokens(r.Context(), user.ID); err != nil {
+		jsonErr(w, err, 500)
+		return
+	}
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -1555,6 +1589,23 @@ func parseSessionIAT(r *http.Request) (int64, bool, error) {
 	return v, true, nil
 }
 
+// parseCLIIAT reads the optional cli_iat query parameter: the auth_time of a
+// kind=cli device-flow token, compared with users.cli_tokens_revoked_at
+// (BACKLOG-20261117-009). Kept apart from session_iat so a CLI token is never
+// compared with fwd_sessions_revoked_at, and so a server that predates it
+// simply ignores the parameter.
+func parseCLIIAT(r *http.Request) (int64, bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("cli_iat"))
+	if raw == "" {
+		return 0, false, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid cli_iat")
+	}
+	return v, true, nil
+}
+
 // parseSessionIDs reads the optional comma-separated sids query parameter: the
 // credential's own sid plus, for a subsite session, its sso_sid
 // (BACKLOG-20261117-007). At most a handful are meaningful; extra entries are
@@ -1579,11 +1630,18 @@ func parseSessionIDs(r *http.Request) []string {
 // handleInternalSessionRevoked answers authservice's revocation check for the
 // subsite-credential paths that do not run the per-project access check
 // (verify without a project, verify-admin, /_oauth/userinfo, request-access,
-// renewal, the central SSO session). Two independent questions in one query:
-// the user's console-logout time point (session_iat with email or user_id;
-// BACKLOG-20261117-008) and whether any of sids is revoked
-// (BACKLOG-20261117-007). Password / SMS sessions have no user row and send
-// only sids. Internal-key gated.
+// renewal, the central SSO session). Independent questions in one query:
+//   - a browser / SSO session: the user's console-logout time point
+//     (session_iat with email or user_id; BACKLOG-20261117-008);
+//   - a CLI device-flow token: the user's CLI-token time point (cli_iat with
+//     cli_email or cli_user_id; BACKLOG-20261117-009). The identity has its own
+//     parameter names so a server that predates them, which requires
+//     session_iat alongside email / user_id, answers the sids question instead
+//     of rejecting the request;
+//   - whether any of sids is revoked (BACKLOG-20261117-007).
+//
+// Password / SMS sessions have no user row and send only sids. Internal-key
+// gated.
 func (s *Server) handleInternalSessionRevoked(w http.ResponseWriter, r *http.Request) {
 	expected := internalAPIKey()
 	got := r.Header.Get("X-Muvee-Internal-Key")
@@ -1591,18 +1649,31 @@ func (s *Server) handleInternalSessionRevoked(w http.ResponseWriter, r *http.Req
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	email := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("email")))
-	userIDStr := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	q := r.URL.Query()
+	email := strings.TrimSpace(strings.ToLower(q.Get("email")))
+	userIDStr := strings.TrimSpace(q.Get("user_id"))
+	cliEmail := strings.TrimSpace(strings.ToLower(q.Get("cli_email")))
+	cliUserIDStr := strings.TrimSpace(q.Get("cli_user_id"))
 	sids := parseSessionIDs(r)
 	iat, hasIAT, err := parseSessionIAT(r)
 	if err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
-	hasUser := email != "" || userIDStr != ""
-	if hasUser != hasIAT || (!hasUser && len(sids) == 0) {
-		jsonErr(w, fmt.Errorf("session_iat with one of email or user_id, and/or sids, are required"), 400)
+	cliIAT, hasCLIIAT, err := parseCLIIAT(r)
+	if err != nil {
+		jsonErr(w, err, 400)
 		return
+	}
+	hasUser := email != "" || userIDStr != ""
+	hasCLIUser := cliEmail != "" || cliUserIDStr != ""
+	if hasUser != hasIAT || hasCLIUser != hasCLIIAT || (hasUser && hasCLIUser) ||
+		(!hasUser && !hasCLIUser && len(sids) == 0) {
+		jsonErr(w, fmt.Errorf("session_iat with one of email or user_id, or cli_iat with one of cli_email or cli_user_id, and/or sids, are required"), 400)
+		return
+	}
+	if hasCLIUser {
+		email, userIDStr = cliEmail, cliUserIDStr
 	}
 	var userID uuid.UUID
 	if email == "" && userIDStr != "" {
@@ -1611,12 +1682,15 @@ func (s *Server) handleInternalSessionRevoked(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	revokedAt, sidRevoked, err := s.store.FwdSessionRevocation(r.Context(), email, userID, sids)
+	rev, err := s.store.FwdSessionRevocation(r.Context(), email, userID, sids)
 	if err != nil {
 		jsonErr(w, err, 500)
 		return
 	}
-	jsonOK(w, map[string]bool{"revoked": sidRevoked || (hasIAT && fwdSessionRevoked(revokedAt, iat))})
+	revoked := rev.SIDRevoked ||
+		(hasIAT && fwdSessionRevoked(rev.SessionsRevokedAt, iat)) ||
+		(hasCLIIAT && fwdSessionRevoked(rev.CLITokensRevokedAt, cliIAT))
+	jsonOK(w, map[string]bool{"revoked": revoked})
 }
 
 // fwdSessionRevocationTTL is how long a revoked sid stays listed: the longest

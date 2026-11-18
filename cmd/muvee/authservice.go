@@ -50,8 +50,11 @@ type authClaims struct {
 	// device-flow token (fwdKindCLI); both are the same JWT shape. Console
 	// logout revokes the former wherever it is presented, cookie or Bearer, so
 	// a session cookie lifted before the logout cannot be replayed as a Bearer
-	// header; CLI tokens are left alone (BACKLOG-20261117-007). Tokens signed
-	// before this claim existed carry "" (see sessionRevocable).
+	// header. It revokes CLI tokens too, but through their own time point
+	// (users.cli_tokens_revoked_at, also stamped by the console's "revoke all
+	// CLI tokens"), and a revoked one gets a 401 pointing at the device flow
+	// rather than the login redirect (BACKLOG-20261117-009; see
+	// sessionRevocable / cliTokenRevocable).
 	Kind string `json:"kind,omitempty"`
 	// SID identifies this credential for per-session revocation; SSOSID is the
 	// central SSO session a subsite session was minted from, and AuthTime that
@@ -352,6 +355,11 @@ func resolveRequestClaims(r *http.Request, aud string) (*authClaims, credSource,
 // sign-out that revoked its sid / sso_sid).
 var errSessionRevoked = errors.New("session revoked")
 
+// errCLITokenRevoked: a kind=cli device-flow token was revoked (console logout,
+// "revoke all CLI tokens", or its sid). errors.Is(err, errSessionRevoked)
+// holds too. Callers answer it with rejectRevokedCLIToken.
+var errCLITokenRevoked = fmt.Errorf("cli token revoked: %w", errSessionRevoked)
+
 // errRevocationCheck: muvee-server could not answer the revocation check.
 var errRevocationCheck = errors.New("session revocation check failed")
 
@@ -359,8 +367,9 @@ var errRevocationCheck = errors.New("session revocation check failed")
 // revoked session has its cookie cleared on w (with the signed-out hint, so
 // the login page does not ride the provider's live SSO straight back in) and
 // yields errSessionRevoked; callers then treat the request as
-// unauthenticated. errRevocationCheck means muvee-server was unreachable —
-// callers fail closed.
+// unauthenticated. A revoked CLI token yields errCLITokenRevoked (no cookie is
+// touched) and callers answer it with rejectRevokedCLIToken.
+// errRevocationCheck means muvee-server was unreachable — callers fail closed.
 func resolveAuthClaims(w http.ResponseWriter, r *http.Request, aud string) (*authClaims, error) {
 	claims, _, err := resolveRequestClaims(r, aud)
 	if err != nil {
@@ -372,21 +381,36 @@ func resolveAuthClaims(w http.ResponseWriter, r *http.Request, aud string) (*aut
 		return nil, errRevocationCheck
 	}
 	if revoked {
+		if claims.Kind == fwdKindCLI {
+			return nil, errCLITokenRevoked
+		}
 		clearFwdSession(w, r)
 		return nil, errSessionRevoked
 	}
 	return claims, nil
 }
 
-// sessionRevocable reports whether console logout can revoke these claims: a
-// user credential (not a password / phone session scoped to one project,
-// which has no users row behind it) other than a kind=cli device-flow token.
-// Per-session sid revocation applies to every credential regardless.
+// sessionRevocable reports whether console logout revokes these claims as a
+// browser / SSO session — auth_time compared with fwd_sessions_revoked_at
+// (session_iat): a user credential (not a password / phone session scoped to
+// one project, which has no users row behind it) other than a kind=cli
+// device-flow token. Per-session sid revocation applies to every credential
+// regardless.
 func sessionRevocable(c *authClaims, src credSource) bool {
-	if c.ProjectID != "" || (c.Email == "" && c.UserID == "") {
-		return false
-	}
-	return c.Kind != fwdKindCLI
+	return userCredential(c) && c.Kind != fwdKindCLI
+}
+
+// cliTokenRevocable reports whether these claims are a user's kind=cli
+// device-flow token, whose auth_time is compared with cli_tokens_revoked_at
+// (cli_iat) instead (BACKLOG-20261117-009). Never both: a CLI token compared
+// with fwd_sessions_revoked_at would be voided retroactively by every console
+// logout made before CLI revocation existed.
+func cliTokenRevocable(c *authClaims) bool {
+	return userCredential(c) && c.Kind == fwdKindCLI
+}
+
+func userCredential(c *authClaims) bool {
+	return c.ProjectID == "" && (c.Email != "" || c.UserID != "")
 }
 
 // sessionIssuedAt is the session's iat in unix seconds, or 0 for a session
@@ -400,18 +424,34 @@ func sessionIssuedAt(c *authClaims) int64 {
 
 // checkSessionRevoked asks muvee-server whether the credential is revoked:
 // its sid / sso_sid listed by a sign-out, or (user credentials) its auth_time
-// at or before the user's last console logout. Used by the paths that do not
-// run the per-project access check (which answers the same question in its
-// own query, see checkProjectAccess).
+// at or before the user's last console logout — for a CLI token, the user's
+// last CLI-token revocation. Used by the paths that do not run the per-project
+// access check (which answers the same question in its own query, see
+// checkProjectAccess).
+//
+// A CLI token sends its identity as cli_email / cli_user_id with cli_iat: a
+// muvee-server that predates CLI revocation requires session_iat whenever
+// email / user_id is present and would answer 400, failing the request closed.
+// With the cli_* names it ignores them and answers the sids question, so
+// during a rolling upgrade CLI tokens keep working (unrevoked) until the
+// server is updated too.
 func checkSessionRevoked(ctx context.Context, c *authClaims) (bool, error) {
 	q := url.Values{}
-	if sessionRevocable(c, credCookie) {
+	switch {
+	case sessionRevocable(c, credCookie):
 		if c.Email != "" {
 			q.Set("email", c.Email)
 		} else {
 			q.Set("user_id", c.UserID)
 		}
 		q.Set("session_iat", strconv.FormatInt(claimsAuthTime(c), 10))
+	case cliTokenRevocable(c):
+		if c.Email != "" {
+			q.Set("cli_email", c.Email)
+		} else {
+			q.Set("cli_user_id", c.UserID)
+		}
+		q.Set("cli_iat", strconv.FormatInt(claimsAuthTime(c), 10))
 	}
 	if sids := claimsSIDs(c); len(sids) > 0 {
 		q.Set("sids", strings.Join(sids, ","))
@@ -479,7 +519,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if revoked {
-			rejectRevokedSession(w, r)
+			rejectRevoked(w, r, claims)
 			return
 		}
 		setUserHeaders(w, claims)
@@ -506,7 +546,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if revoked {
-			rejectRevokedSession(w, r)
+			rejectRevoked(w, r, claims)
 			return
 		}
 	}
@@ -550,7 +590,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if check.SessionRevoked {
-			rejectRevokedSession(w, r)
+			rejectRevoked(w, r, claims)
 			return
 		}
 		if !check.Allowed {
@@ -575,12 +615,42 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// rejectRevoked answers a ForwardAuth request carrying a revoked credential:
+// a CLI token gets rejectRevokedCLIToken, anything else rejectRevokedSession.
+func rejectRevoked(w http.ResponseWriter, r *http.Request, c *authClaims) {
+	if c.Kind == fwdKindCLI {
+		rejectRevokedCLIToken(w, r)
+		return
+	}
+	rejectRevokedSession(w, r)
+}
+
 // rejectRevokedSession answers a ForwardAuth request carrying a revoked
 // session: clear it (with the signed-out hint), then the normal login redirect
 // (or the 401 an SPA fetch gets) — the same response an expired session gets.
 func rejectRevokedSession(w http.ResponseWriter, r *http.Request) {
 	clearFwdSession(w, r)
 	redirectToLogin(w, r)
+}
+
+// rejectRevokedCLIToken answers a request carrying a revoked kind=cli
+// device-flow token (BACKLOG-20261117-009): a 401 with a Bearer invalid_token
+// challenge and a JSON body naming the device-flow endpoint of the subsite the
+// token was presented to, where a new one is obtained. No login redirect — a
+// CLI cannot follow one — and no cookie is touched.
+func rejectRevokedCLIToken(w http.ResponseWriter, r *http.Request) {
+	deviceURL := platformScheme() + "://" + inboundHost(r) + "/_oauth/device/code"
+	msg := "This CLI token has been revoked (console sign-out or \"revoke all CLI tokens\"). " +
+		"Run the device authorization flow again against " + deviceURL + " to get a new token."
+	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="token revoked; run the device authorization flow again"`)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error":           "token_revoked",
+		"message":         msg,
+		"device_code_url": deviceURL,
+	})
 }
 
 // sessionLifetime / sessionRenewAfter: see subsiteSessionLifetime.
@@ -807,7 +877,8 @@ func requestAccessRedirectURL(r *http.Request, projectID string) string {
 // other subject-keyed IdPs) sends only the user id, which the server resolves
 // through the same allow rules. The same query also answers revocation
 // (accessCheckResult.SessionRevoked): auth_time at or before the user's
-// console logout, or a revoked sid / sso_sid.
+// console logout (a CLI token: the user's CLI-token revocation), or a revoked
+// sid / sso_sid.
 func checkProjectAccess(ctx context.Context, projectID string, c *authClaims) (accessCheckResult, error) {
 	q := url.Values{}
 	q.Set("project_id", projectID)
@@ -816,8 +887,13 @@ func checkProjectAccess(ctx context.Context, projectID string, c *authClaims) (a
 	} else {
 		q.Set("user_id", c.UserID)
 	}
-	if sessionRevocable(c, credCookie) {
+	switch {
+	case sessionRevocable(c, credCookie):
 		q.Set("session_iat", strconv.FormatInt(claimsAuthTime(c), 10))
+	case cliTokenRevocable(c):
+		// A muvee-server that predates cli_iat ignores it (no CLI revocation
+		// until it is updated too); it never sees a CLI token as session_iat.
+		q.Set("cli_iat", strconv.FormatInt(claimsAuthTime(c), 10))
 	}
 	if sids := claimsSIDs(c); len(sids) > 0 {
 		q.Set("sids", strings.Join(sids, ","))
@@ -848,6 +924,10 @@ func handleVerifyAdmin(w http.ResponseWriter, r *http.Request) {
 	claims, err := resolveAuthClaims(w, r, adminAudience(r))
 	if errors.Is(err, errRevocationCheck) {
 		http.Error(w, "access check failed", http.StatusBadGateway)
+		return
+	}
+	if errors.Is(err, errCLITokenRevoked) {
+		rejectRevokedCLIToken(w, r)
 		return
 	}
 	if err != nil {
@@ -919,6 +999,10 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 	claims, err := resolveAuthClaims(w, r, routeAudience(r))
 	if errors.Is(err, errRevocationCheck) {
 		http.Error(w, "session check failed", http.StatusBadGateway)
+		return
+	}
+	if errors.Is(err, errCLITokenRevoked) {
+		rejectRevokedCLIToken(w, r)
 		return
 	}
 	if err != nil {
@@ -2724,6 +2808,10 @@ func handleRequestAccessPage(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if errors.Is(err, errCLITokenRevoked) {
+		rejectRevokedCLIToken(w, r)
+		return
+	}
 	if err == nil && routeAudience(r) != "project:"+projectID {
 		// The session belongs to this host's project; a request for another
 		// project's access is not this session's to make.
@@ -2782,6 +2870,10 @@ func handleRequestAccessSubmit(w http.ResponseWriter, r *http.Request) {
 		renderRequestAccessPage(w, r, http.StatusBadGateway, map[string]string{
 			"Phase": "error", "Error": "Cannot reach muvee-server. Try again in a moment.",
 		})
+		return
+	}
+	if errors.Is(err, errCLITokenRevoked) {
+		rejectRevokedCLIToken(w, r)
 		return
 	}
 	if err != nil {
