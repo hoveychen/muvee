@@ -255,7 +255,7 @@ func stateDigest(state string) string {
 	return hex.EncodeToString(h[:16])
 }
 
-// subsiteState is the __Host-fwd_state cookie: the subsite half of a sign-in.
+// subsiteState is a __Host-fwd_state_<slot> cookie: the subsite half of a sign-in.
 type subsiteState struct {
 	Host   string `json:"h"`
 	Nonce  string `json:"n"`
@@ -264,7 +264,7 @@ type subsiteState struct {
 	Device bool   `json:"d,omitempty"`
 }
 
-// apexState is the __Host-fwd_apex_state cookie on the central host.
+// apexState is a __Host-fwd_apex_state_<slot> cookie on the central host.
 type apexState struct {
 	Host     string `json:"h"`
 	Aud      string `json:"a"`
