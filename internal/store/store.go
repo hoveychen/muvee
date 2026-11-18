@@ -801,6 +801,10 @@ type AccessCheckResult struct {
 	// same query that resolves the user so the per-request access check costs
 	// no extra round trip (BACKLOG-20261117-008).
 	FwdSessionsRevokedAt *time.Time
+	// CLITokensRevokedAt is users.cli_tokens_revoked_at: the user's last
+	// console logout or "revoke all CLI tokens", before which every kind=cli
+	// device-flow token is void (BACKLOG-20261117-009). Read in the same query.
+	CLITokensRevokedAt *time.Time
 	// SessionIDRevoked is true when any of the session ids passed to the
 	// lookup (the credential's sid and, for a subsite session, its sso_sid) is
 	// listed in fwd_session_revocations (BACKLOG-20261117-007). Answered by the
@@ -820,9 +824,9 @@ const sidRevokedExpr = `EXISTS (SELECT 1 FROM fwd_session_revocations WHERE sid 
 func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string, projectID uuid.UUID, sids []string) (AccessCheckResult, error) {
 	var res AccessCheckResult
 	var role UserRole
-	var revokedAt *time.Time
+	var revokedAt, cliRevokedAt *time.Time
 	var sidRevoked bool
-	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE email = $1`, email, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &sidRevoked)
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, cli_tokens_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE email = $1`, email, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &cliRevokedAt, &sidRevoked)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
@@ -831,6 +835,7 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 	}
 	res, err = s.projectAccessForUser(ctx, res.UserID, role, projectID)
 	res.FwdSessionsRevokedAt = revokedAt
+	res.CLITokensRevokedAt = cliRevokedAt
 	res.SessionIDRevoked = sidRevoked
 	return res, err
 }
@@ -847,9 +852,9 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.UUID, projectID uuid.UUID, sids []string) (AccessCheckResult, error) {
 	var res AccessCheckResult
 	var role UserRole
-	var revokedAt *time.Time
+	var revokedAt, cliRevokedAt *time.Time
 	var sidRevoked bool
-	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE id = $1`, userID, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &sidRevoked)
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, cli_tokens_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE id = $1`, userID, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &cliRevokedAt, &sidRevoked)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
@@ -858,6 +863,7 @@ func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.
 	}
 	res, err = s.projectAccessForUser(ctx, res.UserID, role, projectID)
 	res.FwdSessionsRevokedAt = revokedAt
+	res.CLITokensRevokedAt = cliRevokedAt
 	res.SessionIDRevoked = sidRevoked
 	return res, err
 }
@@ -898,9 +904,27 @@ func (s *Store) projectAccessForUser(ctx context.Context, userID uuid.UUID, role
 
 // RevokeFwdSessions stamps users.fwd_sessions_revoked_at with the current
 // time: every subsite session of the user issued at or before this instant is
-// rejected by authservice from now on (console logout, BACKLOG-20261117-008).
+// rejected by authservice from now on (BACKLOG-20261117-008). Console logout
+// uses RevokeConsoleLogout, which also voids CLI tokens.
 func (s *Store) RevokeFwdSessions(ctx context.Context, userID uuid.UUID) error {
 	_, err := s.db.Exec(ctx, `UPDATE users SET fwd_sessions_revoked_at = NOW() WHERE id = $1`, userID)
+	return err
+}
+
+// RevokeConsoleLogout records a console logout: subsite sessions
+// (fwd_sessions_revoked_at) and CLI device-flow tokens (cli_tokens_revoked_at)
+// issued at or before this instant are rejected from now on, both stamped
+// with the same NOW() in one statement (BACKLOG-20261117-008, -009).
+func (s *Store) RevokeConsoleLogout(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `UPDATE users SET fwd_sessions_revoked_at = NOW(), cli_tokens_revoked_at = NOW() WHERE id = $1`, userID)
+	return err
+}
+
+// RevokeCLITokens stamps users.cli_tokens_revoked_at only: every kind=cli
+// device-flow token of the user issued at or before this instant is rejected,
+// subsite sessions are untouched (BACKLOG-20261117-009).
+func (s *Store) RevokeCLITokens(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `UPDATE users SET cli_tokens_revoked_at = NOW() WHERE id = $1`, userID)
 	return err
 }
 
@@ -908,29 +932,44 @@ func (s *Store) RevokeFwdSessions(ctx context.Context, userID uuid.UUID) error {
 // found by email (preferred) or id. nil means no revocation on record, or no
 // such user.
 func (s *Store) FwdSessionsRevokedAt(ctx context.Context, email string, userID uuid.UUID) (*time.Time, error) {
-	revokedAt, _, err := s.FwdSessionRevocation(ctx, email, userID, nil)
-	return revokedAt, err
+	rev, err := s.FwdSessionRevocation(ctx, email, userID, nil)
+	return rev.SessionsRevokedAt, err
 }
 
-// FwdSessionRevocation answers both revocation questions for one credential in
-// a single query: the user's console-logout time point (when email or userID
-// identifies a user; nil otherwise, or when no such user exists) and whether
-// any of sids is listed in fwd_session_revocations. Password / SMS sessions
-// have no user row, so a lookup with neither email nor userID only checks sids.
-func (s *Store) FwdSessionRevocation(ctx context.Context, email string, userID uuid.UUID, sids []string) (*time.Time, bool, error) {
-	var revokedAt *time.Time
-	var sidRevoked bool
+// FwdRevocation is the revocation state FwdSessionRevocation reads for one
+// credential.
+type FwdRevocation struct {
+	// SessionsRevokedAt / CLITokensRevokedAt: the user's
+	// fwd_sessions_revoked_at / cli_tokens_revoked_at; nil when not on record
+	// or when no user was looked up.
+	SessionsRevokedAt  *time.Time
+	CLITokensRevokedAt *time.Time
+	// SIDRevoked: any of the sids is listed in fwd_session_revocations.
+	SIDRevoked bool
+}
+
+// FwdSessionRevocation answers the revocation questions for one credential in
+// a single query: the user's console-logout and CLI-token time points (when
+// email or userID identifies a user; nil otherwise, or when no such user
+// exists) and whether any of sids is listed in fwd_session_revocations.
+// Password / SMS sessions have no user row, so a lookup with neither email nor
+// userID only checks sids.
+func (s *Store) FwdSessionRevocation(ctx context.Context, email string, userID uuid.UUID, sids []string) (FwdRevocation, error) {
+	var rev FwdRevocation
 	expr := fmt.Sprintf(sidRevokedExpr, "$1")
+	const cols = `u.fwd_sessions_revoked_at, u.cli_tokens_revoked_at`
 	var err error
 	switch {
 	case email != "":
-		err = s.db.QueryRow(ctx, `SELECT (SELECT fwd_sessions_revoked_at FROM users WHERE email = $2), `+expr, nonNilSIDs(sids), email).Scan(&revokedAt, &sidRevoked)
+		err = s.db.QueryRow(ctx, `SELECT `+cols+`, `+expr+` FROM (SELECT 1) one LEFT JOIN users u ON u.email = $2`, nonNilSIDs(sids), email).
+			Scan(&rev.SessionsRevokedAt, &rev.CLITokensRevokedAt, &rev.SIDRevoked)
 	case userID != uuid.Nil:
-		err = s.db.QueryRow(ctx, `SELECT (SELECT fwd_sessions_revoked_at FROM users WHERE id = $2), `+expr, nonNilSIDs(sids), userID).Scan(&revokedAt, &sidRevoked)
+		err = s.db.QueryRow(ctx, `SELECT `+cols+`, `+expr+` FROM (SELECT 1) one LEFT JOIN users u ON u.id = $2`, nonNilSIDs(sids), userID).
+			Scan(&rev.SessionsRevokedAt, &rev.CLITokensRevokedAt, &rev.SIDRevoked)
 	default:
-		err = s.db.QueryRow(ctx, `SELECT `+expr, nonNilSIDs(sids)).Scan(&sidRevoked)
+		err = s.db.QueryRow(ctx, `SELECT `+expr, nonNilSIDs(sids)).Scan(&rev.SIDRevoked)
 	}
-	return revokedAt, sidRevoked, err
+	return rev, err
 }
 
 // RevokeFwdSessionIDs lists session ids in fwd_session_revocations until ttl
