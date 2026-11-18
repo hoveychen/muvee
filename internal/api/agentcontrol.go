@@ -183,6 +183,17 @@ func (s *Server) handleProjectCp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// wsOriginAllowed guards cookie-authenticated WebSocket endpoints against
+// cross-site WebSocket hijacking. Tenant sites live on <prefix>.<base>, which is
+// same-site with the panel, so SameSite=Lax still attaches muvee_session to a
+// handshake a tenant page starts. Browsers always send Origin on a WebSocket
+// handshake; the CLI and agents never do. So: no Origin → non-browser client,
+// allowed (it still has to authenticate); otherwise only the panel origin.
+func (s *Server) wsOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	return origin == "" || s.allowedOrigin(origin)
+}
+
 // sanitizeCLIFollowupFrame rebuilds a CLI frame received after the open frame,
 // keeping only the fields a data/control frame legitimately carries. Targeting
 // fields (Container, DomainPrefix, Cmd, Path, Direction, NodeID) are never
@@ -237,6 +248,10 @@ func (s *Server) proxyAgentSession(w http.ResponseWriter, r *http.Request, valid
 		return
 	}
 
+	if !s.wsOriginAllowed(r) {
+		jsonErr(w, fmt.Errorf("cross-origin websocket refused"), http.StatusForbidden)
+		return
+	}
 	ws, err := agentCtrlUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
