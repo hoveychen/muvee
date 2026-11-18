@@ -1930,13 +1930,15 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Browser sign-ins (subsite login and device flow) are only accepted with
-	// the central host's own __Host-fwd_apex_state cookie, whose nonce the
+	// Browser sign-ins (subsite login and device flow) are only accepted with the
+	// central host's own __Host-fwd_apex_state_<slot> cookie, whose nonce the
 	// provider state must match (BUG-20261117-002: no base-domain state
 	// cookie, no host-bound or numeric legacy state, no device- state).
 	st, ok := readApexState(w, r, queryState)
 	if !ok || st.Provider != providerName {
-		http.Error(w, "invalid state", http.StatusBadRequest)
+		// The code is discarded either way; the browser is only sent back to
+		// start a sign-in of its own (BUG-20261117-002 still holds).
+		recoverCentralSignIn(w, r, "unmatched")
 		return
 	}
 

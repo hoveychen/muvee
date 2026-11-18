@@ -472,8 +472,8 @@ func TestEP_Session_ControlExchangeSignsOwnAudienceSession(t *testing.T) {
 	if _, err := parseFwdToken(sess.Value, "project:other", fwdKindSession); err == nil {
 		t.Fatal("session valid for another audience")
 	}
-	if st := findCookie(w.Result().Cookies(), fwdCookieName(fwdStateCookieBase)); st == nil || st.MaxAge >= 0 {
-		t.Errorf("state cookie not consumed: %+v", st)
+	if st := slotSetCookies(w, fwdStateCookieBase, true); len(st) != 1 {
+		t.Errorf("state slot not consumed: %+v", w.Result().Cookies())
 	}
 }
 
@@ -501,8 +501,9 @@ func TestEP_Session_FailuresSignNothingAndCountRetry(t *testing.T) {
 			if loc.Path != "/_oauth/login" || loc.Host != "" || loc.Query().Get("attempt") != "1" {
 				t.Fatalf("Location = %s, want /_oauth/login?attempt=1 (trips 0 -> 1)", loc)
 			}
-			if st := findCookie(w.Result().Cookies(), fwdCookieName(fwdStateCookieBase)); st == nil || st.MaxAge >= 0 {
-				t.Errorf("state cookie not cleared on failure: %+v", st)
+			// Only the failed sign-in's own slot (named after its state) is deleted.
+			if st := slotSetCookies(w, fwdStateCookieBase, true); len(st) != 1 {
+				t.Errorf("state slot not cleared on failure: %+v", w.Result().Cookies())
 			}
 		})
 	}
@@ -554,14 +555,19 @@ func TestEP_Session_RetryCounterAndErrorPage(t *testing.T) {
 		if !strings.Contains(w.Body.String(), "Sign-in could not be completed") {
 			t.Fatalf("error page body = %q", w.Body.String())
 		}
-		if st := findCookie(w.Result().Cookies(), fwdCookieName(fwdStateCookieBase)); st == nil || st.MaxAge >= 0 {
-			t.Errorf("state cookie not cleared on the error page: %+v", st)
+		if st := slotSetCookies(w, fwdStateCookieBase, true); len(st) != 1 {
+			t.Errorf("state slot not cleared on the error page: %+v", w.Result().Cookies())
 		}
 	}
-	// Without a readable state the counter restarts at 1 (no loop either).
+	// Without a readable state the counter comes from the nonce itself, so a
+	// browser that keeps losing the slot still stops at the error page.
 	run, _ = epExchange(t, epExch{Trips: maxLoginRoundTrips, NoStateCookie: true})
+	if w := run(); w.Code != http.StatusBadRequest {
+		t.Fatalf("no state cookie at trips %d: status %d Location %q, want the error page", maxLoginRoundTrips, w.Code, w.Header().Get("Location"))
+	}
+	run, _ = epExchange(t, epExch{NoStateCookie: true})
 	if loc := epLoc(t, run()); loc.Query().Get("attempt") != "1" {
-		t.Fatalf("no state cookie: Location %s, want attempt=1", loc)
+		t.Fatalf("no state cookie at trips 0: Location %s, want attempt=1", loc)
 	}
 }
 

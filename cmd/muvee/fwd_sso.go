@@ -65,11 +65,24 @@ const (
 	// ssoCodeLifetime bounds the central → subsite authorization code.
 	ssoCodeLifetime = 60 * time.Second
 	// loginStateLifetime bounds the subsite / central state cookies and the
-	// post-login return URL cookie.
-	loginStateLifetime = 10 * time.Minute
+	// post-login return URL cookie. Generous on purpose: users do park on the
+	// provider's page (a 43-minute pause in production turned into a 400 at
+	// 10 minutes); the state stays single-use and host-bound either way.
+	loginStateLifetime = 60 * time.Minute
 	// maxLoginRoundTrips: failed code exchanges re-enter the login page with a
 	// counter; past this many the user gets an error page instead of a loop.
+	// The central host's recovery (recoverCentralSignIn) uses the same bound.
 	maxLoginRoundTrips = 2
+	// maxStateSlots bounds how many concurrent sign-ins one browser keeps a
+	// state cookie for per host (each sign-in has its own cookie, see
+	// stateSlotBase); starting one more drops the oldest.
+	maxStateSlots = 4
+	// loginHintLifetime / loginRecoveryWindow: the central host remembers the
+	// last sign-in target (fwd_login_hint) so a callback whose state is gone
+	// can send the browser back there to start over; recoveries within one
+	// window are counted against maxLoginRoundTrips.
+	loginHintLifetime   = ssoLifetime
+	loginRecoveryWindow = 10 * time.Minute
 )
 
 const fwdKindSSO = "sso"
@@ -83,7 +96,16 @@ const (
 	apexStateCookieBase   = "fwd_apex_state"
 	signedOutCookieBase   = "muvee_fwd_signed_out"
 	fwdRedirectCookieBase = "fwd_oauth_redirect"
+	loginHintCookieBase   = "fwd_login_hint"
 )
+
+// slotCookieBases are the state cookies written once per sign-in under a
+// derived name (base + "_" + slot, see stateSlotBase).
+var slotCookieBases = []string{fwdStateCookieBase, apexStateCookieBase}
+
+// stripPrefixWildcard marks a strip-list entry that matches every cookie name
+// starting with the text before it (embed-bridge stripCookies semantics).
+const stripPrefixWildcard = "*"
 
 // legacyFwdCookies are the base-domain cookies earlier releases set. They are
 // never written any more; sign-out, a rejected session and a completed
@@ -95,11 +117,13 @@ var legacyFwdCookies = []string{
 
 // fwdAllCookieNames lists every auth cookie name that must never reach a
 // tenant: the __Host- names, their plain-http dev fallbacks (the bare base
-// names) and the legacy base-domain names. internal/api FwdAuthCookieNames,
-// which the HTTP provider passes to every embed-bridge instance, must hold the
-// same set (a drift-guard test compares them).
+// names) and the legacy base-domain names. Per-sign-in state cookies have a
+// derived suffix, so they are listed as prefix entries ("__Host-fwd_state_*").
+// internal/api FwdAuthCookieNames, which the HTTP provider passes to every
+// embed-bridge instance, must hold the same set (a drift-guard test compares
+// them).
 func fwdAllCookieNames() []string {
-	bases := []string{fwdSessionCookieBase, ssoCookieBase, fwdStateCookieBase, apexStateCookieBase, signedOutCookieBase, fwdRedirectCookieBase}
+	bases := []string{fwdSessionCookieBase, ssoCookieBase, fwdStateCookieBase, apexStateCookieBase, signedOutCookieBase, fwdRedirectCookieBase, loginHintCookieBase}
 	out := []string{}
 	seen := map[string]bool{}
 	add := func(n string) {
@@ -116,6 +140,10 @@ func fwdAllCookieNames() []string {
 	}
 	for _, n := range legacyFwdCookies {
 		add(n)
+	}
+	for _, b := range slotCookieBases {
+		add("__Host-" + b + "_" + stripPrefixWildcard)
+		add(b + "_" + stripPrefixWildcard)
 	}
 	return out
 }
@@ -181,30 +209,37 @@ func sealValue(purpose string, v any) string {
 
 // openValue verifies a sealValue for purpose that is at most maxAge old.
 func openValue(purpose, s string, maxAge time.Duration, v any) bool {
+	_, ok := openValueAt(purpose, s, maxAge, v)
+	return ok
+}
+
+// openValueAt is openValue that also returns the seal's issue time.
+func openValueAt(purpose, s string, maxAge time.Duration, v any) (time.Time, bool) {
 	i := strings.IndexByte(s, '.')
 	if i <= 0 {
-		return false
+		return time.Time{}, false
 	}
 	b, err := base64.RawURLEncoding.DecodeString(s[:i])
 	if err != nil {
-		return false
+		return time.Time{}, false
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(s[i+1:])
 	if err != nil || !hmac.Equal(sig, sealMAC(purpose, b)) {
-		return false
+		return time.Time{}, false
 	}
 	var env struct {
 		T int64           `json:"t"`
 		V json.RawMessage `json:"v"`
 	}
 	if json.Unmarshal(b, &env) != nil {
-		return false
+		return time.Time{}, false
 	}
-	age := time.Since(time.Unix(env.T, 0))
+	issued := time.Unix(env.T, 0)
+	age := time.Since(issued)
 	if age < -time.Minute || age > maxAge {
-		return false
+		return time.Time{}, false
 	}
-	return json.Unmarshal(env.V, v) == nil
+	return issued, json.Unmarshal(env.V, v) == nil
 }
 
 func randomToken(n int) string {
@@ -220,7 +255,7 @@ func stateDigest(state string) string {
 	return hex.EncodeToString(h[:16])
 }
 
-// subsiteState is the __Host-fwd_state cookie: the subsite half of a sign-in.
+// subsiteState is a __Host-fwd_state_<slot> cookie: the subsite half of a sign-in.
 type subsiteState struct {
 	Host   string `json:"h"`
 	Nonce  string `json:"n"`
@@ -229,7 +264,7 @@ type subsiteState struct {
 	Device bool   `json:"d,omitempty"`
 }
 
-// apexState is the __Host-fwd_apex_state cookie on the central host.
+// apexState is a __Host-fwd_apex_state_<slot> cookie on the central host.
 type apexState struct {
 	Host     string `json:"h"`
 	Aud      string `json:"a"`
@@ -240,19 +275,115 @@ type apexState struct {
 	Provider string `json:"p"`
 }
 
-func writeSubsiteState(w http.ResponseWriter, r *http.Request, trips int, popup bool) string {
-	st := subsiteState{Host: domains.NormalizeHost(inboundHost(r)), Nonce: randomToken(18), Trips: trips, Popup: popup}
-	setHostCookie(w, fwdStateCookieBase, sealValue("fwd-state", st), int(loginStateLifetime.Seconds()))
-	return st.Nonce
+// ─── Per-sign-in state slots ────────────────────────────────────────────────
+//
+// Every sign-in keeps its state in its own cookie, named base + "_" + a short
+// hash of the value the callback carries back (the subsite nonce, the
+// central f1). Two sign-ins started from one browser — a second tab, a
+// prefetched duplicate of the login chain — no longer overwrite each other,
+// and a callback only ever reads and deletes its own slot. The names are
+// public; what vouches for a callback is still the sealed value under a
+// __Host- name, which no sibling subdomain can write.
+
+const maxStateKeyLen = 128
+
+// stateSlotBase is the cookie base name of the state slot for key.
+func stateSlotBase(base, key string) string {
+	h := sha256.Sum256([]byte("muvee-state-slot\x00" + base + "\x00" + key))
+	return base + "_" + hex.EncodeToString(h[:6])
 }
 
-func readSubsiteState(r *http.Request) (subsiteState, bool) {
+// pruneStateSlots runs before a new slot of base is written: it deletes this
+// browser's slots that are expired or unreadable, the pre-slot single cookie,
+// and the oldest live ones beyond maxStateSlots-1 so the request header stays
+// bounded however many sign-ins get abandoned.
+func pruneStateSlots(w http.ResponseWriter, r *http.Request, base, purpose string) {
+	prefix := fwdCookieName(base) + "_"
+	type slot struct {
+		base   string
+		issued time.Time
+	}
+	var live []slot
+	for _, c := range r.Cookies() {
+		if c.Name == fwdCookieName(base) {
+			setHostCookie(w, base, "", -1)
+			continue
+		}
+		if !strings.HasPrefix(c.Name, prefix) {
+			continue
+		}
+		slotBase := base + "_" + strings.TrimPrefix(c.Name, prefix)
+		var discard json.RawMessage
+		issued, ok := openValueAt(purpose, c.Value, loginStateLifetime, &discard)
+		if !ok {
+			setHostCookie(w, slotBase, "", -1)
+			continue
+		}
+		live = append(live, slot{slotBase, issued})
+	}
+	for len(live) > maxStateSlots-1 {
+		oldest := 0
+		for i := range live {
+			if live[i].issued.Before(live[oldest].issued) {
+				oldest = i
+			}
+		}
+		setHostCookie(w, live[oldest].base, "", -1)
+		live = append(live[:oldest], live[oldest+1:]...)
+	}
+}
+
+// writeSubsiteState starts a subsite sign-in: a fresh nonce (carrying the
+// round-trip counter after a ".", so the loop bound survives a lost cookie)
+// sealed into its own slot. Returns the nonce, which travels as state.
+func writeSubsiteState(w http.ResponseWriter, r *http.Request, trips int, popup bool) string {
+	nonce := randomToken(18) + "." + strconv.Itoa(trips)
+	st := subsiteState{Host: domains.NormalizeHost(inboundHost(r)), Nonce: nonce, Trips: trips, Popup: popup}
+	pruneStateSlots(w, r, fwdStateCookieBase, "fwd-state")
+	setHostCookie(w, stateSlotBase(fwdStateCookieBase, nonce), sealValue("fwd-state", st), int(loginStateLifetime.Seconds()))
+	return nonce
+}
+
+// readSubsiteState returns the subsite sign-in whose nonce is the returned
+// state, from that sign-in's own slot. It does not delete the slot.
+func readSubsiteState(r *http.Request, nonce string) (subsiteState, bool) {
 	var st subsiteState
-	v, ok := hostCookie(r, fwdStateCookieBase)
-	if !ok || !openValue("fwd-state", v, loginStateLifetime, &st) {
+	if nonce == "" || len(nonce) > maxStateKeyLen {
 		return st, false
 	}
-	return st, st.Host == domains.NormalizeHost(inboundHost(r))
+	v, ok := hostCookie(r, stateSlotBase(fwdStateCookieBase, nonce))
+	if !ok || !openValue("fwd-state", v, loginStateLifetime, &st) {
+		return subsiteState{}, false
+	}
+	if st.Host != domains.NormalizeHost(inboundHost(r)) || !hmac.Equal([]byte(st.Nonce), []byte(nonce)) {
+		return subsiteState{}, false
+	}
+	return st, true
+}
+
+// clearSubsiteState deletes the slot of nonce (and nothing else).
+func clearSubsiteState(w http.ResponseWriter, nonce string) {
+	if nonce != "" && len(nonce) <= maxStateKeyLen {
+		setHostCookie(w, stateSlotBase(fwdStateCookieBase, nonce), "", -1)
+	}
+}
+
+// nonceTrips is the round-trip counter writeSubsiteState put in a nonce, for
+// a callback whose slot is gone. Untrusted, so only ever used to stop a loop
+// sooner: missing or malformed reads as 0, larger values are capped.
+func nonceTrips(nonce string) int {
+	i := strings.LastIndexByte(nonce, '.')
+	if i < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(nonce[i+1:])
+	if err != nil || n < 0 {
+		return 0
+	}
+	if n > maxLoginRoundTrips+1 {
+		return maxLoginRoundTrips + 1
+	}
+	return n
 }
 
 // ─── Tokens ─────────────────────────────────────────────────────────────────
@@ -620,24 +751,111 @@ func handleSSOStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	setHostCookie(w, apexStateCookieBase, sealValue("apex-state", st), int(loginStateLifetime.Seconds()))
-	http.Redirect(w, r, p.AuthCodeURL(apexStateF1(st.Nonce), oauthRedirectForHost(central, providerName)), http.StatusFound)
+	f1 := apexStateF1(st.Nonce)
+	pruneStateSlots(w, r, apexStateCookieBase, "apex-state")
+	setHostCookie(w, stateSlotBase(apexStateCookieBase, f1), sealValue("apex-state", st), int(loginStateLifetime.Seconds()))
+	if st.Mode == "login" {
+		// Keep the recovery count of an ongoing recovery (see
+		// recoverCentralSignIn); only a completed sign-in resets it.
+		hint := loginHint{Host: target.Host}
+		if prev, ok := readLoginHint(r); ok {
+			hint.N, hint.R = prev.N, prev.R
+		}
+		writeLoginHint(w, hint)
+	}
+	http.Redirect(w, r, p.AuthCodeURL(f1, oauthRedirectForHost(central, providerName)), http.StatusFound)
 }
 
 // readApexState returns the central sign-in context matching the provider's
-// state, deleting the cookie (single use).
+// state from that sign-in's own slot, deleting the slot (single use). Other
+// sign-ins' slots are left alone.
 func readApexState(w http.ResponseWriter, r *http.Request, queryState string) (apexState, bool) {
 	var st apexState
-	v, ok := hostCookie(r, apexStateCookieBase)
+	if !strings.HasPrefix(queryState, fwdStatePrefix) || len(queryState) > maxStateKeyLen {
+		return st, false
+	}
+	slot := stateSlotBase(apexStateCookieBase, queryState)
+	v, ok := hostCookie(r, slot)
 	if !ok {
 		return st, false
 	}
-	setHostCookie(w, apexStateCookieBase, "", -1)
+	setHostCookie(w, slot, "", -1)
 	if !openValue("apex-state", v, loginStateLifetime, &st) || !apexStateF1Matches(queryState, st.Nonce) {
 		return apexState{}, false
 	}
 	return st, true
 }
+
+// loginHint is the central host's __Host-fwd_login_hint: the subsite the last
+// browser sign-in was for, and how many automatic recoveries (N, the last at
+// unix time R) ran since a sign-in last completed. It only ever decides where
+// a failed callback sends the browser to start over — never whether a
+// callback is accepted.
+type loginHint struct {
+	Host string `json:"h"`
+	N    int    `json:"n,omitempty"`
+	R    int64  `json:"r,omitempty"`
+}
+
+func readLoginHint(r *http.Request) (loginHint, bool) {
+	var h loginHint
+	v, ok := hostCookie(r, loginHintCookieBase)
+	if !ok || !openValue("login-hint", v, loginHintLifetime, &h) || h.Host == "" {
+		return loginHint{}, false
+	}
+	return h, true
+}
+
+func writeLoginHint(w http.ResponseWriter, h loginHint) {
+	setHostCookie(w, loginHintCookieBase, sealValue("login-hint", h), int(loginHintLifetime.Seconds()))
+}
+
+// recoverCentralSignIn answers a browser callback whose state cannot be
+// matched (expired, lost, another browser's, forged). The provider's code is
+// never used: the browser is sent back to the last sign-in target's login
+// entry to start a fresh sign-in of its own — with the provider usually
+// still signed in, that is a quick bounce. The target comes only from the
+// central host's own sealed __Host- hint and must still pass
+// resolveSignInTarget (a muvee-routed host of this base domain), so this is no
+// open redirect; at most maxLoginRoundTrips recoveries run per
+// loginRecoveryWindow without a completed sign-in, after which — or with no
+// usable hint — a page explains what to do instead of a bare 400.
+func recoverCentralSignIn(w http.ResponseWriter, r *http.Request, reason string) {
+	w.Header().Set("Cache-Control", "no-store")
+	central := domains.NormalizeHost(inboundHost(r))
+	h, ok := readLoginHint(r)
+	if ok && time.Since(time.Unix(h.R, 0)) > loginRecoveryWindow {
+		h.N = 0
+	}
+	if ok && h.N < maxLoginRoundTrips {
+		target, err := resolveSignInTarget(r.Context(), h.Host, central)
+		if err == nil {
+			h.N++
+			h.R = time.Now().Unix()
+			writeLoginHint(w, h)
+			log.Printf("authservice: callback state %s on %s; restarting sign-in on %s (%d/%d)", reason, central, target.Host, h.N, maxLoginRoundTrips)
+			http.Redirect(w, r, platformScheme()+"://"+target.Host+"/_oauth/login", http.StatusFound)
+			return
+		}
+		log.Printf("authservice: callback state %s on %s; hint host %q refused: %v", reason, central, h.Host, err)
+	} else {
+		log.Printf("authservice: callback state %s on %s; no recovery (hint=%v)", reason, central, ok)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = signInExpiredTmpl.Execute(w, loginMessages(acceptLang(r)))
+}
+
+// signInExpiredTmpl is the central host's page for a callback it cannot
+// recover: the central host serves no login page of its own, so it points the
+// user back to the site they were signing in to.
+var signInExpiredTmpl = template.Must(template.New("signin-expired").Parse(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{if .EN}}Sign-in expired{{else}}登录已过期{{end}}</title></head>
+<body style="font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#faf9f7">
+<div style="background:#fff;border:1px solid #e9e5dd;border-radius:16px;padding:2.5rem;max-width:24rem;text-align:center">
+<h2>{{if .EN}}This sign-in link has expired{{else}}本次登录已过期{{end}}</h2>
+<p style="color:#8a857c">{{if .EN}}Go back to the site you were visiting and sign in again.{{else}}请回到你正在访问的网站，重新登录即可。{{end}}</p>
+</div></body></html>`))
 
 // finishCentralSignIn runs after the provider callback verified an identity
 // for a login-mode apex state: sign the SSO, then mint the subsite code.
@@ -651,6 +869,7 @@ func finishCentralSignIn(w http.ResponseWriter, r *http.Request, st apexState, i
 		return
 	}
 	setHostCookie(w, ssoCookieBase, signed, int(ssoLifetime.Seconds()))
+	writeLoginHint(w, loginHint{Host: st.Host}) // completed: recovery count back to 0
 	code := mintSSOCode(&ssoCode{Host: st.Host, Aud: st.Aud, StateDigest: stateDigest(st.State), SSOSID: sid, AuthTime: authTime, ID: id})
 	redirectToSubsite(w, r, st.Host, "/_oauth/session", url.Values{"code": {code}, "state": {st.State}})
 }
@@ -670,14 +889,18 @@ func handleSSOSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	aud := routeAudience(r)
 	host := domains.NormalizeHost(inboundHost(r))
-	st, stOK := readSubsiteState(r)
 	queryState := r.URL.Query().Get("state")
+	st, stOK := readSubsiteState(r, queryState)
 	c, codeOK := takeSSOCode(r.URL.Query().Get("code"))
-	if aud == "" || !codeOK || !stOK || queryState == "" ||
-		!hmac.Equal([]byte(queryState), []byte(st.Nonce)) ||
+	if aud == "" || !codeOK || !stOK ||
 		c.Aud != aud || c.Host != host || c.StateDigest != stateDigest(queryState) {
 		log.Printf("authservice: code exchange refused on %s (aud=%q code=%v state=%v)", host, aud, codeOK, stOK)
-		retryLogin(w, r, st.Trips+1, st.Popup)
+		clearSubsiteState(w, queryState)
+		trips := st.Trips
+		if !stOK {
+			trips = nonceTrips(queryState)
+		}
+		retryLogin(w, r, trips+1, st.Popup)
 		return
 	}
 	signed, err := signSubsiteSession(c.ID, c.Aud, c.SSOSID, c.AuthTime)
@@ -686,7 +909,7 @@ func handleSSOSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issueFwdSession(w, r, signed, subsiteSessionLifetime)
-	setHostCookie(w, fwdStateCookieBase, "", -1)
+	clearSubsiteState(w, queryState)
 	if st.Popup {
 		http.Redirect(w, r, popupDonePath, http.StatusFound)
 		return
@@ -694,11 +917,11 @@ func handleSSOSession(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, takePostLoginRedirect(w, r), http.StatusFound)
 }
 
-// retryLogin re-enters the login page after a failed exchange (two tabs
-// racing for the state cookie, an expired code), or shows an error page once
-// maxLoginRoundTrips is exceeded so the browser never loops.
+// retryLogin re-enters the login page after a failed exchange (an expired or
+// lost state slot, an expired code), or shows an error page once
+// maxLoginRoundTrips is exceeded so the browser never loops. The caller
+// deletes the failed sign-in's own slot; other sign-ins' slots stay.
 func retryLogin(w http.ResponseWriter, r *http.Request, trips int, popup bool) {
-	setHostCookie(w, fwdStateCookieBase, "", -1)
 	if trips > maxLoginRoundTrips {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)

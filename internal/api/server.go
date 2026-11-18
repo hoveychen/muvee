@@ -4962,10 +4962,13 @@ type traefikForwardAuth struct {
 // the two).
 var FwdAuthCookieNames = []string{
 	"__Host-muvee_fwd", "__Host-muvee_sso", "__Host-fwd_state", "__Host-fwd_apex_state",
-	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect",
+	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect", "__Host-fwd_login_hint",
 	"muvee_fwd", "muvee_sso", "fwd_state", "fwd_apex_state",
-	"muvee_fwd_signed_out", "fwd_oauth_redirect",
+	"muvee_fwd_signed_out", "fwd_oauth_redirect", "fwd_login_hint",
 	"muvee_fwd_session", "fwd_oauth_state", "fwd_oauth_host", "muvee_invite_token",
+	// Per-sign-in state slots (fwd_state_<hash>, fwd_apex_state_<hash>):
+	// a trailing "*" matches every name with that prefix.
+	"__Host-fwd_state_*", "fwd_state_*", "__Host-fwd_apex_state_*", "fwd_apex_state_*",
 }
 
 // fwdSessionResponseCookies are the subsite session cookies authservice may
