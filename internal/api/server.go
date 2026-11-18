@@ -3422,6 +3422,9 @@ func (s *Server) getProjectDatasets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.requireProjectAccess(w, r, id) {
+		return
+	}
 	pds, err := s.store.GetProjectDatasets(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -3495,9 +3498,43 @@ func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, deployment)
 }
 
+// requireProjectAccess writes 404 and returns false unless the caller may
+// access the project (same semantics as the other project endpoints).
+func (s *Server) requireProjectAccess(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	user := auth.UserFromCtx(r.Context())
+	if user == nil {
+		jsonErr(w, nil, 401)
+		return false
+	}
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return false
+	}
+	return true
+}
+
+// requireDatasetAccess is the dataset counterpart of requireProjectAccess.
+func (s *Server) requireDatasetAccess(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	user := auth.UserFromCtx(r.Context())
+	if user == nil {
+		jsonErr(w, nil, 401)
+		return false
+	}
+	allowed, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return false
+	}
+	return true
+}
+
 func (s *Server) listDeployments(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if !s.requireProjectAccess(w, r, id) {
 		return
 	}
 	deployments, err := s.store.ListDeployments(r.Context(), id)
@@ -4018,6 +4055,9 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.requireDatasetAccess(w, r, id) {
+		return
+	}
 	snaps, err := s.store.ListSnapshotsForDataset(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -4029,6 +4069,9 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listFileHistory(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if !s.requireDatasetAccess(w, r, id) {
 		return
 	}
 	filePath := r.URL.Query().Get("file")
@@ -4650,6 +4693,9 @@ func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.requireProjectAccess(w, r, id) {
+		return
+	}
 	limit := 60
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := fmt.Sscanf(v, "%d", &limit); n == 1 && err == nil {
@@ -4700,6 +4746,9 @@ func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getProjectTraffic(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if !s.requireProjectAccess(w, r, id) {
 		return
 	}
 	limit := 100
