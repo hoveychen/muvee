@@ -29,10 +29,28 @@ type Branch struct {
 	IsDefault bool   `json:"is_default"`
 }
 
+// checkRef rejects refs that git would parse as an option. ref reaches git as
+// a bare positional argument (or as the "ref:path" prefix), so a value like
+// "--output=/some/file" would otherwise make `git log` write arbitrary files.
+func checkRef(ref string) error {
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("invalid ref %q", ref)
+	}
+	for i := 0; i < len(ref); i++ {
+		if c := ref[i]; c < 0x20 || c == 0x7f {
+			return fmt.Errorf("invalid ref %q", ref)
+		}
+	}
+	return nil
+}
+
 // ListTree returns directory entries at the given ref and path.
 func ListTree(repoPath, ref, path string) ([]TreeEntry, error) {
 	if ref == "" {
 		ref = "HEAD"
+	}
+	if err := checkRef(ref); err != nil {
+		return nil, err
 	}
 	// Build the tree-ish: ref or ref:path
 	treeish := ref
@@ -104,6 +122,9 @@ func ReadBlob(repoPath, ref, path string) ([]byte, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
+	if err := checkRef(ref); err != nil {
+		return nil, err
+	}
 	path = strings.TrimPrefix(path, "/")
 	obj := ref + ":" + path
 	cmd := exec.Command("git", "-C", repoPath, "show", obj)
@@ -118,6 +139,9 @@ func ReadBlob(repoPath, ref, path string) ([]byte, error) {
 func ListCommits(repoPath, ref string, limit int) ([]Commit, error) {
 	if ref == "" {
 		ref = "HEAD"
+	}
+	if err := checkRef(ref); err != nil {
+		return nil, err
 	}
 	if limit <= 0 {
 		limit = 20
