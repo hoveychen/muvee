@@ -552,7 +552,7 @@ func TestOAuthCallback_OldStateFormatsAndSharedCookiesRejected(t *testing.T) {
 		"valid f1 but no apex cookie":          callbackRequest(f1),
 		"valid f1 with only legacy cookies":    callbackRequest(f1, &http.Cookie{Name: "fwd_oauth_state", Value: f1}, &http.Cookie{Name: "fwd_oauth_host", Value: "datamap.site-b.test"}),
 		"apex cookie but f1 of another nonce":  callbackRequest(apexStateF1(randomToken(18)), apexCookie(sealed)),
-		"apex cookie but cookie sealed as raw": callbackRequest(f1, apexCookie(sealed[:len(sealed)-1]+"A")),
+		"apex cookie but cookie sealed as raw": callbackRequest(f1, apexCookie(tamperSealed(sealed))),
 		"apex cookie but empty state":          callbackRequest("", apexCookie(sealed)),
 		"apex cookie of another provider": func() *http.Request {
 			o := st
@@ -840,4 +840,18 @@ func mustRead(t *testing.T, file string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// tamperSealed changes one character of a sealed value's MAC so that the
+// decoded MAC always differs. The last character of an unpadded base64 string
+// carries only some significant bits (the decoder ignores the rest), so
+// changing it can leave the decoded bytes, and the MAC, intact; the
+// second-to-last character always carries a full 6 bits.
+func tamperSealed(s string) string {
+	i := len(s) - 2
+	c := byte('A')
+	if s[i] == c {
+		c = 'B'
+	}
+	return s[:i] + string(c) + s[i+1:]
 }
