@@ -30,6 +30,11 @@ type revokeStub struct {
 	revokedIAT  int64
 	revokedSIDs map[string]bool
 	fail        bool
+	// cliRevoked / cliRevokedIAT: the user's CLI-token revocation time point
+	// (users.cli_tokens_revoked_at, BACKLOG-20261117-009), compared with the
+	// cli_iat a kind=cli credential sends. Independent of revoked / revokedIAT.
+	cliRevoked    bool
+	cliRevokedIAT int64
 }
 
 func (s *revokeStub) revokeSID(sid string) {
@@ -66,6 +71,11 @@ func (s *revokeStub) isRevoked(q url.Values) bool {
 	defer s.mu.Unlock()
 	for _, sid := range strings.Split(q.Get("sids"), ",") {
 		if sid != "" && s.revokedSIDs[sid] {
+			return true
+		}
+	}
+	if raw := q.Get("cli_iat"); raw != "" && s.cliRevoked {
+		if iat, err := strconv.ParseInt(raw, 10, 64); err == nil && iat <= s.cliRevokedIAT {
 			return true
 		}
 	}
@@ -521,8 +531,9 @@ func TestVerify_RevocationCheckFailureFailsClosed(t *testing.T) {
 	}
 }
 
-// kind=cli device-flow tokens are out of scope for console logout
-// (BACKLOG-20261117-007) and are not checked against it. A session-kind JWT
+// kind=cli device-flow tokens are never checked against the browser-session
+// logout time point (fwd_sessions_revoked_at); since BACKLOG-20261117-009 they
+// have their own (cli_iat, see cli_revoke_test.go). A session-kind JWT
 // replayed as Bearer is checked too. -007: an unmarked token (no kind claim,
 // signed before kind existed) used to be treated like a session so a replayed
 // pre-upgrade cookie could not dodge console logout; now parseFwdToken accepts
