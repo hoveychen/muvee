@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.7.0">
 <title data-rh="true">ForwardAuth 与项目访问控制 | muvee</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://hoveychen.github.io/muvee/zh/docs/forward-auth"><meta data-rh="true" property="og:locale" content="zh"><meta data-rh="true" property="og:locale:alternate" content="en"><meta data-rh="true" name="docusaurus_locale" content="zh"><meta data-rh="true" name="docsearch:language" content="zh"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="ForwardAuth 与项目访问控制 | muvee"><meta data-rh="true" name="description" content="muvee 支持为已部署的应用开启项目级身份验证。启用后，所有访问 .domain.com 的用户都会先被重定向到你配置的 OAuth 提供商（Google、飞书、企业微信、钉钉等）进行登录。"><meta data-rh="true" property="og:description" content="muvee 支持为已部署的应用开启项目级身份验证。启用后，所有访问 .domain.com 的用户都会先被重定向到你配置的 OAuth 提供商（Google、飞书、企业微信、钉钉等）进行登录。"><link data-rh="true" rel="icon" href="/muvee/zh/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://hoveychen.github.io/muvee/zh/docs/forward-auth"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/forward-auth" hreflang="en"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/zh/docs/forward-auth" hreflang="zh"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/forward-auth" hreflang="x-default"><link rel="stylesheet" href="/muvee/zh/assets/css/styles.57b27fd8.css">
-<script src="/muvee/zh/assets/js/runtime~main.4648e7e4.js" defer="defer"></script>
+<script src="/muvee/zh/assets/js/runtime~main.112c1987.js" defer="defer"></script>
 <script src="/muvee/zh/assets/js/main.53f0f6ff.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
@@ -36,18 +36,19 @@
 <li>之后访问第二个项目时重复第 1–4 步；只要 apex 上有 SSO 会话，且第二个项目启用了该 SSO 登录所用的提供商，就静默完成；否则走该项目自己的登录流程（显示登录页，或直接跳到其唯一的提供商）。</li>
 <li>后续请求：验证 JWT，检查邮箱域名，返回 <code>200</code></li>
 </ol>
-<p>提供商的重定向 URI 不变（<code>https://BASE_DOMAIN/_oauth/&lt;provider&gt;</code>），无需新增 URI。apex 不再提供登录页：<code>BASE_DOMAIN/_oauth/login</code> 返回 <code>400</code>，登录总是从用户正在访问的站点发起。授权码兑换失败（例如多标签页并发）时登录页会重试，超过 2 次则显示错误 页而不是循环。本次行为发布时正在进行中的登录会失效，用户重新点一次登录即可。</p>
+<p>提供商的重定向 URI 不变（<code>https://BASE_DOMAIN/_oauth/&lt;provider&gt;</code>），无需新增 URI。apex 不再提供登录页：<code>BASE_DOMAIN/_oauth/login</code> 返回 <code>400</code>，登录总是从用户正在访问的站点发起。授权码兑换失败（例如授权码过期）时登录页会重试，超过 2 次则显示错误页 而不是循环。本次行为发布时正在进行中的登录会失效，用户重新点一次登录即可。</p>
+<p><strong>登录 state。</strong> 每次登录在子站（<code>__Host-fwd_state_&lt;hash&gt;</code>）和 apex（<code>__Host-fwd_apex_state_&lt;hash&gt;</code>）各有一个独立的短期 state cookie，名字由该次登录的 state 派生，所以同一浏览器同时发起的多次登录（两个标签页、浏览器预加载出的重复请求）不会互相覆盖。用户在提供商页面最多可停留 <strong>60 分钟</strong>。若回调到达 apex 时 state 对不上（已过期、已用过、来自另一个浏览器），提供商返回的授权码会被直接丢弃，浏览器被送回它最近一次发起登录的站点登录入口（apex 上的 <code>__Host-fwd_login_hint</code>，跳转前会重新校验它是同一基域下的 muvee 站点）重新登录——提供商通常仍处于登录状态，一闪而过。10 分钟内最多自动恢复 2 次；超出次数、或 apex 不知道目标站点时，显示一个提示页，请用户回到原网站重新登录。</p>
 <p><strong>升级影响。</strong> 会话令牌现在必须带上其签发对应的项目（<code>aud</code>），因此部署本版本后，所有现存的子站会话在下一次请求时都会被拒绝。每个用户首次访问任一项目时需经提供商登录一次，之后其他项目凭 apex 的 SSO 静默登录。本版本之前签发的设备流（CLI）令牌没有 <code>aud</code>，同样会被立即拒绝；CLI 用户需要对项目主机重新走一遍设备流。</p>
 <table><thead><tr><th>凭证</th><th>Cookie（生产）</th><th>有效期</th></tr></thead><tbody><tr><td>子站会话</td><td>各项目主机上的 <code>__Host-muvee_fwd</code></td><td>OAuth 登录：12 小时滑动（剩余不足 6 小时时重新签发）；密码 / 短信登录：固定 7 天，不续期</td></tr><tr><td>中心 SSO 会话</td><td>仅在 apex 上的 <code>__Host-muvee_sso</code></td><td>7 天滑动（最多每天续一次，保留最初登录时间）</td></tr></tbody></table>
 <p><code>__Host-</code> Cookie 由浏览器强制要求：仅限本主机（无 <code>Domain</code>）、<code>Secure</code>、<code>Path=/</code>。SSO Cookie 不会发送给任何项目。旧版本设置在基域上的 Cookie（<code>muvee_fwd_session</code> 等）不再写入，并会在登出、会话被拒绝、登录完成时删除。在纯 <code>http</code> 的开发平台上（<code>FORWARD_AUTH_BASE_URL</code> 以 <code>http://</code> 开头且 <code>FWD_INSECURE_DEV_COOKIES=1</code>），Cookie 回退为不带 <code>__Host-</code> 前缀的名称；生产环境不可用。</p>
 <p>持续访问的用户会通过滑动窗口一直保持登录；子站会话过期后，只要 apex 的 SSO 仍有效就会静默续上，SSO 也过期时才会看到登录页。演示账号（密码）和短信登录的会话例外：它们直接在子域名上完成登录，不产生 SSO 会话（因此不会让用户在其他项目无感登录），并保持固定 7 天有效期：每次请求都不会重新校验它们背后的账号或手机号授权，固定有效期是收回授权的唯一手段。</p>
 <p>邀请链接用法不变：邀请 token 随回跳地址带回，在验证时就地消费，不再通过 Cookie 传递。</p>
 <h3 class="anchor anchorWithStickyNavbar_pE4O" id="登出">登出<a href="#登出" class="hash-link" aria-label="登出的直接链接" title="登出的直接链接">​</a></h3>
-<p><code>GET {project}.domain.com/_oauth/logout</code>（可带 <code>?redirect=</code>，只允许本站路径或本平台域名下的 <code>https</code> 地址，否则落到 <code>/_oauth/logged-out</code>）会清除该站点的 Cookie，吊销本会话<strong>及其所属的 SSO 会话</strong>，并写入「已登出」提示。由同一次 SSO 签出的其他项目会话在下一次请求时失效并显示已登出页，因此在一个项目登出就等于登出该基域下的全部项目。它不会登出 Google 等身份提供商本身。存在该提示 Cookie 时，登录页会显示已登出页，而不会静默把用户重新登录。</p>
+<p><code>GET {project}.domain.com/_oauth/logout</code>（可带 <code>?redirect=</code>，只允许本站路径或本平台域名下的 <code>https</code> 地址，否则落到 <code>/_oauth/logged-out</code>）会清除该站点的 Cookie，吊销本会话<strong>及其所属的 SSO 会话</strong>，并写入「已登出」提示。由同一次 SSO 签出的其他项目会话在下一次请求时失效并显示已登出页，因此在一个项目登出就等于登出该基域下的全部项目。它不会登出 Google 等身份提供商本身。存在该  提示 Cookie 时，登录页会显示已登出页，而不会静默把用户重新登录。</p>
 <p>若请求带有 <code>Sec-Fetch-Site</code> 且不是 <code>same-origin</code>（例如其他项目或外站页面上的登出链接），会先显示确认页，需用户点击确认。在地址栏直接输入或通过书签打开（<code>Sec-Fetch-Site: none</code>）同样会出确认页；同一项目页面上的登出链接则不会。控制台登出仍会让该用户的全部项目会话失效。</p>
 <h3 class="anchor anchorWithStickyNavbar_pE4O" id="自定义域名与别名">自定义域名与别名<a href="#自定义域名与别名" class="hash-link" aria-label="自定义域名与别名的直接链接" title="自定义域名与别名的直接链接">​</a></h3>
 <p>仅支持在平台基域下的主机上登录。不属于任何基域的自定义域名无法通过 ForwardAuth 登录，基域的 apex 也不能登记为项目别名（server 会拒绝）。</p>
-<p>会话缺失或过期 时，页面加载（第 4 步）会被重定向到登录页；而页面脚本发起的 <code>fetch</code> / XHR
+<p>会话缺失或过期时，页面加载（第 4 步）会被重定向到登录页；而页面脚本发起的 <code>fetch</code> / XHR
 请求会收到 <code>401 Unauthorized</code>，带 <code>X-Muvee-Auth: login-required</code> 头和 JSON 响应体
 <code>{&quot;error&quot;:&quot;login_required&quot;,&quot;login_url&quot;:&quot;…&quot;}</code>。如果把接口请求也重定向到 HTML 登录页，SPA
 只会把 HTML 当 JSON 解析然后报错；401 则可以被识别和处理。每个项目页面都已经由注入的

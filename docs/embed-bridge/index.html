@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.7.0">
 <title data-rh="true">Embed Bridge | muvee</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://hoveychen.github.io/muvee/docs/embed-bridge"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" property="og:locale:alternate" content="zh"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Embed Bridge | muvee"><meta data-rh="true" name="description" content="When a host page (e.g. agent-workspace&#x27;s /embed view) loads a"><meta data-rh="true" property="og:description" content="When a host page (e.g. agent-workspace&#x27;s /embed view) loads a"><link data-rh="true" rel="icon" href="/muvee/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://hoveychen.github.io/muvee/docs/embed-bridge"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/embed-bridge" hreflang="en"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/zh/docs/embed-bridge" hreflang="zh"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/embed-bridge" hreflang="x-default"><link rel="stylesheet" href="/muvee/assets/css/styles.57b27fd8.css">
-<script src="/muvee/assets/js/runtime~main.125c263f.js" defer="defer"></script>
+<script src="/muvee/assets/js/runtime~main.9c0bdd1d.js" defer="defer"></script>
 <script src="/muvee/assets/js/main.a0f63c22.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
@@ -85,7 +85,9 @@ cannot loop.</p>
 forwarded to your project, so tenant code never sees muvee&#x27;s session credentials. The list
 (<code>FwdAuthCookieNames</code> in <code>internal/api/server.go</code>) covers the host-only <code>__Host-</code> cookies
 (<code>__Host-muvee_fwd</code>, <code>__Host-muvee_sso</code>, <code>__Host-fwd_state</code>, <code>__Host-fwd_apex_state</code>,
-<code>__Host-muvee_fwd_signed_out</code>, <code>__Host-fwd_oauth_redirect</code>), their plain-http development names
+<code>__Host-muvee_fwd_signed_out</code>, <code>__Host-fwd_oauth_redirect</code>, <code>__Host-fwd_login_hint</code>), the per-sign-in
+state cookies through prefix entries (<code>__Host-fwd_state_*</code>, <code>__Host-fwd_apex_state_*</code>: an entry ending
+in <code>*</code> strips every cookie whose name starts with the text before it), their plain-http development names
 without the prefix, and the legacy base-domain cookies of earlier releases (<code>muvee_fwd_session</code>,
 <code>fwd_oauth_state</code>, <code>fwd_oauth_host</code>, <code>muvee_invite_token</code>). Routers that skip ForwardAuth (bypass
 paths) get a strip-only instance with the same list. See
