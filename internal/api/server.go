@@ -5686,6 +5686,32 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 // Traefik ForwardAuth injects. It must Set/Del every header in the set (not just
 // X-Forwarded-User) so a caller cannot smuggle a spoofed name/avatar/provider
 // through `projects curl -H`.
+// platformCookieNames are cookies the panel sets on its own origin. They must
+// never be forwarded to tenant containers (muvee_session is a full platform
+// login).
+var platformCookieNames = map[string]bool{
+	"muvee_session":             true,
+	"oauth_state":               true,
+	"muvee_invite_token":        true,
+	"muvee_post_login_redirect": true,
+}
+
+// stripPlatformCookies rewrites the Cookie header without platform cookies,
+// keeping any cookies the project itself set under its proxy path.
+func stripPlatformCookies(h http.Header) {
+	req := &http.Request{Header: h}
+	var kept []string
+	for _, c := range req.Cookies() {
+		if !platformCookieNames[c.Name] {
+			kept = append(kept, c.Name+"="+c.Value)
+		}
+	}
+	h.Del("Cookie")
+	if len(kept) > 0 {
+		h.Set("Cookie", strings.Join(kept, "; "))
+	}
+}
+
 func applyForwardedUserHeaders(h http.Header, user *store.User) {
 	// auth.ASCIIHeaderValue, not the raw value: a non-ASCII display name is
 	// deprecated obs-text that a strict upstream rejects at the parser, killing
@@ -5743,6 +5769,9 @@ func (s *Server) handleProjectProxy(w http.ResponseWriter, r *http.Request) {
 			applyForwardedUserHeaders(req.Header, user)
 			// Remove Authorization header so the API token is not leaked to the container.
 			req.Header.Del("Authorization")
+			// The proxy runs on the panel origin, so the browser attaches the
+			// panel session cookie; never hand it to tenant code.
+			stripPlatformCookies(req.Header)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("proxy error (project %s): %v", projectID, err)
