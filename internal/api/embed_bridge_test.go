@@ -80,6 +80,8 @@ func TestFwdAuthCookieNamesCoverage(t *testing.T) {
 		"muvee_fwd", "muvee_sso", "fwd_state", "fwd_apex_state",
 		"muvee_fwd_session", "fwd_oauth_state", "fwd_oauth_host", "muvee_invite_token",
 		"muvee_fwd_signed_out", "fwd_oauth_redirect",
+		"__Host-fwd_login_hint", "fwd_login_hint",
+		"__Host-fwd_state_*", "fwd_state_*", "__Host-fwd_apex_state_*", "fwd_apex_state_*",
 	}
 	have := map[string]bool{}
 	for _, n := range FwdAuthCookieNames {
