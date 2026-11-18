@@ -386,7 +386,13 @@
       "expires": "EXPIRES",
       "lastUsed": "LAST USED",
       "created": "CREATED"
-    }
+    },
+    "cliTitle": "CLI sign-in tokens",
+    "cliHint": "Tools that signed in to a project site through the device authorization flow (POST https://<site>/_oauth/device/code) hold a CLI token. Signing out of the console voids all of them; use the button below to void them without signing out. Browser sessions and the personal access tokens above are not affected. A tool whose token was voided gets a 401 and has to run the device flow again.",
+    "cliRevokeAll": "Revoke all CLI tokens",
+    "cliRevoking": "Revoking…",
+    "cliRevokeConfirm": "Revoke every CLI token issued to your account on every project site? Tools using them will get a 401 until they run the device authorization flow again. You stay signed in.",
+    "cliRevoked": "All CLI tokens issued so far are revoked."
   },
   "datasets": {
     "sectionLabel": "DATA WAREHOUSE",

@@ -199,6 +199,13 @@ export const api = {
     delete: (tokenId: string) => request(`/api/me/tokens/${tokenId}`, { method: 'DELETE' }),
   },
 
+  // CLI device-flow tokens are stateless and never listed: this voids every
+  // one issued to the caller so far (console session and subsite sessions
+  // stay). BACKLOG-20261117-009.
+  meCLITokens: {
+    revokeAll: () => request<{ status: string }>('/api/me/cli-tokens/revoke', { method: 'POST' }),
+  },
+
   secrets: {
     list: () => request<import('./types').Secret[]>('/api/secrets'),
     create: (data: { name: string; type: import('./types').SecretType; value: string; registry_addr?: string; registry_username?: string }) =>
