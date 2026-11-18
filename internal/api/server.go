@@ -64,7 +64,7 @@ type Server struct {
 	serverVersion      string   // git-release version baked into the binary, surfaced via /api/runtime/config
 	tunnels            *tunnelRegistry
 	cliPending         sync.Map // state -> cliPendingEntry
-	oauthPending       sync.Map // state -> provider name (string); fallback when cookie is missing
+	oauthPending       sync.Map // state -> oauthPendingEntry; fallback when cookie is missing (cross-host callback)
 
 	// domainOnlyMu guards domainOnlyPrefixes, a cache of the current set of
 	// domain_only project subdomains. Refreshed whenever the Traefik config is
@@ -1328,7 +1328,7 @@ func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 	}
-	s.oauthPending.Store(state, providerName)
+	s.storeOAuthPending(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -1351,10 +1351,41 @@ func safePostLoginRedirect(dest string) string {
 	return dest
 }
 
+// pendingLoginTTL bounds how long an unfinished OAuth/CLI login state stays
+// valid. Without it the in-memory maps grow forever from unauthenticated
+// /auth/*/login hits, and a harvested state never expires.
+const pendingLoginTTL = 10 * time.Minute
+
+type oauthPendingEntry struct {
+	Provider string
+	Created  time.Time
+}
+
+func pendingExpired(created time.Time) bool { return time.Since(created) > pendingLoginTTL }
+
+// storeOAuthPending records a login state and opportunistically evicts
+// expired entries from both pending maps.
+func (s *Server) storeOAuthPending(state, provider string) {
+	s.oauthPending.Range(func(k, v any) bool {
+		if pendingExpired(v.(oauthPendingEntry).Created) {
+			s.oauthPending.Delete(k)
+		}
+		return true
+	})
+	s.cliPending.Range(func(k, v any) bool {
+		if pendingExpired(v.(cliPendingEntry).Created) {
+			s.cliPending.Delete(k)
+		}
+		return true
+	})
+	s.oauthPending.Store(state, oauthPendingEntry{Provider: provider, Created: time.Now()})
+}
+
 // cliPendingEntry carries the state the server needs to complete a CLI login
 // after the OAuth provider redirects back to us.
 type cliPendingEntry struct {
-	Port     string
+	Port     int
+	Created  time.Time
 	Hostname string // machine name of the CLI caller; used to label the issued API token
 }
 
@@ -1363,9 +1394,11 @@ type cliPendingEntry struct {
 // ?hostname=HOSTNAME used to label the issued token.
 // Defaults to the first configured provider when provider is omitted.
 func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
-	port := r.URL.Query().Get("port")
-	if port == "" {
-		http.Error(w, "port required", http.StatusBadRequest)
+	// port ends up inside an inline <script> on the callback page, so it must
+	// be a plain TCP port number — anything else is an XSS vector.
+	port, err := strconv.Atoi(r.URL.Query().Get("port"))
+	if err != nil || port < 1 || port > 65535 {
+		http.Error(w, "port must be a number between 1 and 65535", http.StatusBadRequest)
 		return
 	}
 	providerName := r.URL.Query().Get("provider")
@@ -1382,13 +1415,13 @@ func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 	if len(hostname) > 64 {
 		hostname = hostname[:64]
 	}
-	s.cliPending.Store(state, cliPendingEntry{Port: port, Hostname: hostname})
+	s.cliPending.Store(state, cliPendingEntry{Port: port, Created: time.Now(), Hostname: hostname})
 	http.SetCookie(w, &http.Cookie{
 		Name: "oauth_state", Value: providerName + ":" + state,
 		MaxAge: 300, HttpOnly: true, Path: "/",
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
-	s.oauthPending.Store(state, providerName)
+	s.storeOAuthPending(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -1406,7 +1439,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	}
 	// Fallback: verify state against server-side store when cookie is missing (e.g. incognito)
 	if state == "" {
-		if prov, ok := s.oauthPending.Load(queryState); ok && prov.(string) == providerName {
+		if v, ok := s.oauthPending.Load(queryState); ok && v.(oauthPendingEntry).Provider == providerName && !pendingExpired(v.(oauthPendingEntry).Created) {
 			state = queryState
 		}
 	}
@@ -1445,7 +1478,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Check if this was initiated by the CLI device-flow
-	if entryVal, ok := s.cliPending.LoadAndDelete(state); ok {
+	if entryVal, ok := s.cliPending.LoadAndDelete(state); ok && !pendingExpired(entryVal.(cliPendingEntry).Created) {
 		entry := entryVal.(cliPendingEntry)
 		tokenName := "CLI Token"
 		if entry.Hostname != "" {
@@ -1459,7 +1492,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 		port := entry.Port
 		// Show the token on the page for remote/headless use, and also attempt
 		// the local redirect via JS so the normal flow still works seamlessly.
-		callbackURL := fmt.Sprintf("http://127.0.0.1:%s?token=%s", port, apiToken.Token)
+		callbackURL := fmt.Sprintf("http://127.0.0.1:%d?token=%s", port, url.QueryEscape(apiToken.Token))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, `<html><head><meta charset="utf-8"></head>
 <body style="font-family:system-ui,monospace;background:#0f0f0f;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto">
