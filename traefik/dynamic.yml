@@ -54,7 +54,10 @@ http:
     # returns 404. Combined with strip-internal-key this gives belt-and-
     # suspenders defense even if a future endpoint forgets to enforce the
     # key check. Direct localhost:8080 access (intra-host) is unaffected.
+    # /api/traefik/* (the HTTP-provider config: every project host, backend
+    # IP:port and bypass path) is also intra-network only — Traefik fetches it
+    # straight from muvee-server:8080, never through this edge.
     block-internal-api:
       replacePathRegex:
-        regex: "^/api/internal/(.*)$"
+        regex: "^/api/(?:internal|traefik)/(.*)$"
         replacement: "/__blocked_by_edge__/$1"
