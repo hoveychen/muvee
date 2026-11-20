@@ -88,7 +88,7 @@ func centralCallback(t *testing.T, provider string) (*http.Request, *http.Cookie
 	sr := httptest.NewRequest(http.MethodGet, "/_oauth/login", nil)
 	sr.Host = callbackSubsiteHost
 	nonce := writeSubsiteState(rec, sr, 0, false)
-	subsite := findCookie(rec.Result().Cookies(), fwdCookieName(fwdStateCookieBase))
+	subsite := findCookie(rec.Result().Cookies(), subsiteSlotName(nonce))
 	if subsite == nil {
 		t.Fatal("writeSubsiteState set no subsite state cookie")
 	}
@@ -97,7 +97,7 @@ func centralCallback(t *testing.T, provider string) (*http.Request, *http.Cookie
 	f1 := apexStateF1(st.Nonce)
 	r := httptest.NewRequest(http.MethodGet, "/_oauth/"+provider+"?code=authcode&state="+url.QueryEscape(f1), nil)
 	r.Host = callbackCentralHost
-	r.AddCookie(&http.Cookie{Name: fwdCookieName(apexStateCookieBase), Value: sealValue("apex-state", st)})
+	r.AddCookie(&http.Cookie{Name: apexSlotName(f1), Value: sealValue("apex-state", st)})
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("provider", provider)
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx)), subsite, f1

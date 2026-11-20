@@ -27,6 +27,26 @@ func withStateSecret(t *testing.T) {
 // production (non-dev) cookie mode: "__Host-" + base.
 func hostCookieName(base string) string { return fwdCookieName(base) }
 
+// subsiteSlotName / apexSlotName are the on-the-wire names of one sign-in's
+// state cookie: the subsite slot keyed by its nonce, the central slot keyed
+// by its provider state f1.
+func subsiteSlotName(nonce string) string {
+	return hostCookieName(stateSlotBase(fwdStateCookieBase, nonce))
+}
+func apexSlotName(f1 string) string { return hostCookieName(stateSlotBase(apexStateCookieBase, f1)) }
+
+// slotSetCookies returns the Set-Cookie headers of w that write (deleted=false)
+// or delete (deleted=true) a state slot of base.
+func slotSetCookies(w *httptest.ResponseRecorder, base string, deleted bool) []*http.Cookie {
+	var out []*http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if strings.HasPrefix(c.Name, hostCookieName(base)+"_") && (c.MaxAge < 0) == deleted {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // subsiteReq is a request arriving on a subsite (tenant) host.
 func subsiteReq(host string) *http.Request {
 	r := httptest.NewRequest("GET", "/_oauth/login", nil)
@@ -79,17 +99,17 @@ func TestSubsiteState_RoundTrip(t *testing.T) {
 	if strings.ContainsAny(nonce, "&=+/ ") || len(nonce) == 0 {
 		t.Fatalf("nonce %q is not URL-safe / empty", nonce)
 	}
-	c := findCookie(w.Result().Cookies(), hostCookieName(fwdStateCookieBase))
+	c := findCookie(w.Result().Cookies(), subsiteSlotName(nonce))
 	if c == nil {
-		t.Fatalf("no %s cookie written: %v", hostCookieName(fwdStateCookieBase), w.Result().Cookies())
+		t.Fatalf("no %s cookie written: %v", subsiteSlotName(nonce), w.Result().Cookies())
 	}
-	if c.Name != "__Host-fwd_state" || c.Domain != "" || c.Path != "/" || !c.Secure || !c.HttpOnly ||
+	if !strings.HasPrefix(c.Name, "__Host-fwd_state_") || len(c.Name) != len("__Host-fwd_state_")+12 || c.Domain != "" || c.Path != "/" || !c.Secure || !c.HttpOnly ||
 		c.SameSite != http.SameSiteLaxMode || c.MaxAge <= 0 || c.MaxAge > int(loginStateLifetime.Seconds()) {
 		t.Fatalf("subsite state cookie is not a host-only __Host- cookie: %+v", c)
 	}
 	r := subsiteReq(host)
 	carryCookies(w, r)
-	st, ok := readSubsiteState(r)
+	st, ok := readSubsiteState(r, nonce)
 	if !ok {
 		t.Fatal("fresh subsite state rejected")
 	}
@@ -111,18 +131,18 @@ func TestSubsiteState_RoundTrip(t *testing.T) {
 func TestSubsiteState_BoundToHost(t *testing.T) {
 	withStateSecret(t)
 	w := httptest.NewRecorder()
-	writeSubsiteState(w, subsiteReq("datamap.site-b.test"), 0, false)
+	nonce := writeSubsiteState(w, subsiteReq("datamap.site-b.test"), 0, false)
 	for _, other := range []string{"evil.site-b.test", "datamap.site-a.test", "site-b.test"} {
 		r := subsiteReq(other)
 		carryCookies(w, r)
-		if _, ok := readSubsiteState(r); ok {
+		if _, ok := readSubsiteState(r, nonce); ok {
 			t.Errorf("state minted on datamap.site-b.test accepted on %s", other)
 		}
 	}
 	// Host comparison is case-insensitive (NormalizeHost), same host still ok.
 	r := subsiteReq("DataMap.Site-B.test")
 	carryCookies(w, r)
-	if _, ok := readSubsiteState(r); !ok {
+	if _, ok := readSubsiteState(r, nonce); !ok {
 		t.Error("same host with different case rejected")
 	}
 }
@@ -137,10 +157,10 @@ func TestSubsiteState_RejectsTamperedExpiredForeign(t *testing.T) {
 		for _, c := range cookies {
 			r.AddCookie(c)
 		}
-		_, ok := readSubsiteState(r)
+		_, ok := readSubsiteState(r, good.Nonce)
 		return ok
 	}
-	name := hostCookieName(fwdStateCookieBase)
+	name := subsiteSlotName(good.Nonce)
 	if !read(&http.Cookie{Name: name, Value: valid}) {
 		t.Fatal("control: valid sealed state rejected")
 	}
@@ -171,7 +191,11 @@ func TestSubsiteState_RejectsTamperedExpiredForeign(t *testing.T) {
 	}
 	// Names a sibling subdomain (or an old release) could plant with
 	// Domain=<base>: only the __Host- name is honoured.
-	for _, n := range []string{"fwd_state", "fwd_oauth_state", "fwd_oauth_host", "__Host-fwd_apex_state"} {
+	// The pre-slot single __Host-fwd_state and another nonce's slot are not
+	// this sign-in's slot either.
+	for _, n := range []string{"fwd_state", "fwd_oauth_state", "fwd_oauth_host", "__Host-fwd_apex_state",
+		stateSlotBase(fwdStateCookieBase, good.Nonce), "__Host-fwd_state", subsiteSlotName("other-nonce"),
+		apexSlotName(good.Nonce)} {
 		if read(&http.Cookie{Name: n, Value: valid}) {
 			t.Errorf("state accepted from cookie %q", n)
 		}
@@ -188,12 +212,12 @@ func TestSealedStates_RejectLoginTokenState(t *testing.T) {
 	withStateSecret(t)
 	lt, _ := signState(stateClaims{Mode: "login-token", LoginToken: "x"})
 	r := subsiteReq("datamap.site-b.test")
-	r.AddCookie(&http.Cookie{Name: hostCookieName(fwdStateCookieBase), Value: lt})
-	if _, ok := readSubsiteState(r); ok {
+	r.AddCookie(&http.Cookie{Name: subsiteSlotName(lt), Value: lt})
+	if _, ok := readSubsiteState(r, lt); ok {
 		t.Error("login-token state accepted as subsite state")
 	}
 	r = subsiteReq("site-b.test")
-	r.AddCookie(&http.Cookie{Name: hostCookieName(apexStateCookieBase), Value: lt})
+	r.AddCookie(&http.Cookie{Name: apexSlotName(lt), Value: lt})
 	if _, ok := readApexState(httptest.NewRecorder(), r, lt); ok {
 		t.Error("login-token state accepted as apex state")
 	}
@@ -252,8 +276,10 @@ func centralReq(withState string, cookies ...*http.Cookie) (*httptest.ResponseRe
 	return httptest.NewRecorder(), r
 }
 
-func apexCookie(v string) *http.Cookie {
-	return &http.Cookie{Name: hostCookieName(apexStateCookieBase), Value: v}
+// apexCookie is the central state cookie a browser holds for the sign-in
+// whose provider state is f1.
+func apexCookie(f1, v string) *http.Cookie {
+	return &http.Cookie{Name: apexSlotName(f1), Value: v}
 }
 
 func TestReadApexState(t *testing.T) {
@@ -263,12 +289,12 @@ func TestReadApexState(t *testing.T) {
 	f1 := apexStateF1(st.Nonce)
 
 	isCleared := func(w *httptest.ResponseRecorder) bool {
-		c := findCookie(w.Result().Cookies(), hostCookieName(apexStateCookieBase))
+		c := findCookie(w.Result().Cookies(), apexSlotName(f1))
 		return c != nil && c.MaxAge < 0 && c.Value == ""
 	}
 
 	t.Run("valid and single use", func(t *testing.T) {
-		w, r := centralReq(f1, apexCookie(sealed))
+		w, r := centralReq(f1, apexCookie(f1, sealed))
 		got, ok := readApexState(w, r, f1)
 		if !ok || got != st {
 			t.Fatalf("readApexState = %+v, %v; want %+v", got, ok, st)
@@ -284,7 +310,7 @@ func TestReadApexState(t *testing.T) {
 			t.Fatal("second use of the same callback accepted")
 		}
 	})
-	t.Run("f1 mismatch rejected and cookie burned", func(t *testing.T) {
+	t.Run("f1 mismatch rejected, other sign-ins' slots untouched", func(t *testing.T) {
 		for label, q := range map[string]string{
 			"other nonce's f1":             apexStateF1(randomToken(18)),
 			"empty":                        "",
@@ -292,13 +318,25 @@ func TestReadApexState(t *testing.T) {
 			"legacy numeric":               fmt.Sprintf("%d", time.Now().UnixNano()),
 			"device- legacy":               "device-" + st.Nonce,
 		} {
-			w, r := centralReq(q, apexCookie(sealed))
+			// The browser holds this sign-in's genuine slot; a callback with
+			// another state must neither accept it nor delete it.
+			w, r := centralReq(q, apexCookie(f1, sealed))
 			if _, ok := readApexState(w, r, q); ok {
 				t.Errorf("%s: accepted", label)
 			}
-			if !isCleared(w) {
-				t.Errorf("%s: cookie not cleared on a failed attempt", label)
+			if c := findCookie(w.Result().Cookies(), apexSlotName(f1)); c != nil {
+				t.Errorf("%s: another sign-in's slot was touched: %+v", label, c)
 			}
+		}
+		// A value under the callback's own slot that does not match its f1
+		// (sealed for another nonce) is refused and burned.
+		q := apexStateF1(randomToken(18))
+		w, r := centralReq(q, apexCookie(q, sealed))
+		if _, ok := readApexState(w, r, q); ok {
+			t.Fatal("slot holding another nonce's state accepted")
+		}
+		if c := findCookie(w.Result().Cookies(), apexSlotName(q)); c == nil || c.MaxAge >= 0 {
+			t.Fatalf("mismatching slot not burned: %+v", c)
 		}
 	})
 	t.Run("cookie missing rejected", func(t *testing.T) {
@@ -316,7 +354,7 @@ func TestReadApexState(t *testing.T) {
 			"other purpose": sealValue("fwd-state", st),
 			"garbage":       "x",
 		} {
-			w, r := centralReq(f1, apexCookie(v))
+			w, r := centralReq(f1, apexCookie(f1, v))
 			if _, ok := readApexState(w, r, f1); ok {
 				t.Errorf("%s: accepted", label)
 			}
@@ -330,6 +368,8 @@ func TestReadApexState(t *testing.T) {
 			"numeric state + shared fwd_oauth_state": {{Name: "fwd_oauth_state", Value: legacy}},
 			"shared state + host cookie":             {{Name: "fwd_oauth_state", Value: legacy}, {Name: "fwd_oauth_host", Value: "datamap.site-b.test"}},
 			"bare-name apex cookie":                  {{Name: apexStateCookieBase, Value: sealed}},
+			"bare-name apex slot (dev name)":         {{Name: stateSlotBase(apexStateCookieBase, f1), Value: sealed}},
+			"pre-slot single __Host- apex cookie":    {{Name: hostCookieName(apexStateCookieBase), Value: sealed}},
 		} {
 			w, r := centralReq(legacy, cookies...)
 			if _, ok := readApexState(w, r, legacy); ok {
@@ -343,7 +383,7 @@ func TestReadApexState(t *testing.T) {
 	})
 	jwtSecret = []byte("other-secret")
 	t.Run("different secret rejected", func(t *testing.T) {
-		w, r := centralReq(f1, apexCookie(sealed))
+		w, r := centralReq(f1, apexCookie(f1, sealed))
 		if _, ok := readApexState(w, r, f1); ok {
 			t.Fatal("cookie sealed with another secret accepted")
 		}
@@ -377,7 +417,7 @@ func TestLoginPage_ProviderStartUsesSubsiteState(t *testing.T) {
 	}
 	r2 := subsiteReq("datamap.site-b.test")
 	carryCookies(w, r2)
-	st, ok := readSubsiteState(r2)
+	st, ok := readSubsiteState(r2, q.Get("state"))
 	if !ok || st.Nonce != q.Get("state") {
 		t.Fatalf("__Host-fwd_state does not carry the forwarded state: ok=%v st=%+v state=%q", ok, st, q.Get("state"))
 	}
@@ -408,7 +448,8 @@ func TestSSOStart_WritesApexStateAndSendsF1(t *testing.T) {
 	if w.Code != http.StatusFound {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	c := findCookie(w.Result().Cookies(), hostCookieName(apexStateCookieBase))
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	c := findCookie(w.Result().Cookies(), apexSlotName(loc.Query().Get("state")))
 	if c == nil || c.Domain != "" || !c.Secure || !c.HttpOnly || c.Path != "/" || c.MaxAge <= 0 {
 		t.Fatalf("apex state cookie %+v is not a host-only __Host- cookie", c)
 	}
@@ -420,7 +461,6 @@ func TestSSOStart_WritesApexStateAndSendsF1(t *testing.T) {
 		st.Mode != "login" || st.Provider != "faketwitter" || st.Nonce == "" {
 		t.Fatalf("apex state = %+v", st)
 	}
-	loc, _ := url.Parse(w.Header().Get("Location"))
 	if got := loc.Query().Get("state"); got != apexStateF1(st.Nonce) {
 		t.Fatalf("provider state = %q, want f1 of the cookie nonce %q", got, apexStateF1(st.Nonce))
 	}
@@ -492,7 +532,7 @@ func TestOAuthCallback_SignsCentralSSOAndRedirectsToStartingHost(t *testing.T) {
 	f1 := apexStateF1(st.Nonce)
 	w := httptest.NewRecorder()
 	handleOAuthCallback(w, callbackRequest(f1,
-		apexCookie(sealValue("apex-state", st)),
+		apexCookie(f1, sealValue("apex-state", st)),
 		&http.Cookie{Name: "fwd_oauth_redirect", Value: "https://evil.site-b.test/phish"},
 		&http.Cookie{Name: hostCookieName(fwdRedirectCookieBase), Value: "https://evil.site-b.test/phish"},
 		&http.Cookie{Name: "fwd_oauth_host", Value: "evil.site-b.test"},
@@ -526,7 +566,7 @@ func TestOAuthCallback_SignsCentralSSOAndRedirectsToStartingHost(t *testing.T) {
 	if _, err := parseFwdToken(sso.Value, "project:p1", fwdKindSession, fwdKindSSO); err == nil {
 		t.Fatal("SSO token accepted as a project session")
 	}
-	if c := findCookie(w.Result().Cookies(), hostCookieName(apexStateCookieBase)); c == nil || c.MaxAge >= 0 {
+	if c := findCookie(w.Result().Cookies(), apexSlotName(f1)); c == nil || c.MaxAge >= 0 {
 		t.Fatalf("apex state cookie not burned: %+v", c)
 	}
 	// The central callback never issues a subsite session itself.
@@ -551,13 +591,13 @@ func TestOAuthCallback_OldStateFormatsAndSharedCookiesRejected(t *testing.T) {
 			&http.Cookie{Name: "fwd_oauth_host", Value: "datamap.site-b.test"}),
 		"valid f1 but no apex cookie":          callbackRequest(f1),
 		"valid f1 with only legacy cookies":    callbackRequest(f1, &http.Cookie{Name: "fwd_oauth_state", Value: f1}, &http.Cookie{Name: "fwd_oauth_host", Value: "datamap.site-b.test"}),
-		"apex cookie but f1 of another nonce":  callbackRequest(apexStateF1(randomToken(18)), apexCookie(sealed)),
-		"apex cookie but cookie sealed as raw": callbackRequest(f1, apexCookie(tamperSealed(sealed))),
-		"apex cookie but empty state":          callbackRequest("", apexCookie(sealed)),
+		"apex cookie but f1 of another nonce":  callbackRequest(apexStateF1(randomToken(18)), apexCookie(f1, sealed)),
+		"apex cookie but cookie sealed as raw": callbackRequest(f1, apexCookie(f1, tamperSealed(sealed))),
+		"apex cookie but empty state":          callbackRequest("", apexCookie(f1, sealed)),
 		"apex cookie of another provider": func() *http.Request {
 			o := st
 			o.Provider = "google"
-			return callbackRequest(apexStateF1(o.Nonce), apexCookie(sealValue("apex-state", o)))
+			return callbackRequest(apexStateF1(o.Nonce), apexCookie(apexStateF1(o.Nonce), sealValue("apex-state", o)))
 		}(),
 	}
 	for label, r := range cases {
@@ -579,7 +619,7 @@ func TestOAuthCallback_ReplayAfterCookieBurnedRejected(t *testing.T) {
 	st := loginApexState("datamap.site-b.test", "project:p1", "sub-3")
 	f1 := apexStateF1(st.Nonce)
 	w := httptest.NewRecorder()
-	handleOAuthCallback(w, callbackRequest(f1, apexCookie(sealValue("apex-state", st))))
+	handleOAuthCallback(w, callbackRequest(f1, apexCookie(f1, sealValue("apex-state", st))))
 	if w.Code != http.StatusFound {
 		t.Fatalf("first use: status=%d", w.Code)
 	}
@@ -618,16 +658,20 @@ func TestSSOStartThenCallback_EndToEnd(t *testing.T) {
 	if !ok || code.Aud != "host:traefik.site-b.test" {
 		t.Fatalf("code = %+v ok=%v", code, ok)
 	}
-	// A tab that started a different login cannot finish this one: its f1 does
-	// not match the cookie it holds.
+	// A browser that only holds another sign-in's slot cannot finish this one
+	// with this f1: nothing is signed and the code is never used — the
+	// browser is only sent back to start over on the last target.
 	w2 := httptest.NewRecorder()
 	handleSSOStart(w2, startRequest("faketwitter", "sub-other", ""))
 	r2 := callbackRequest(f1) // f1 of the first attempt
-	carryCookies(w2, r2)      // cookie of the second attempt
+	carryCookies(w2, r2)      // cookies of the second attempt only
 	cw2 := httptest.NewRecorder()
 	handleOAuthCallback(cw2, r2)
-	if cw2.Code != http.StatusBadRequest {
-		t.Fatalf("crossed attempts: status=%d, want 400", cw2.Code)
+	if _, ok := issuedCredential(cw2); ok {
+		t.Fatal("crossed attempts: a credential was issued")
+	}
+	if loc := cw2.Header().Get("Location"); cw2.Code != http.StatusFound || loc != "https://traefik.site-b.test/_oauth/login" {
+		t.Fatalf("crossed attempts: status=%d Location=%q, want a restart on the target's login entry", cw2.Code, loc)
 	}
 }
 
@@ -650,7 +694,7 @@ func TestOAuthCallback_DeviceFlowViaApexState(t *testing.T) {
 	entry := registerDeviceEntry(t, "DEVCODE1", "project:p1", "datamap.site-b.test")
 	st := apexState{Host: "datamap.site-b.test", Aud: "project:p1", Nonce: randomToken(18), Mode: "device", UserCode: "DEVCODE1", Provider: "faketwitter"}
 	w := httptest.NewRecorder()
-	handleOAuthCallback(w, callbackRequest(apexStateF1(st.Nonce), apexCookie(sealValue("apex-state", st))))
+	handleOAuthCallback(w, callbackRequest(apexStateF1(st.Nonce), apexCookie(apexStateF1(st.Nonce), sealValue("apex-state", st))))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Device authorized") {
 		t.Fatalf("live device state: status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -674,14 +718,14 @@ func TestOAuthCallback_DeviceFlowViaApexState(t *testing.T) {
 		"entry bound to another aud": func() *http.Request {
 			x := st
 			x.UserCode = "DEVCODE2" // entry.Aud = project:p2, state.Aud = project:p1
-			return callbackRequest(apexStateF1(x.Nonce), apexCookie(sealValue("apex-state", x)))
+			return callbackRequest(apexStateF1(x.Nonce), apexCookie(apexStateF1(x.Nonce), sealValue("apex-state", x)))
 		}(),
 		"unknown user code": func() *http.Request {
 			x := st
 			x.UserCode = "NOSUCHCODE"
-			return callbackRequest(apexStateF1(x.Nonce), apexCookie(sealValue("apex-state", x)))
+			return callbackRequest(apexStateF1(x.Nonce), apexCookie(apexStateF1(x.Nonce), sealValue("apex-state", x)))
 		}(),
-		"device state with other nonce": callbackRequest(apexStateF1("x"), apexCookie(sealValue("apex-state", st))),
+		"device state with other nonce": callbackRequest(apexStateF1("x"), apexCookie(apexStateF1("x"), sealValue("apex-state", st))),
 	}
 	for label, r := range bad {
 		w := httptest.NewRecorder()
@@ -705,7 +749,8 @@ func TestSSOStart_DeviceModeBoundToEntry(t *testing.T) {
 	if w.Code != http.StatusFound {
 		t.Fatalf("device start: status=%d body=%s", w.Code, w.Body.String())
 	}
-	c := findCookie(w.Result().Cookies(), hostCookieName(apexStateCookieBase))
+	dloc, _ := url.Parse(w.Header().Get("Location"))
+	c := findCookie(w.Result().Cookies(), apexSlotName(dloc.Query().Get("state")))
 	var st apexState
 	if c == nil || !openValue("apex-state", c.Value, loginStateLifetime, &st) || st.Mode != "device" || st.UserCode != "DEVSTART" {
 		t.Fatalf("apex state for device start = %+v (cookie %+v)", st, c)

@@ -155,6 +155,11 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 				})
 				continue
 			}
+			if a.get(f.Session) != nil {
+				// Defense in depth: a session is opened exactly once.
+				_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeError, Session: f.Session, Msg: "session already open"})
+				continue
+			}
 			cols, rows := uint16(80), uint16(24)
 			if f.Cols > 0 {
 				cols = uint16(f.Cols)
@@ -172,6 +177,10 @@ func dialAgentControl(ctx context.Context, controlPlaneURL, agentSecret string, 
 					Type: agentcontrol.TypeError, Session: f.Session,
 					Msg: "open_cp requires session/container/path",
 				})
+				continue
+			}
+			if a.get(f.Session) != nil {
+				_ = a.write(agentcontrol.Frame{Type: agentcontrol.TypeError, Session: f.Session, Msg: "session already open"})
 				continue
 			}
 			startDockerCpSession(ctx, a, containerForFrame(ctx, f), f.Path, f.Direction, f.Session)

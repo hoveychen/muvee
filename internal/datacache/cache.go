@@ -73,6 +73,11 @@ func (c *Cache) SetupMounts(ctx context.Context, deploymentID uuid.UUID, dataset
 	var rwMounts []string
 
 	for _, dm := range datasets {
+		if err := store.ValidateDatasetName(dm.Dataset.Name); err != nil {
+			// Rows saved before validation existed must never reach
+			// filepath.Join + os.Remove + os.Symlink below.
+			return nil, nil, err
+		}
 		containerPath := "/data/" + dm.Dataset.Name
 		if dm.MountMode == store.MountModeDependency {
 			localPath, err := c.EnsureDataset(ctx, dm.Dataset)

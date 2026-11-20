@@ -339,6 +339,10 @@ func (s *Server) handleTunnelConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.wsOriginAllowed(r) {
+		http.Error(w, "cross-origin websocket refused", http.StatusForbidden)
+		return
+	}
 	ws, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("tunnel ws upgrade: %v", err)

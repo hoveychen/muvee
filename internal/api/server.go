@@ -64,7 +64,7 @@ type Server struct {
 	serverVersion      string   // git-release version baked into the binary, surfaced via /api/runtime/config
 	tunnels            *tunnelRegistry
 	cliPending         sync.Map // state -> cliPendingEntry
-	oauthPending       sync.Map // state -> provider name (string); fallback when cookie is missing
+	oauthPending       sync.Map // state -> oauthPendingEntry; fallback when cookie is missing (cross-host callback)
 
 	// domainOnlyMu guards domainOnlyPrefixes, a cache of the current set of
 	// domain_only project subdomains. Refreshed whenever the Traefik config is
@@ -1342,7 +1342,7 @@ func (s *Server) handleProviderLogin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteLaxMode, Secure: true,
 		})
 	}
-	s.oauthPending.Store(state, providerName)
+	s.storeOAuthPending(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -1365,10 +1365,41 @@ func safePostLoginRedirect(dest string) string {
 	return dest
 }
 
+// pendingLoginTTL bounds how long an unfinished OAuth/CLI login state stays
+// valid. Without it the in-memory maps grow forever from unauthenticated
+// /auth/*/login hits, and a harvested state never expires.
+const pendingLoginTTL = 10 * time.Minute
+
+type oauthPendingEntry struct {
+	Provider string
+	Created  time.Time
+}
+
+func pendingExpired(created time.Time) bool { return time.Since(created) > pendingLoginTTL }
+
+// storeOAuthPending records a login state and opportunistically evicts
+// expired entries from both pending maps.
+func (s *Server) storeOAuthPending(state, provider string) {
+	s.oauthPending.Range(func(k, v any) bool {
+		if pendingExpired(v.(oauthPendingEntry).Created) {
+			s.oauthPending.Delete(k)
+		}
+		return true
+	})
+	s.cliPending.Range(func(k, v any) bool {
+		if pendingExpired(v.(cliPendingEntry).Created) {
+			s.cliPending.Delete(k)
+		}
+		return true
+	})
+	s.oauthPending.Store(state, oauthPendingEntry{Provider: provider, Created: time.Now()})
+}
+
 // cliPendingEntry carries the state the server needs to complete a CLI login
 // after the OAuth provider redirects back to us.
 type cliPendingEntry struct {
-	Port     string
+	Port     int
+	Created  time.Time
 	Hostname string // machine name of the CLI caller; used to label the issued API token
 }
 
@@ -1377,9 +1408,11 @@ type cliPendingEntry struct {
 // ?hostname=HOSTNAME used to label the issued token.
 // Defaults to the first configured provider when provider is omitted.
 func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
-	port := r.URL.Query().Get("port")
-	if port == "" {
-		http.Error(w, "port required", http.StatusBadRequest)
+	// port ends up inside an inline <script> on the callback page, so it must
+	// be a plain TCP port number — anything else is an XSS vector.
+	port, err := strconv.Atoi(r.URL.Query().Get("port"))
+	if err != nil || port < 1 || port > 65535 {
+		http.Error(w, "port must be a number between 1 and 65535", http.StatusBadRequest)
 		return
 	}
 	providerName := r.URL.Query().Get("provider")
@@ -1396,13 +1429,13 @@ func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 	if len(hostname) > 64 {
 		hostname = hostname[:64]
 	}
-	s.cliPending.Store(state, cliPendingEntry{Port: port, Hostname: hostname})
+	s.cliPending.Store(state, cliPendingEntry{Port: port, Created: time.Now(), Hostname: hostname})
 	http.SetCookie(w, &http.Cookie{
 		Name: "oauth_state", Value: providerName + ":" + state,
 		MaxAge: 300, HttpOnly: true, Path: "/",
 		SameSite: http.SameSiteLaxMode, Secure: true,
 	})
-	s.oauthPending.Store(state, providerName)
+	s.storeOAuthPending(state, providerName)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -1420,7 +1453,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	}
 	// Fallback: verify state against server-side store when cookie is missing (e.g. incognito)
 	if state == "" {
-		if prov, ok := s.oauthPending.Load(queryState); ok && prov.(string) == providerName {
+		if v, ok := s.oauthPending.Load(queryState); ok && v.(oauthPendingEntry).Provider == providerName && !pendingExpired(v.(oauthPendingEntry).Created) {
 			state = queryState
 		}
 	}
@@ -1459,7 +1492,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Check if this was initiated by the CLI device-flow
-	if entryVal, ok := s.cliPending.LoadAndDelete(state); ok {
+	if entryVal, ok := s.cliPending.LoadAndDelete(state); ok && !pendingExpired(entryVal.(cliPendingEntry).Created) {
 		entry := entryVal.(cliPendingEntry)
 		tokenName := "CLI Token"
 		if entry.Hostname != "" {
@@ -1473,7 +1506,7 @@ func (s *Server) handleProviderCallback(w http.ResponseWriter, r *http.Request) 
 		port := entry.Port
 		// Show the token on the page for remote/headless use, and also attempt
 		// the local redirect via JS so the normal flow still works seamlessly.
-		callbackURL := fmt.Sprintf("http://127.0.0.1:%s?token=%s", port, apiToken.Token)
+		callbackURL := fmt.Sprintf("http://127.0.0.1:%d?token=%s", port, url.QueryEscape(apiToken.Token))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, `<html><head><meta charset="utf-8"></head>
 <body style="font-family:system-ui,monospace;background:#0f0f0f;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto">
@@ -2344,11 +2377,48 @@ func validateIcon(icon string) error {
 	return nil
 }
 
+// validBypassPath reports whether one auth_bypass_paths line is safe to splice
+// into a Traefik rule. Rule strings are backtick-delimited, so a backtick (or
+// whitespace/control chars) would let a tenant append arbitrary matchers such
+// as "|| Host(`victim`)" and hijack other domains. "*" is only meaningful as a
+// trailing PathPrefix marker.
+func validBypassPath(p string) bool {
+	if !strings.HasPrefix(p, "/") {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c <= 0x20 || c == 0x7f || c == '`' || c == '\\' {
+			return false
+		}
+		if c == '*' && i != len(p)-1 {
+			return false
+		}
+	}
+	return true
+}
+
+func validateBypassPaths(raw string) error {
+	for _, line := range strings.Split(raw, "\n") {
+		p := strings.TrimSpace(line)
+		if p == "" {
+			continue
+		}
+		if !validBypassPath(p) {
+			return fmt.Errorf("invalid auth_bypass_paths entry %q: must start with /, contain no spaces, backticks or backslashes, and use * only as a trailing wildcard", p)
+		}
+	}
+	return nil
+}
+
 func validateProject(p *store.Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("project name must not be empty")
 	}
 	if err := validateIcon(p.Icon); err != nil {
+		return err
+	}
+	if err := validateBypassPaths(p.AuthBypassPaths); err != nil {
 		return err
 	}
 	if p.ProjectType == "" {
@@ -3426,6 +3496,9 @@ func (s *Server) getProjectDatasets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.requireProjectAccess(w, r, id) {
+		return
+	}
 	pds, err := s.store.GetProjectDatasets(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -3499,9 +3572,43 @@ func (s *Server) triggerDeploy(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, deployment)
 }
 
+// requireProjectAccess writes 404 and returns false unless the caller may
+// access the project (same semantics as the other project endpoints).
+func (s *Server) requireProjectAccess(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	user := auth.UserFromCtx(r.Context())
+	if user == nil {
+		jsonErr(w, nil, 401)
+		return false
+	}
+	allowed, _ := s.store.CanAccessProject(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return false
+	}
+	return true
+}
+
+// requireDatasetAccess is the dataset counterpart of requireProjectAccess.
+func (s *Server) requireDatasetAccess(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	user := auth.UserFromCtx(r.Context())
+	if user == nil {
+		jsonErr(w, nil, 401)
+		return false
+	}
+	allowed, _ := s.store.CanAccessDataset(r.Context(), user.ID, id, user.Role == store.UserRoleAdmin)
+	if !allowed {
+		jsonErr(w, nil, 404)
+		return false
+	}
+	return true
+}
+
 func (s *Server) listDeployments(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if !s.requireProjectAccess(w, r, id) {
 		return
 	}
 	deployments, err := s.store.ListDeployments(r.Context(), id)
@@ -3886,6 +3993,10 @@ func (s *Server) createDataset(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err, 400)
 		return
 	}
+	if err := store.ValidateDatasetName(d.Name); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
 	subPath, err := validateDatasetSubPath(d.NFSPath)
 	if err != nil {
 		jsonErr(w, err, 400)
@@ -3937,6 +4048,10 @@ func (s *Server) updateDataset(w http.ResponseWriter, r *http.Request) {
 	}
 	var d store.Dataset
 	if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		jsonErr(w, err, 400)
+		return
+	}
+	if err := store.ValidateDatasetName(d.Name); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
@@ -4014,6 +4129,9 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.requireDatasetAccess(w, r, id) {
+		return
+	}
 	snaps, err := s.store.ListSnapshotsForDataset(r.Context(), id)
 	if err != nil {
 		jsonErr(w, err, 500)
@@ -4025,6 +4143,9 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listFileHistory(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if !s.requireDatasetAccess(w, r, id) {
 		return
 	}
 	filePath := r.URL.Query().Get("file")
@@ -4646,6 +4767,9 @@ func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.requireProjectAccess(w, r, id) {
+		return
+	}
 	limit := 60
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := fmt.Sscanf(v, "%d", &limit); n == 1 && err == nil {
@@ -4696,6 +4820,9 @@ func (s *Server) getProjectMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getProjectTraffic(w http.ResponseWriter, r *http.Request) {
 	id, ok := parsePathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if !s.requireProjectAccess(w, r, id) {
 		return
 	}
 	limit := 100
@@ -5036,10 +5163,13 @@ type traefikForwardAuth struct {
 // the two).
 var FwdAuthCookieNames = []string{
 	"__Host-muvee_fwd", "__Host-muvee_sso", "__Host-fwd_state", "__Host-fwd_apex_state",
-	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect",
+	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect", "__Host-fwd_login_hint",
 	"muvee_fwd", "muvee_sso", "fwd_state", "fwd_apex_state",
-	"muvee_fwd_signed_out", "fwd_oauth_redirect",
+	"muvee_fwd_signed_out", "fwd_oauth_redirect", "fwd_login_hint",
 	"muvee_fwd_session", "fwd_oauth_state", "fwd_oauth_host", "muvee_invite_token",
+	// Per-sign-in state slots (fwd_state_<hash>, fwd_apex_state_<hash>):
+	// a trailing "*" matches every name with that prefix.
+	"__Host-fwd_state_*", "fwd_state_*", "__Host-fwd_apex_state_*", "fwd_apex_state_*",
 }
 
 // fwdSessionResponseCookies are the subsite session cookies authservice may
@@ -5236,6 +5366,11 @@ func addBypassRouters(cfg *traefikDynamicConfig, routerName, serviceName string,
 	for i, raw := range strings.Split(bypassPaths, "\n") {
 		p := strings.TrimSpace(raw)
 		if p == "" {
+			continue
+		}
+		if !validBypassPath(p) {
+			// Rows saved before validation existed; never splice them into a rule.
+			log.Printf("traefik: skipping invalid auth_bypass_paths entry %q on router %s", p, routerName)
 			continue
 		}
 		var pathRule string
@@ -5674,6 +5809,32 @@ func (s *Server) handleTraefikConfig(w http.ResponseWriter, r *http.Request) {
 // Traefik ForwardAuth injects. It must Set/Del every header in the set (not just
 // X-Forwarded-User) so a caller cannot smuggle a spoofed name/avatar/provider
 // through `projects curl -H`.
+// platformCookieNames are cookies the panel sets on its own origin. They must
+// never be forwarded to tenant containers (muvee_session is a full platform
+// login).
+var platformCookieNames = map[string]bool{
+	"muvee_session":             true,
+	"oauth_state":               true,
+	"muvee_invite_token":        true,
+	"muvee_post_login_redirect": true,
+}
+
+// stripPlatformCookies rewrites the Cookie header without platform cookies,
+// keeping any cookies the project itself set under its proxy path.
+func stripPlatformCookies(h http.Header) {
+	req := &http.Request{Header: h}
+	var kept []string
+	for _, c := range req.Cookies() {
+		if !platformCookieNames[c.Name] {
+			kept = append(kept, c.Name+"="+c.Value)
+		}
+	}
+	h.Del("Cookie")
+	if len(kept) > 0 {
+		h.Set("Cookie", strings.Join(kept, "; "))
+	}
+}
+
 func applyForwardedUserHeaders(h http.Header, user *store.User) {
 	// auth.ASCIIHeaderValue, not the raw value: a non-ASCII display name is
 	// deprecated obs-text that a strict upstream rejects at the parser, killing
@@ -5731,6 +5892,9 @@ func (s *Server) handleProjectProxy(w http.ResponseWriter, r *http.Request) {
 			applyForwardedUserHeaders(req.Header, user)
 			// Remove Authorization header so the API token is not leaked to the container.
 			req.Header.Del("Authorization")
+			// The proxy runs on the panel origin, so the browser attaches the
+			// panel session cookie; never hand it to tenant code.
+			stripPlatformCookies(req.Header)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("proxy error (project %s): %v", projectID, err)

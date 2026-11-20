@@ -136,8 +136,8 @@ func TestLoginPage_SignedOutHintShowsLoggedOutThenSelectionPage(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `href="/_oauth/login?sso=none"`) {
 		t.Fatal("logged-out page missing the sign-in-again link")
 	}
-	if findCookie(w.Result().Cookies(), hostCookieName(fwdStateCookieBase)) != nil {
-		t.Fatal("logged-out page started a sign-in (wrote __Host-fwd_state)")
+	if len(slotSetCookies(w, fwdStateCookieBase, false)) != 0 {
+		t.Fatal("logged-out page started a sign-in (wrote a __Host-fwd_state_* slot)")
 	}
 
 	w = doLoginPage(t, true, "?sso=none")

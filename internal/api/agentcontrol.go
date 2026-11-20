@@ -183,6 +183,40 @@ func (s *Server) handleProjectCp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// wsOriginAllowed guards cookie-authenticated WebSocket endpoints against
+// cross-site WebSocket hijacking. Tenant sites live on <prefix>.<base>, which is
+// same-site with the panel, so SameSite=Lax still attaches muvee_session to a
+// handshake a tenant page starts. Browsers always send Origin on a WebSocket
+// handshake; the CLI and agents never do. So: no Origin → non-browser client,
+// allowed (it still has to authenticate); otherwise only the panel origin.
+func (s *Server) wsOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	return origin == "" || s.allowedOrigin(origin)
+}
+
+// sanitizeCLIFollowupFrame rebuilds a CLI frame received after the open frame,
+// keeping only the fields a data/control frame legitimately carries. Targeting
+// fields (Container, DomainPrefix, Cmd, Path, Direction, NodeID) are never
+// copied, so a CLI cannot re-point an established session at another
+// container. Returns ok=false for frame types a CLI must not send mid-session.
+func sanitizeCLIFollowupFrame(f agentcontrol.Frame, session string) (agentcontrol.Frame, bool) {
+	switch f.Type {
+	case agentcontrol.TypeStdio, agentcontrol.TypeResize, agentcontrol.TypeSignal,
+		agentcontrol.TypeCpUpTar, agentcontrol.TypeCpEnd, agentcontrol.TypeClose:
+	default:
+		return agentcontrol.Frame{}, false
+	}
+	return agentcontrol.Frame{
+		Type:    f.Type,
+		Session: session,
+		Stream:  f.Stream,
+		Data:    f.Data,
+		Cols:    f.Cols,
+		Rows:    f.Rows,
+		Sig:     f.Sig,
+	}, true
+}
+
 // proxyAgentSession is the shared body for the CLI-facing exec/cp endpoints:
 // it authenticates the user, finds the project's running agent, upgrades the
 // WS, reads the CLI's open frame (validated by validateOpen), forwards it to
@@ -214,6 +248,10 @@ func (s *Server) proxyAgentSession(w http.ResponseWriter, r *http.Request, valid
 		return
 	}
 
+	if !s.wsOriginAllowed(r) {
+		jsonErr(w, fmt.Errorf("cross-origin websocket refused"), http.StatusForbidden)
+		return
+	}
 	ws, err := agentCtrlUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -281,8 +319,15 @@ func (s *Server) proxyAgentSession(w http.ResponseWriter, r *http.Request, valid
 		if err != nil {
 			break
 		}
-		f.Session = session
-		if err := agent.writeFrame(f); err != nil {
+		fwd, ok := sanitizeCLIFollowupFrame(f, session)
+		if !ok {
+			// Only the first frame may open a session; anything else that
+			// could retarget the agent (open_exec/open_cp with a different
+			// container) is a hijack attempt — drop the whole session.
+			_ = agentcontrol.WriteFrame(ws, agentcontrol.Frame{Type: agentcontrol.TypeError, Msg: "unexpected frame type " + f.Type})
+			break
+		}
+		if err := agent.writeFrame(fwd); err != nil {
 			break
 		}
 	}
