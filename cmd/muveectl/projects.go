@@ -181,6 +181,20 @@ func resolveUserRef(c *client, arg string) (string, error) {
 	return resolveResourceRef(c, "user", "/api/users", arg)
 }
 
+// authDocsURL is the auth integration guide (sign-out entry, own-session apps).
+const authDocsURL = "https://hoveychen.github.io/muvee/docs/service-auth-integration"
+
+// authSignOutHint returns a reminder to give visitors a sign-out entry when
+// this command turns auth on (--auth-required), or "" otherwise.
+// BACKLOG-20261121-001.
+func authSignOutHint(cmd *cobra.Command) string {
+	if !cmd.Flags().Changed("auth-required") || cmd.Flags().Changed("no-auth") {
+		return ""
+	}
+	return "Auth is on: give visitors a way to sign out — link to the account page from your pages,\n" +
+		"  e.g. <a href=\"/_oauth/me\">Account</a>  (see " + authDocsURL + "#logout)"
+}
+
 func collectProjectFlags(cmd *cobra.Command) map[string]interface{} {
 	p := map[string]interface{}{}
 	if cmd.Flags().Changed("name") {
@@ -446,6 +460,9 @@ var projectsCreateCmd = &cobra.Command{
 			fmt.Printf("\nPush your code:\n  git remote add muvee %s\n  git push muvee main\n", pushURL)
 			fmt.Println("\nUse any username and your API token as the password.")
 		}
+		if hint := authSignOutHint(cmd); hint != "" {
+			fmt.Println("\n" + hint)
+		}
 		return nil
 	},
 }
@@ -561,6 +578,9 @@ var projectsUpdateCmd = &cobra.Command{
 			return nil
 		}
 		fmt.Printf("Updated project %s\n", str(result, "name"))
+		if hint := authSignOutHint(cmd); hint != "" {
+			fmt.Println("\n" + hint)
+		}
 		return nil
 	},
 }

@@ -183,6 +183,9 @@ func cmdTunnel(port, customDomain, projectName string, noAuth bool, c *client) e
 	fmt.Printf("  %s → %s\n", publicURL, localAddr)
 	fmt.Printf("  Domain: %s\n", domain)
 	fmt.Printf("  Auth:   %s\n", authLabel)
+	if !noAuth {
+		fmt.Printf("  Sign-out entry: link to %s/_oauth/me from your pages (see %s#logout)\n", publicURL, authDocsURL)
+	}
 	fmt.Println("Press Ctrl+C to stop.")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

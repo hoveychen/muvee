@@ -36,7 +36,17 @@ function signIn(provider: string) {
 MuveeAuth.onAuthChange((user) => {
   console.log('auth state →', user);
 });
+
+// Always give users a way to sign out. signOut() does not follow the logout
+// redirect, so send the page somewhere afterwards yourself:
+async function signOut() {
+  await MuveeAuth.signOut();
+  location.assign('/_oauth/logged-out');
+}
 ```
+
+Without any code, `<a href="/_oauth/me">Account</a>` links to the account page
+muvee serves on every project host (who is signed in, Sign out, Switch account).
 
 ## Upgrading from 0.1.x
 

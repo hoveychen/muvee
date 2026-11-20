@@ -231,6 +231,14 @@ const name   = req.headers["x-forwarded-user-name"]
 const avatar = req.headers["x-forwarded-user-avatar"]
 ```
 
+**Sign-out entry (required).** When you write or change the frontend of an `--auth-required` project, always give visitors a visible way to sign out — muvee cannot add one to the app's pages. Link to the account page muvee serves on every project host (it shows who is signed in, with Sign out and Switch account):
+
+```html
+<a href="/_oauth/me">Account</a>
+```
+
+`<a href="/_oauth/logout">Sign out</a>` also works for a one-click sign-out. If the app keeps its own session (session cookie / server-side store): its `/logout` clears that session first and then redirects to `/_oauth/logout`, and on **every request** it compares the stored user with `X-Forwarded-User` and drops the stored session when they differ (otherwise a user who signs out elsewhere or switches accounts is served the previous user's session).
+
 For the full integration guide (frontend userinfo API, logout, CLI/headless Device Flow), see the [Service Auth Integration](https://hoveychen.github.io/muvee/docs/service-auth-integration) documentation.
 
 ### Project Metadata (`--description`, `--icon`, `--tags`)

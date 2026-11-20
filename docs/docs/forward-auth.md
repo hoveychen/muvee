@@ -30,6 +30,7 @@ In the **Project Detail → Auth** tab:
 2. Optionally set **Allowed Email Domains** (comma-separated, e.g. `company.com,partner.org`)
 3. Optionally set **Auth Bypass Paths** — one path per line. Requests matching these paths will skip authentication. Use `*` suffix for prefix matching (e.g. `/api/public/*`).
 4. Save and redeploy
+5. Give users a way to sign out: link to `/_oauth/me` (the account page muvee serves on every project host) from your pages, e.g. `<a href="/_oauth/me">Account</a>`. See [Service Auth Integration → Logout](./service-auth-integration.md#logout).
 
 When the container starts, the deploy agent attaches these Traefik labels:
 
@@ -74,6 +75,10 @@ Invitation links work as before: the invite token travels with the return URL an
 `GET {project}.domain.com/_oauth/logout` (optional `?redirect=`, limited to a path on the same site or an `https` URL on a platform domain; anything else lands on `/_oauth/logged-out`) clears that site's cookies, revokes the session **and the SSO session it was issued from**, and sets a "signed out" hint. Every other project session issued from the same SSO then stops working on its next request and shows the signed-out page, so signing out of one project signs the user out of all of them on that base domain. It does not sign the user out of Google or any other identity provider. While the hint cookie is present the login page shows the signed-out page rather than silently signing the user back in.
 
 If the request carries `Sec-Fetch-Site` and it is not `same-origin` (for example a sign-out link on another project's page or an external site), a confirmation page is shown first and the user has to click to confirm. Typing the URL in the address bar or opening a bookmark (`Sec-Fetch-Site: none`) also shows the confirmation page; a sign-out link on a page of the same project does not. Signing out of the console still invalidates all of that user's project sessions.
+
+### Account page
+
+`GET {project}.domain.com/_oauth/me` is an account page served on every project host: it shows the account signed in to that project and the sign-in method, with **Sign out**, **Switch account** and **Muvee console** buttons (a sign-in link when nobody is signed in). Projects should link to it so users can always find the sign-out. On the platform host it shows the account of the shared sign-in session instead. In the console, **Profile → Subsite sign-ins** lists recently visited projects (each linking to its account page) and offers **Sign out of all subsites**, which revokes every project session of that console account on every device and base domain.
 
 ### Custom domains and aliases
 
