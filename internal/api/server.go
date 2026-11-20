@@ -1015,6 +1015,11 @@ func (s *Server) Router() http.Handler {
 		// Void every CLI device-flow token issued to the caller so far
 		// (BACKLOG-20261117-009); console session and subsite sessions stay.
 		r.Post("/api/me/cli-tokens/revoke", s.handleRevokeCLITokens)
+		// Console "subsite sign-ins" card (BACKLOG-20261121-001): sign out of
+		// every subsite (console session and CLI tokens stay), and the
+		// subsites visited recently, each linking to its /_oauth/me.
+		r.Post("/api/me/fwd-sessions/revoke", s.handleRevokeFwdSessions)
+		r.Get("/api/me/visited-projects", s.handleListVisitedProjects)
 		r.Get("/api/runtime/config", s.handleRuntimeConfig)
 
 		// Authorization – any authenticated user can check status and submit requests

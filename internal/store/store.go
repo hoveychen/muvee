@@ -1079,6 +1079,47 @@ func (s *Store) ListProjectVisits(ctx context.Context, projectID uuid.UUID, limi
 	return out, nil
 }
 
+// VisitedProject is one subsite a user visited, for the console's "subsite
+// sign-ins" card (BACKLOG-20261121-001).
+type VisitedProject struct {
+	ProjectID    uuid.UUID
+	ProjectName  string
+	DomainPrefix string
+	ProjectType  ProjectType
+	LastSeenAt   time.Time
+	VisitCount   int64
+}
+
+// ListUserVisitedProjects returns the projects userID visited through
+// ForwardAuth (project_visits), most recent first. Platform admins' visits are
+// not recorded (see handleInternalAccessCheck), so their list stays empty.
+func (s *Store) ListUserVisitedProjects(ctx context.Context, userID uuid.UUID, limit int) ([]*VisitedProject, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT pv.project_id, p.name, p.domain_prefix, p.project_type, pv.last_seen_at, pv.visit_count
+		FROM project_visits pv
+		JOIN projects p ON p.id = pv.project_id
+		WHERE pv.user_id = $1
+		ORDER BY pv.last_seen_at DESC
+		LIMIT $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*VisitedProject, 0)
+	for rows.Next() {
+		var v VisitedProject
+		if err := rows.Scan(&v.ProjectID, &v.ProjectName, &v.DomainPrefix, &v.ProjectType, &v.LastSeenAt, &v.VisitCount); err != nil {
+			return nil, err
+		}
+		out = append(out, &v)
+	}
+	return out, rows.Err()
+}
+
 // ─── Project Access Requests (private-project request inbox) ─────────────────
 
 // ErrAccessRequestAlreadyApproved is returned by CreateAccessRequest when the
