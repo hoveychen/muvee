@@ -50,6 +50,10 @@ type Config struct {
 	// itself would let any tenant replay it against every other subsite. The
 	// others are only read on /_oauth/* (routed straight to authservice,
 	// never through this plugin).
+	// An entry ending in "*" strips every cookie whose name starts with the
+	// text before it (authservice names each sign-in's state cookie
+	// fwd_state_<hash>); a bare "*" is ignored. Older plugin builds read such
+	// an entry as an exact name, which matches nothing — harmless.
 	// The default lives here (not in dynamic.yml) because dynamic.yml is a
 	// host-mounted file that image upgrades do not refresh.
 	StripCookies []string `json:"stripCookies,omitempty" yaml:"stripCookies,omitempty"`
@@ -69,10 +73,13 @@ type Config struct {
 // cmd/muvee TestFwdCookieNamesMatchStripList).
 var defaultStripCookies = []string{
 	"__Host-muvee_fwd", "__Host-muvee_sso", "__Host-fwd_state", "__Host-fwd_apex_state",
-	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect",
+	"__Host-muvee_fwd_signed_out", "__Host-fwd_oauth_redirect", "__Host-fwd_login_hint",
 	"muvee_fwd", "muvee_sso", "fwd_state", "fwd_apex_state",
-	"muvee_fwd_signed_out", "fwd_oauth_redirect",
+	"muvee_fwd_signed_out", "fwd_oauth_redirect", "fwd_login_hint",
 	"muvee_fwd_session", "fwd_oauth_state", "fwd_oauth_host", "muvee_invite_token",
+	// Per-sign-in state slots (fwd_state_<hash>, fwd_apex_state_<hash>):
+	// a trailing "*" matches every name with that prefix.
+	"__Host-fwd_state_*", "fwd_state_*", "__Host-fwd_apex_state_*", "fwd_apex_state_*",
 }
 
 // CreateConfig is required by traefik plugin contract.
@@ -89,7 +96,9 @@ type EmbedBridge struct {
 	name         string
 	scriptPath   string
 	stripCookies map[string]bool
-	stripOnly    bool
+	// stripPrefixes are the "<prefix>*" entries of StripCookies.
+	stripPrefixes []string
+	stripOnly     bool
 }
 
 // New is required by traefik plugin contract.
@@ -99,12 +108,19 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 		scriptPath = "/_embed-bridge.js"
 	}
 	strip := map[string]bool{}
+	var prefixes []string
 	for _, c := range config.StripCookies {
-		if c = strings.TrimSpace(c); c != "" {
+		c = strings.TrimSpace(c)
+		switch {
+		case c == "" || c == "*":
+			// A bare "*" would strip every tenant cookie: never honoured.
+		case strings.HasSuffix(c, "*"):
+			prefixes = append(prefixes, strings.TrimSuffix(c, "*"))
+		default:
 			strip[c] = true
 		}
 	}
-	return &EmbedBridge{next: next, name: name, scriptPath: scriptPath, stripCookies: strip, stripOnly: config.StripOnly}, nil
+	return &EmbedBridge{next: next, name: name, scriptPath: scriptPath, stripCookies: strip, stripPrefixes: prefixes, stripOnly: config.StripOnly}, nil
 }
 
 // stripRequestCookies removes the configured cookies from every Cookie header
@@ -113,7 +129,7 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 // once anything was removed). A header left empty is
 // deleted. Runs before anything else in ServeHTTP so upgrades are covered.
 func (e *EmbedBridge) stripRequestCookies(req *http.Request) {
-	if len(e.stripCookies) == 0 {
+	if len(e.stripCookies) == 0 && len(e.stripPrefixes) == 0 {
 		return
 	}
 	lines := req.Header.Values("Cookie")
@@ -133,7 +149,7 @@ func (e *EmbedBridge) stripRequestCookies(req *http.Request) {
 			if i := strings.IndexByte(part, '='); i >= 0 {
 				name = strings.TrimSpace(part[:i])
 			}
-			if e.stripCookies[name] {
+			if e.stripped(name) {
 				changed = true
 				continue
 			}
@@ -150,6 +166,21 @@ func (e *EmbedBridge) stripRequestCookies(req *http.Request) {
 	for _, line := range kept {
 		req.Header.Add("Cookie", line)
 	}
+}
+
+// stripped reports whether a request cookie name is on the strip list: an
+// exact entry, or a "<prefix>*" entry (per-sign-in state cookies carry a
+// derived suffix).
+func (e *EmbedBridge) stripped(name string) bool {
+	if e.stripCookies[name] {
+		return true
+	}
+	for _, p := range e.stripPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {

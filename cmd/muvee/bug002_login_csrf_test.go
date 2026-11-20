@@ -127,8 +127,9 @@ func TestBUG002_PlantedDeviceStateDoesNotHandOverVictim(t *testing.T) {
 // plantedCallback guard panics on one), so the strongest attack left is to
 // replay the harvested f1 in the callback URL together with the cookie value
 // under names a sibling CAN set (Domain=site-b.test): the unprefixed
-// apexStateCookieBase and the pre-upgrade fwd_oauth_state. The service must
-// ignore them (it reads only fwdCookieName(apexStateCookieBase)).
+// apexStateCookieBase, the unprefixed name of the per-sign-in slot (what the
+// dev cookie mode would use) and the pre-upgrade fwd_oauth_state. The service
+// must ignore them (it reads only the __Host- slot named after the f1).
 
 const (
 	attackerHost    = "evil.site-b.test"
@@ -172,9 +173,10 @@ func attackerStart(t *testing.T, extra url.Values) (string, *http.Cookie) {
 	if err != nil || loc.Query().Get("state") == "" {
 		t.Fatalf("no provider state in Location %q (err=%v)", w.Header().Get("Location"), err)
 	}
-	c := findCookie(w.Result().Cookies(), fwdCookieName(apexStateCookieBase))
+	slot := fwdCookieName(stateSlotBase(apexStateCookieBase, loc.Query().Get("state")))
+	c := findCookie(w.Result().Cookies(), slot)
 	if c == nil || c.Value == "" {
-		t.Fatalf("/_oauth/start set no %s cookie", fwdCookieName(apexStateCookieBase))
+		t.Fatalf("/_oauth/start set no %s cookie", slot)
 	}
 	return loc.Query().Get("state"), c
 }
@@ -194,7 +196,17 @@ func legitCallback(state string, apex *http.Cookie) *http.Request {
 func attackerMintedState(t *testing.T) (string, map[string]string) {
 	t.Helper()
 	state, apex := attackerStart(t, url.Values{"state": {"attacker-subsite-nonce"}})
-	return state, map[string]string{apexStateCookieBase: apex.Value, "fwd_oauth_state": state}
+	return state, plantable(state, apex)
+}
+
+// plantable is every non-__Host- name a sibling could plant the harvested
+// apex state under.
+func plantable(state string, apex *http.Cookie) map[string]string {
+	return map[string]string{
+		apexStateCookieBase:                       apex.Value,
+		stateSlotBase(apexStateCookieBase, state): apex.Value,
+		"fwd_oauth_state":                         state,
+	}
 }
 
 // attackerDeviceState: a device flow the attacker started from its own CLI on
@@ -220,7 +232,7 @@ func attackerDevice(t *testing.T) (string, map[string]string, func() bool, *http
 		deviceByUser.Delete(userCode)
 	})
 	state, apex := attackerStart(t, url.Values{"mode": {"device"}, "user_code": {userCode}})
-	return state, map[string]string{apexStateCookieBase: apex.Value, "fwd_oauth_state": state},
+	return state, plantable(state, apex),
 		func() bool { entry.mu.Lock(); defer entry.mu.Unlock(); return entry.Completed }, apex
 }
 

@@ -183,3 +183,32 @@ func TestStripOnlyDoesNotInjectOrServeSDK(t *testing.T) {
 		t.Fatal("StripOnly must forward /_embed-bridge.js to the upstream, not serve the SDK")
 	}
 }
+
+// Per-sign-in state cookies carry a derived suffix (fwd_state_<hash>): the
+// default list strips them through its "<prefix>*" entries, while tenant
+// cookies that only share part of the name survive.
+func TestStripsPerSignInStateSlots(t *testing.T) {
+	cap := &headerCapture{}
+	h := newPluginWith(t, cap, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Cookie", "__Host-fwd_state_0a1b2c3d4e5f=s1; app=1; __Host-fwd_apex_state_ffeeddccbbaa=s2; "+
+		"fwd_state_9f8e7d6c5b4a=dev; fwd_apex_state_123456abcdef=dev2; __Host-fwd_login_hint=h; "+
+		"my_fwd_state_x=keep; fwd_statex=keep2")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	want := "app=1; my_fwd_state_x=keep; fwd_statex=keep2"
+	if len(cap.cookies) != 1 || cap.cookies[0] != want {
+		t.Fatalf("upstream Cookie = %q, want %q", cap.cookies, want)
+	}
+}
+
+// A bare "*" entry must never turn into "strip every cookie".
+func TestBareWildcardIgnored(t *testing.T) {
+	cap := &headerCapture{}
+	h := newPluginWith(t, cap, func(c *Config) { c.StripCookies = []string{"*", " * "} })
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Cookie", "a=1; b=2")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if len(cap.cookies) != 1 || cap.cookies[0] != "a=1; b=2" {
+		t.Fatalf("upstream Cookie = %q, want untouched", cap.cookies)
+	}
+}

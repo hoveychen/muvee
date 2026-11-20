@@ -103,7 +103,7 @@ func verifyState(s string) (stateClaims, error) {
 // A provider round trip started on the central sign-in host
 // (/_oauth/start) keeps everything it needs — target host, the subsite's
 // state, mode, device user code, a random nonce — in that host's own
-// __Host-fwd_apex_state cookie, which no tenant subdomain can write. The
+// __Host-fwd_apex_state_<slot> cookie (one per sign-in, named after f1), which no tenant subdomain can write. The
 // provider only carries f1, a MAC over that nonce: fixed length (WeCom caps
 // state at 128 bytes) and meaningless without the cookie. The callback accepts
 // nothing else for a browser sign-in: the base-domain fwd_oauth_state /

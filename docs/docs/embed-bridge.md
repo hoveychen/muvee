@@ -95,7 +95,9 @@ The same middleware removes every ForwardAuth cookie from the request before it 
 forwarded to your project, so tenant code never sees muvee's session credentials. The list
 (`FwdAuthCookieNames` in `internal/api/server.go`) covers the host-only `__Host-` cookies
 (`__Host-muvee_fwd`, `__Host-muvee_sso`, `__Host-fwd_state`, `__Host-fwd_apex_state`,
-`__Host-muvee_fwd_signed_out`, `__Host-fwd_oauth_redirect`), their plain-http development names
+`__Host-muvee_fwd_signed_out`, `__Host-fwd_oauth_redirect`, `__Host-fwd_login_hint`), the per-sign-in
+state cookies through prefix entries (`__Host-fwd_state_*`, `__Host-fwd_apex_state_*`: an entry ending
+in `*` strips every cookie whose name starts with the text before it), their plain-http development names
 without the prefix, and the legacy base-domain cookies of earlier releases (`muvee_fwd_session`,
 `fwd_oauth_state`, `fwd_oauth_host`, `muvee_invite_token`). Routers that skip ForwardAuth (bypass
 paths) get a strip-only instance with the same list. See
