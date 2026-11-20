@@ -130,6 +130,17 @@ muveectl projects update PROJECT_ID --allow-project-access=true    # 重新允�
 
 `projects create` 也支持同一参数。详见 [项目互访](./project-mesh)。
 
+### 账户角标（`--account-badge`）
+
+用于 `--auth-required` 项目：在受保护页面右下角显示一个指向 `/_oauth/me` 的**账户**小链接。新建项目默认开启，开关推出前已有的项目默认关闭：
+
+```bash
+muveectl projects update PROJECT_ID --account-badge          # 显示角标
+muveectl projects update PROJECT_ID --account-badge=false    # 不显示
+```
+
+详见[服务认证集成 → 账户角标](./service-auth-integration.md#账户角标无需写代码)。
+
 ### 容器资源指标
 
 部署 Agent 每隔约 15 秒通过 `docker stats` 采集容器的资源用量并上报给控制平面。使用 `projects metrics` 查看正在运行的容器状态：

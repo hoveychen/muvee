@@ -113,6 +113,18 @@ The simplest sign-out entry needs no code: link to the account page `/_oauth/me`
 
 The account page shows the account signed in to this project and the sign-in method, with three buttons: **Sign out** (`/_oauth/logout`), **Switch account** (signs out, then shows the sign-in page without silently signing back in through the platform's central session) and **Muvee console**. When nobody is signed in it shows a sign-in link instead. It is never cached and cannot be framed by another site.
 
+### Account badge (no code)
+
+A project can also let muvee add the entry for it: with **Account badge** on (project settings → Auth, or `muveectl projects update PROJECT_ID --account-badge`), visitors see a small **Account** link in the bottom-right corner of the project's sign-in-protected pages, pointing at `/_oauth/me`. Visitors can collapse it (remembered in that browser). It is on by default for projects created after the switch was introduced and off for older ones.
+
+The link is added by the script muvee already injects into HTML pages (`/_embed-bridge.js`); the script asks `/_oauth/account-ui` on the same host whether to show it, so nothing about the visitor is written into your HTML. It does not appear:
+
+- inside iframes, on public pages, or on paths listed in **Auth Bypass Paths**;
+- on pages whose CSP blocks the injected script (e.g. `strict-dynamic` / nonce-only `script-src`) — muvee never changes your CSP;
+- on HTML muvee cannot rewrite: responses compressed with anything but gzip, or without a lowercase `</head>`.
+
+The badge is drawn in a Shadow DOM and skipped by the embed screenshot. If your app has its own account menu or sign-out button, turn the badge off and link to `/_oauth/me` from your menu instead. Like any element on your page, the badge can be hidden or imitated by your page's own scripts, so it is a navigation aid, not a security boundary.
+
 To sign out in one click, link to `/_oauth/logout` directly:
 
 ```html

@@ -78,7 +78,7 @@ If the request carries `Sec-Fetch-Site` and it is not `same-origin` (for example
 
 ### Account page
 
-`GET {project}.domain.com/_oauth/me` is an account page served on every project host: it shows the account signed in to that project and the sign-in method, with **Sign out**, **Switch account** and **Muvee console** buttons (a sign-in link when nobody is signed in). Projects should link to it so users can always find the sign-out. On the platform host it shows the account of the shared sign-in session instead. In the console, **Profile → Subsite sign-ins** lists recently visited projects (each linking to its account page) and offers **Sign out of all subsites**, which revokes every project session of that console account on every device and base domain.
+`GET {project}.domain.com/_oauth/me` is an account page served on every project host: it shows the account signed in to that project and the sign-in method, with **Sign out**, **Switch account** and **Muvee console** buttons (a sign-in link when nobody is signed in). Projects should link to it so users can always find the sign-out, or turn on the project's **Account badge**, which adds a small link to it on the protected pages (see [Service Auth Integration → Account badge](./service-auth-integration.md#account-badge-no-code)). On the platform host it shows the account of the shared sign-in session instead. In the console, **Profile → Subsite sign-ins** lists recently visited projects (each linking to its account page) and offers **Sign out of all subsites**, which revokes every project session of that console account on every device and base domain.
 
 ### Custom domains and aliases
 

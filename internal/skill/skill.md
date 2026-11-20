@@ -174,7 +174,7 @@ muveectl projects create --name NAME --image-ref REF \
 muveectl projects get PROJECT_ID
 muveectl projects update PROJECT_ID [--branch BRANCH] [--auth-required] [--no-auth] [--auth-domains DOMAINS] \
   [--auth-bypass-paths PATHS] [--description DESC] [--icon SVG_OR_URL] [--tags tag1,tag2] \
-  [--auto-deploy] [--no-auto-deploy] [--allow-project-access=true|false] \
+  [--auto-deploy] [--no-auto-deploy] [--allow-project-access=true|false] [--account-badge=true|false] \
   [--branding-site-name NAME] [--branding-logo-url URL] [--branding-favicon-url URL] \
   [--branding-primary-color HEX] [--branding-sidebar-bg HEX] [--branding-tagline TAG] \
   [--branding-description DESC] [--branding-footer-text TEXT] [--branding-trust-text "a,b,c"] \
@@ -237,7 +237,7 @@ const avatar = req.headers["x-forwarded-user-avatar"]
 <a href="/_oauth/me">Account</a>
 ```
 
-`<a href="/_oauth/logout">Sign out</a>` also works for a one-click sign-out. If the app keeps its own session (session cookie / server-side store): its `/logout` clears that session first and then redirects to `/_oauth/logout`, and on **every request** it compares the stored user with `X-Forwarded-User` and drops the stored session when they differ (otherwise a user who signs out elsewhere or switches accounts is served the previous user's session).
+`<a href="/_oauth/logout">Sign out</a>` also works for a one-click sign-out. Projects can additionally have muvee show a small "Account" badge linking to `/_oauth/me` on protected pages (`--account-badge`; on for new projects, off for older ones) — turn it off when the app has its own account menu, and do not rely on it as the only entry for pages with a strict CSP. If the app keeps its own session (session cookie / server-side store): its `/logout` clears that session first and then redirects to `/_oauth/logout`, and on **every request** it compares the stored user with `X-Forwarded-User` and drops the stored session when they differ (otherwise a user who signs out elsewhere or switches accounts is served the previous user's session).
 
 For the full integration guide (frontend userinfo API, logout, CLI/headless Device Flow), see the [Service Auth Integration](https://hoveychen.github.io/muvee/docs/service-auth-integration) documentation.
 

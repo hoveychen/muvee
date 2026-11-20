@@ -242,7 +242,9 @@
       "deleteConfirm": "Delete this project?",
       "signOutEntryHint": "Give visitors a way to sign out: link to /_oauth/me from your app (e.g. in the header or user menu). Muvee serves that account page on every subsite — it shows who is signed in, with sign out and switch account.",
       "signOutEntryCopy": "Copy snippet",
-      "signOutEntryNote": "Linking straight to /_oauth/logout also works. If your app keeps its own session, clear it first and then redirect to /_oauth/logout — see the auth integration docs."
+      "signOutEntryNote": "Linking straight to /_oauth/logout also works. If your app keeps its own session, clear it first and then redirect to /_oauth/logout — see the auth integration docs.",
+      "accountBadge": "Account badge",
+      "accountBadgeHint": "When on, visitors see a small \"Account\" link in the bottom-right corner of this project's sign-in-protected pages. It opens this site's account page (/_oauth/me), where they can see which account they are signed in as and sign out; visitors can collapse it. No app changes needed. It never appears inside an iframe, and pages with a strict CSP or brotli-compressed HTML do not show it. Turn it off if your app already has its own account menu or sign-out button. Changes reach already-open tabs within 5 minutes."
     },
     "datasets": {
       "hint": "Select datasets to mount into the container. <accent>dependency</accent> = rsync copy (LRU cached). <blue>readwrite</blue> = direct NFS mount.",
@@ -362,7 +364,7 @@
       "hint": "Project sites that require sign-in keep their own session. \"Sign out of all subsites\" ends every subsite session of this account on every device and every base domain. Your console session and CLI tokens are not affected. Only subsites you signed in to with this console account are affected — subsites you signed in to with another email account stay signed in; open their account page (/_oauth/me) to sign out there.",
       "recentLabel": "Recently visited subsites",
       "loading": "Loading…",
-      "empty": "No subsite visits recorded yet. Visits by platform admins are not recorded.",
+      "empty": "No subsite visits recorded yet.",
       "openAccount": "Open this subsite's account page",
       "lastSeen": "last visited {{time}}",
       "revokeAll": "Sign out of all subsites",

@@ -1435,6 +1435,42 @@ function AuthTab({ projectId, form, onChange, onSave, saving, saveError }: {
 
           <div>
             <label className="form-label">
+              {t('projectDetail.config.accountBadge').toUpperCase()}
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div
+                role="switch"
+                aria-checked={!!form.account_badge}
+                aria-label={t('projectDetail.config.accountBadge')}
+                data-testid="account-badge-toggle"
+                onClick={() => onChange({ ...form, account_badge: !form.account_badge })}
+                className="relative rounded-full transition-colors duration-200"
+                style={{
+                  width: '36px', height: '20px',
+                  background: form.account_badge ? 'var(--accent)' : 'var(--border)',
+                  cursor: 'pointer',
+                }}
+              >
+                <div
+                  className="absolute top-1 rounded-full transition-transform duration-200"
+                  style={{
+                    width: '12px', height: '12px',
+                    background: '#ffffff',
+                    left: form.account_badge ? '18px' : '4px',
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+                {form.account_badge ? t('projectDetail.config.enabled') : t('projectDetail.config.disabled')}
+              </span>
+            </label>
+            <p style={{ fontSize: '0.8125rem', marginTop: '0.35rem', color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+              {t('projectDetail.config.accountBadgeHint')}
+            </p>
+          </div>
+
+          <div>
+            <label className="form-label">
               {t('projectDetail.config.allowedDomains').toUpperCase()}
             </label>
             <input

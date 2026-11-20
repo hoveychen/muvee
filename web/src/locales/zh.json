@@ -242,7 +242,9 @@
       "deleteConfirm": "确认删除此项目？",
       "signOutEntryHint": "请给访客留一个登出入口：在应用里（例如页头或用户菜单）链接到 /_oauth/me。Muvee 在每个子站上都提供这个账户页，显示当前登录身份，并提供退出和换号。",
       "signOutEntryCopy": "复制片段",
-      "signOutEntryNote": "直接链接到 /_oauth/logout 也可以。如果应用自己维护会话，请先清掉自己的会话再跳转到 /_oauth/logout，详见认证接入文档。"
+      "signOutEntryNote": "直接链接到 /_oauth/logout 也可以。如果应用自己维护会话，请先清掉自己的会话再跳转到 /_oauth/logout，详见认证接入文档。",
+      "accountBadge": "页面角标",
+      "accountBadgeHint": "开启后，访客在本项目需要登录的页面右下角会看到一个「账户」小链接，点击进入本站账户页（/_oauth/me）查看当前登录的账号、退出登录；访客可以把它收起。不改动应用代码。不会出现在 iframe 嵌入的页面里；页面若设置了严格的 CSP、或返回 brotli 压缩的 HTML，角标不会出现。应用已有自己的账户菜单或登出按钮时，建议关闭。改动后最多 5 分钟在已打开的标签页生效。"
     },
     "datasets": {
       "hint": "选择要挂载到容器中的数据集。<accent>dependency</accent> = rsync 复制（LRU 缓存）。<blue>readwrite</blue> = 直接 NFS 挂载。",
@@ -362,7 +364,7 @@
       "hint": "需要登录的项目子站各自保留登录会话。「退出全部子站」会结束本账号在所有设备、所有基域上的全部子站会话，不影响控制台登录和 CLI 令牌。只作用于当前控制台账号：用其他邮箱账号登录的子站不受影响，请打开那个子站的账户页（/_oauth/me）单独退出。",
       "recentLabel": "最近访问的子站",
       "loading": "加载中…",
-      "empty": "还没有子站访问记录。平台管理员的访问不计入。",
+      "empty": "还没有子站访问记录。",
       "openAccount": "打开该子站的账户页",
       "lastSeen": "最后访问 {{time}}",
       "revokeAll": "退出全部子站",
