@@ -1431,6 +1431,8 @@ function AuthTab({ projectId, form, onChange, onSave, saving, saveError }: {
 
       {form.auth_required && (
         <>
+          <SignOutEntryHint />
+
           <div>
             <label className="form-label">
               {t('projectDetail.config.allowedDomains').toUpperCase()}
@@ -1489,6 +1491,45 @@ function AuthTab({ projectId, form, onChange, onSave, saving, saveError }: {
           {saving ? t('projectDetail.config.saving') : t('projectDetail.config.saveChanges')}
         </button>
       </div>
+    </div>
+  )
+}
+
+// Standing reminder shown while sign-in is required (BACKLOG-20261121-001):
+// the platform serves an account page at /_oauth/me on every subsite, but the
+// app has to link to it — otherwise visitors have no way to sign out.
+const SIGN_OUT_SNIPPET = '<a href="/_oauth/me">Account</a>'
+
+function SignOutEntryHint() {
+  const { t } = useTranslation()
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(SIGN_OUT_SNIPPET)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard unavailable: the snippet stays selectable */
+    }
+  }
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg-hover)' }}>
+      <p style={{ fontSize: '0.8125rem', color: 'var(--fg-primary)', lineHeight: 1.6, marginBottom: '0.5rem' }}>
+        {t('projectDetail.config.signOutEntryHint')}
+      </p>
+      <div className="flex items-center gap-2">
+        <code style={{
+          flex: 1, fontFamily: MONO, fontSize: '0.8125rem', padding: '0.4rem 0.6rem',
+          background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: '4px',
+          color: 'var(--accent)', wordBreak: 'break-all', userSelect: 'all',
+        }}>{SIGN_OUT_SNIPPET}</code>
+        <button type="button" onClick={copy} className="btn-secondary" style={{ padding: '0.4rem' }} title={t('projectDetail.config.signOutEntryCopy')}>
+          {copied ? <Check size={13} style={{ color: 'var(--accent)' }} /> : <Copy size={13} />}
+        </button>
+      </div>
+      <p style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', lineHeight: 1.5, marginTop: '0.4rem' }}>
+        {t('projectDetail.config.signOutEntryNote')}
+      </p>
     </div>
   )
 }

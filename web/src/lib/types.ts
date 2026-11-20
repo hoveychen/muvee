@@ -253,6 +253,16 @@ export interface DatasetSnapshot {
   version: number
 }
 
+export interface VisitedProject {
+  project_id: string
+  name: string
+  project_type: string
+  host: string
+  account_url: string
+  last_seen_at: string
+  visit_count: number
+}
+
 export interface ApiToken {
   id: string
   name: string

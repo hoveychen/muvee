@@ -206,6 +206,19 @@ export const api = {
     revokeAll: () => request<{ status: string }>('/api/me/cli-tokens/revoke', { method: 'POST' }),
   },
 
+  // Subsite (ForwardAuth) sign-ins: void every subsite session of the caller
+  // on every device and base domain (console session and CLI tokens stay).
+  // BACKLOG-20261121-001.
+  meFwdSessions: {
+    revokeAll: () => request<{ status: string }>('/api/me/fwd-sessions/revoke', { method: 'POST' }),
+  },
+
+  // Subsites the caller visited recently, newest first; account_url points at
+  // the subsite's /_oauth/me account page.
+  visitedProjects: {
+    list: () => request<import('./types').VisitedProject[]>('/api/me/visited-projects'),
+  },
+
   secrets: {
     list: () => request<import('./types').Secret[]>('/api/secrets'),
     create: (data: { name: string; type: import('./types').SecretType; value: string; registry_addr?: string; registry_username?: string }) =>
