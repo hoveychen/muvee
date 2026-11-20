@@ -17,7 +17,18 @@ import (
 // device and base domain. The console session and CLI device-flow tokens stay
 // (compare handleLogout / handleRevokeCLITokens). Sessions of another account
 // (another email) are not this user's and are untouched.
+//
+// Tenant subsites are same-site with the console and the request has no body,
+// so muvee_session (SameSite=Lax) would ride along on a cross-origin simple
+// POST fired by a tenant page and sign the visitor out of every subsite. A
+// browser request whose Sec-Fetch-Site is anything but same-origin is refused;
+// requests without the header (curl, muveectl) keep working — the same rule as
+// authservice's /_oauth/logout confirm page.
 func (s *Server) handleRevokeFwdSessions(w http.ResponseWriter, r *http.Request) {
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
 	user := auth.UserFromCtx(r.Context())
 	if user == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
