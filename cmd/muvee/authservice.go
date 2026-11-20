@@ -85,8 +85,8 @@ var (
 	cookieDomain       string   // canonical BASE_DOMAIN — default when the request host matches no configured base
 	cookieBaseDomains  []string // all configured platform base domains (canonical first); see internal/domains
 	forwardAuthBase    string   // e.g. "https://example.com" — canonical FORWARD_AUTH_BASE_URL default
-	muveeServerURL     string // internal URL for /api/internal/access/check
-	internalKey        string // sha256(JWT_SECRET) — shared with muvee-server
+	muveeServerURL     string   // internal URL for /api/internal/access/check
+	internalKey        string   // sha256(JWT_SECRET) — shared with muvee-server
 	internalClient     = &http.Client{Timeout: 5 * time.Second}
 )
 
@@ -278,6 +278,9 @@ func runAuthservice() {
 	r.Options("/_oauth/login-token/poll", handleOAuthOptionsPreflight)
 	r.Get("/_oauth/logout", handleFwdLogout)
 	r.Get("/_oauth/logged-out", handleLoggedOutPage)
+	// Per-host account page (BACKLOG-20261121-001): which account this host is
+	// signed in with, sign out / switch account / manage in the console.
+	r.Get("/_oauth/me", handleAccountPage)
 	r.Get("/_oauth/login", handleLoginPage)
 	// Central sign-in host (BACKLOG-20261117-007): silent authorize, provider
 	// start; and the subsite end of it: code exchange and the SDK popup page.
@@ -1634,6 +1637,9 @@ type loginPageData struct {
 	// Popup keeps the SDK popup sign-in (?popup=1) across the provider and
 	// password / SMS forms, so it ends on /_oauth/popup-done.
 	Popup bool
+	// Account renders the account page (/_oauth/me) instead of the sign-in
+	// methods; see handleAccountPage.
+	Account *accountView
 	// M holds the localized UI strings (zh/en), chosen per-request from the
 	// Accept-Language header. See loginMessages.
 	M loginMsg
@@ -1642,13 +1648,19 @@ type loginPageData struct {
 // loginMsg is the localized string set for the login page. EN toggles
 // word-order-sensitive phrasing (e.g. the OAuth button) in the template.
 type loginMsg struct {
-	EN                                                      bool
-	WelcomeBack, ChooseMethod, SignInTo, YourAccount        string
-	Or, Username, UsernamePH, Password, PasswordPH, Login   string
-	Phone, PhonePH, Code, CodePH, GetCode, Resend           string
+	EN                                                       bool
+	WelcomeBack, ChooseMethod, SignInTo, YourAccount         string
+	Or, Username, UsernamePH, Password, PasswordPH, Login    string
+	Phone, PhonePH, Code, CodePH, GetCode, Resend            string
 	Sending, CodeSent, SendFailed, NetworkErr, PhoneRequired string
-	BadCredentials, BadCode                                 string
-	SignedOut, SignedOutOf, SignedOutSub, SignInAgain       string
+	BadCredentials, BadCode                                  string
+	SignedOut, SignedOutOf, SignedOutSub, SignInAgain        string
+	// Account page (/_oauth/me) and the links to it.
+	AccountTitle, AccountLink, SignedInAs, SignInMethod      string
+	SignOut, SignOutHint, SwitchAccount, SwitchHint          string
+	ManageInConsole, ManageHint, NotSignedIn, NotSignedInSub string
+	CentralTitle, CentralSub, CentralNone, Unavailable       string
+	MethodPassword, MethodPhone                              string
 }
 
 // acceptLang picks "en" or "zh" from the request's Accept-Language header,
@@ -1674,6 +1686,14 @@ func loginMessages(lang string) loginMsg {
 			Sending: "Sending…", CodeSent: "Code sent. Check your phone.", SendFailed: "Failed to send code.", NetworkErr: "Network error, please retry.", PhoneRequired: "Enter your phone number first.",
 			BadCredentials: "Invalid username or password.", BadCode: "Invalid or expired verification code.",
 			SignedOut: "You've signed out", SignedOutOf: "You've signed out of", SignedOutSub: "Sign in again to keep using it.", SignInAgain: "Sign in again",
+			AccountTitle: "Your account", AccountLink: "Which account am I signed in with?", SignedInAs: "Signed in as", SignInMethod: "Signed in with",
+			SignOut: "Sign out", SignOutHint: "Signs you out of every site on this domain and ends the sign-in they share. The console stays signed in.",
+			SwitchAccount: "Switch account", SwitchHint: "Signs out first, then lets you choose how to sign in — you won't be signed back in to this account automatically.",
+			ManageInConsole: "Manage sign-ins in the console", ManageHint: "See the sites you signed in to and sign out of all of them, on every device.",
+			NotSignedIn: "Not signed in", NotSignedInSub: "You're not signed in to this site.",
+			CentralTitle: "Shared sign-in for this domain", CentralSub: "Sites on this domain sign you in silently with this account.", CentralNone: "No site on this domain is sharing a sign-in right now.",
+			Unavailable:    "Can't check your sign-in right now. Please try again in a moment.",
+			MethodPassword: "Username & password", MethodPhone: "Phone verification code",
 		}
 	}
 	return loginMsg{
@@ -1683,6 +1703,14 @@ func loginMessages(lang string) loginMsg {
 		Sending: "发送中…", CodeSent: "验证码已发送，请查收短信", SendFailed: "发送失败，请重试", NetworkErr: "网络错误，请重试", PhoneRequired: "请先输入手机号",
 		BadCredentials: "用户名或密码错误", BadCode: "验证码错误或已过期",
 		SignedOut: "已退出登录", SignedOutOf: "你已退出", SignedOutSub: "如需继续使用，请重新登录。", SignInAgain: "重新登录",
+		AccountTitle: "本站账户", AccountLink: "查看本站登录的是哪个账号", SignedInAs: "已登录为", SignInMethod: "登录方式",
+		SignOut: "退出登录", SignOutHint: "将退出本域名下的所有子站，并结束它们共用的登录；控制台不受影响。",
+		SwitchAccount: "换个账号", SwitchHint: "先退出，再重新选择登录方式，不会自动登回当前账号。",
+		ManageInConsole: "去控制台管理登录", ManageHint: "查看登录过的子站，或在所有设备上一键退出全部子站。",
+		NotSignedIn: "未登录", NotSignedInSub: "你还没有登录本站。",
+		CentralTitle: "本域名共享登录", CentralSub: "本域名下的子站会用这个账号自动登录。", CentralNone: "本域名下当前没有共享的登录。",
+		Unavailable:    "暂时无法确认登录状态，请稍后重试。",
+		MethodPassword: "账号密码", MethodPhone: "手机验证码",
 	}
 }
 
@@ -1829,7 +1857,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .SiteName}}{{.SiteName}} · {{end}}{{if .LoggedOut}}{{.M.SignedOut}}{{else}}{{.M.WelcomeBack}}{{end}}</title>
+<title>{{if .SiteName}}{{.SiteName}} · {{end}}{{if .Account}}{{if .Account.Central}}{{.M.CentralTitle}}{{else}}{{.M.AccountTitle}}{{end}}{{else if .LoggedOut}}{{.M.SignedOut}}{{else}}{{.M.WelcomeBack}}{{end}}</title>
 {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}">{{end}}
 <style>
   *{box-sizing:border-box}
@@ -1878,6 +1906,15 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
   .trust{margin-top:1.6rem;display:flex;align-items:center;flex-wrap:wrap;gap:.6rem 1.1rem;font-size:.75rem;color:#a8a29a}
   .trust span{display:inline-flex;align-items:center;gap:.35rem}
   .trust svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .acct{display:flex;align-items:center;gap:.9rem;margin:0 0 1.4rem;padding:1rem;border:1px solid var(--line);border-radius:12px;background:var(--field)}
+  .acct img{width:44px;height:44px;border-radius:50%;object-fit:cover;flex:0 0 auto}
+  .acct .who{min-width:0}
+  .acct .label{font-weight:650;word-break:break-all}
+  .acct .meta{font-size:.8125rem;color:var(--muted);margin-top:.15rem}
+  .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+  .btn.primary:hover{filter:brightness(1.12);background:var(--primary)}
+  .hint{margin:.35rem 0 1rem;font-size:.8125rem;line-height:1.55;color:var(--muted)}
+  .aside-link{display:inline-block;margin-top:1.1rem;font-size:.8125rem;color:var(--muted)}
   @media(min-width:1024px){.sidebar{display:flex}.mobile-brand{display:none}.panel{justify-content:flex-start;padding-left:min(9vw,7rem)}}
 </style>
 </head>
@@ -1898,9 +1935,25 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
         {{if .LogoURL}}<img class="brand-logo" src="{{.LogoURL}}" alt="{{.SiteName}}" onerror="this.style.display='none';var f=document.getElementById('mb-brand');if(f)f.style.display='block'">{{end}}
         <div class="brand-txt" id="mb-brand"{{if .LogoURL}} style="display:none"{{end}}>{{if .SiteName}}{{.SiteName}}{{else}}{{.M.Login}}{{end}}</div>
       </div>
-      {{if .LoggedOut}}<h1 class="head">{{.M.SignedOut}}</h1>
+      {{if .Account}}{{with .Account}}<h1 class="head">{{if .Central}}{{$.M.CentralTitle}}{{else}}{{$.M.AccountTitle}}{{end}}</h1>
+      {{if .Unavailable}}<p class="pw-error">{{$.M.Unavailable}}</p>
+      {{else if .SignedIn}}<p class="sub">{{if .Central}}{{$.M.CentralSub}}{{else}}{{$.M.SignedInAs}}{{end}}</p>
+      <div class="acct">{{if .AvatarURL}}<img src="{{.AvatarURL}}" alt="" referrerpolicy="no-referrer" onerror="this.style.display='none'">{{end}}
+        <div class="who"><div class="label">{{.Label}}</div>{{if .Name}}<div class="meta">{{.Name}}</div>{{end}}{{if .Method}}<div class="meta">{{$.M.SignInMethod}}: {{.Method}}</div>{{end}}</div>
+      </div>
+      <a class="btn primary" href="{{.LogoutURL}}">{{$.M.SignOut}}</a>
+      <p class="hint">{{$.M.SignOutHint}}</p>
+      {{if .SwitchURL}}<a class="btn" href="{{.SwitchURL}}">{{$.M.SwitchAccount}}</a>
+      <p class="hint">{{$.M.SwitchHint}}</p>{{end}}
+      {{else}}<p class="sub">{{if .Central}}{{$.M.CentralNone}}{{else}}{{$.M.NotSignedIn}} · {{$.M.NotSignedInSub}}{{end}}</p>
+      {{if .LoginURL}}<a class="btn primary" href="{{.LoginURL}}">{{$.M.Login}}</a>{{end}}
+      {{end}}
+      <a class="btn" href="{{.ConsoleURL}}">{{$.M.ManageInConsole}}</a>
+      <p class="hint">{{$.M.ManageHint}}</p>{{end}}
+      {{else if .LoggedOut}}<h1 class="head">{{.M.SignedOut}}</h1>
       <p class="sub">{{if .SiteName}}{{.M.SignedOutOf}} {{.SiteName}}{{if .M.EN}}.{{else}}。{{end}}{{end}}{{.M.SignedOutSub}}</p>
       <a class="btn" href="/_oauth/login?sso=none">{{.M.SignInAgain}}</a>
+      <a class="aside-link" href="/_oauth/me">{{.M.AccountLink}}</a>
       {{else}}<h1 class="head">{{.M.WelcomeBack}}</h1>
       {{if .MultipleMethods}}<p class="sub">{{.M.ChooseMethod}}{{if .SiteName}} {{.SiteName}}{{end}}</p>{{else}}<p class="sub">{{if .SiteName}}{{.M.SignInTo}} {{.SiteName}}{{else}}{{.M.YourAccount}}{{end}}</p>{{end}}
       {{range .Providers}}<a class="btn" href="/_oauth/login?provider={{.Name}}{{if $.Popup}}&amp;popup=1{{end}}">{{if .Icon}}<span class="icon">{{.Icon}}</span>{{end}}{{if $.M.EN}}Continue with {{.DisplayName}}{{else}}使用 {{.DisplayName}} 登录{{end}}</a>{{end}}
@@ -2144,7 +2197,7 @@ func (e *deviceFlowEntry) snapshot() (fwdIdentity, bool) {
 }
 
 const (
-	deviceCodeExpiry = 10 * time.Minute
+	deviceCodeExpiry   = 10 * time.Minute
 	devicePollInterval = 5 // seconds
 	cliTokenExpiry     = 90 * 24 * time.Hour
 )
@@ -2533,12 +2586,12 @@ func fetchProjectInfoInternal(ctx context.Context, projectID string) (*projectMi
 // project's downstream sign-in flow may use, plus the branding fields that
 // drive the forward-auth login page visual.
 type projectAuthConfig struct {
-	ProjectID        string           `json:"project_id"`
-	ProjectName      string           `json:"project_name"`
-	DomainPrefix     string           `json:"domain_prefix"`
-	EnabledProviders string           `json:"enabled_providers"`
-	AuthRequired     bool             `json:"auth_required"`
-	AccessMode       string           `json:"access_mode"`
+	ProjectID        string `json:"project_id"`
+	ProjectName      string `json:"project_name"`
+	DomainPrefix     string `json:"domain_prefix"`
+	EnabledProviders string `json:"enabled_providers"`
+	AuthRequired     bool   `json:"auth_required"`
+	AccessMode       string `json:"access_mode"`
 	// PasswordLogin is true when the project has at least one enabled demo
 	// account, which makes the login page render the username/password form.
 	PasswordLogin bool `json:"password_login"`
@@ -2753,7 +2806,7 @@ const requestAccessPageTmpl = `<!DOCTYPE html>
     <textarea id="reason" name="reason" maxlength="1000" placeholder="{{if eq .Lang "en"}}What do you need this for?{{else}}你需要用它做什么？{{end}}"></textarea>
     <button type="submit">{{if eq .Lang "en"}}Send request{{else}}发送申请{{end}}</button>
   </form>
-  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Account}}. <a href="/_oauth/logout">Sign out</a>{{else}}已登录为 {{.Account}}。<a href="/_oauth/logout">退出登录</a>{{end}}</p>
+  <p class="muted" style="margin-top:1.2rem">{{if eq .Lang "en"}}Signed in as {{.Account}}. <a href="/_oauth/me">Switch account</a> · <a href="/_oauth/logout">Sign out</a>{{else}}已登录为 {{.Account}}。<a href="/_oauth/me">换个账号</a> · <a href="/_oauth/logout">退出登录</a>{{end}}</p>
 {{else if eq .Phase "submitted"}}
   <h1>{{if eq .Lang "en"}}Request submitted{{else}}申请已提交{{end}}</h1>
   <div class="ok">{{if eq .Lang "en"}}We've notified the owner of <strong>{{.ProjectName}}</strong>. You'll be able to reach this project once they approve.{{else}}已通知 <strong>{{.ProjectName}}</strong> 的所有者，通过后你就能访问该项目。{{end}}</div>
