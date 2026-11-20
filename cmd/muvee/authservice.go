@@ -281,6 +281,7 @@ func runAuthservice() {
 	// Per-host account page (BACKLOG-20261121-001): which account this host is
 	// signed in with, sign out / switch account / manage in the console.
 	r.Get("/_oauth/me", handleAccountPage)
+	r.Get(accountUIPath, handleAccountUI)
 	r.Get("/_oauth/login", handleLoginPage)
 	// Central sign-in host (BACKLOG-20261117-007): silent authorize, provider
 	// start; and the subsite end of it: code exchange and the SDK popup page.
@@ -852,6 +853,9 @@ type accessCheckResult struct {
 	// SessionRevoked: the credential predates the user's console logout or
 	// its sid / sso_sid was revoked.
 	SessionRevoked bool `json:"session_revoked"`
+	// AccountBadge: the project's account badge switch (BACKLOG-20261121-001),
+	// read by /_oauth/account-ui. Absent from an older muvee-server: false.
+	AccountBadge bool `json:"account_badge"`
 }
 
 // requestAccessRedirectURL returns the absolute URL of the request-access page

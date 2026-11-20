@@ -340,12 +340,12 @@ func (s *Store) ListPlatformMemberUsers(ctx context.Context, scope string) ([]*P
 
 // projectColumns is the full SELECT list for a Project row. git_url is COALESCEd
 // so domain_only projects (which have NULL git_url) scan into an empty string.
-const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, tcp_domain_prefix, tcp_host_port, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of, paused, sms_login_enabled, allow_project_access`
+const projectColumns = `id, name, project_type, COALESCE(git_url, '') AS git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, tcp_domain_prefix, tcp_host_port, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of, paused, sms_login_enabled, allow_project_access, account_badge`
 
 // projectColumnsPrefixed is projectColumns with every column qualified by the
 // `p.` alias. Used when the query JOINs another table (e.g. users) so bare
 // column names like `id` or `name` would be ambiguous.
-const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.fixed_host_port, p.fixed_node_id, p.tcp_domain_prefix, p.tcp_host_port, p.created_at, p.updated_at, p.enabled_providers, p.branding_site_name, p.branding_logo_url, p.branding_favicon_url, p.branding_primary_color, p.branding_sidebar_bg, p.branding_tagline, p.branding_description, p.branding_footer_text, p.branding_trust_text, p.last_image_tag, p.triggers_redeploy_of, p.paused, p.sms_login_enabled, p.allow_project_access`
+const projectColumnsPrefixed = `p.id, p.name, p.project_type, COALESCE(p.git_url, '') AS git_url, p.git_branch, p.git_source, p.domain_prefix, p.dockerfile_path, p.owner_id, p.auth_required, p.auth_allowed_domains, p.auth_bypass_paths, p.container_port, p.memory_limit, p.volume_mount_path, p.description, p.icon, p.tags, p.compose_file_path, p.expose_service, p.expose_port, p.pinned_node_id, p.image_ref, p.auto_deploy_enabled, p.last_tracked_commit_sha, p.last_tracked_image_digests, p.access_mode, p.fixed_host_port, p.fixed_node_id, p.tcp_domain_prefix, p.tcp_host_port, p.created_at, p.updated_at, p.enabled_providers, p.branding_site_name, p.branding_logo_url, p.branding_favicon_url, p.branding_primary_color, p.branding_sidebar_bg, p.branding_tagline, p.branding_description, p.branding_footer_text, p.branding_trust_text, p.last_image_tag, p.triggers_redeploy_of, p.paused, p.sms_login_enabled, p.allow_project_access, p.account_badge`
 
 // ownerJoinColumns is the tail of the SELECT list for projects queried with
 // `LEFT JOIN users u ON u.id = p.owner_id`.
@@ -354,13 +354,13 @@ const ownerJoinColumns = `, COALESCE(u.name, '') AS owner_name, COALESCE(u.email
 func scanProject(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.TCPDomainPrefix, &p.TCPHostPort, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.SMSLoginEnabled, &p.AllowProjectAccess)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.TCPDomainPrefix, &p.TCPHostPort, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.SMSLoginEnabled, &p.AllowProjectAccess, &p.AccountBadge)
 }
 
 func scanProjectWithOwner(scanner interface {
 	Scan(dest ...interface{}) error
 }, p *Project) error {
-	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.TCPDomainPrefix, &p.TCPHostPort, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.SMSLoginEnabled, &p.AllowProjectAccess, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
+	return scanner.Scan(&p.ID, &p.Name, &p.ProjectType, &p.GitURL, &p.GitBranch, &p.GitSource, &p.DomainPrefix, &p.DockerfilePath, &p.OwnerID, &p.AuthRequired, &p.AuthAllowedDomains, &p.AuthBypassPaths, &p.ContainerPort, &p.MemoryLimit, &p.VolumeMountPath, &p.Description, &p.Icon, &p.Tags, &p.ComposeFilePath, &p.ExposeService, &p.ExposePort, &p.PinnedNodeID, &p.ImageRef, &p.AutoDeployEnabled, &p.LastTrackedCommitSHA, &p.LastTrackedImageDigests, &p.AccessMode, &p.FixedHostPort, &p.FixedNodeID, &p.TCPDomainPrefix, &p.TCPHostPort, &p.CreatedAt, &p.UpdatedAt, &p.EnabledProviders, &p.BrandingSiteName, &p.BrandingLogoURL, &p.BrandingFaviconURL, &p.BrandingPrimaryColor, &p.BrandingSidebarBg, &p.BrandingTagline, &p.BrandingDescription, &p.BrandingFooterText, &p.BrandingTrustText, &p.LastImageTag, &p.TriggersRedeployOf, &p.Paused, &p.SMSLoginEnabled, &p.AllowProjectAccess, &p.AccountBadge, &p.OwnerName, &p.OwnerEmail, &p.OwnerAvatarURL)
 }
 
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
@@ -405,9 +405,9 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 		p.TriggersRedeployOf = "[]"
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, tcp_domain_prefix, tcp_host_port, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of, allow_project_access)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46)
-	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.PinnedNodeID, p.ImageRef, p.AutoDeployEnabled, p.LastTrackedCommitSHA, p.LastTrackedImageDigests, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.TCPDomainPrefix, p.TCPHostPort, p.CreatedAt, p.UpdatedAt, p.EnabledProviders, p.BrandingSiteName, p.BrandingLogoURL, p.BrandingFaviconURL, p.BrandingPrimaryColor, p.BrandingSidebarBg, p.BrandingTagline, p.BrandingDescription, p.BrandingFooterText, p.BrandingTrustText, p.LastImageTag, p.TriggersRedeployOf, p.AllowProjectAccess)
+		INSERT INTO projects (id, name, project_type, git_url, git_branch, git_source, domain_prefix, dockerfile_path, owner_id, auth_required, auth_allowed_domains, auth_bypass_paths, container_port, memory_limit, volume_mount_path, description, icon, tags, compose_file_path, expose_service, expose_port, pinned_node_id, image_ref, auto_deploy_enabled, last_tracked_commit_sha, last_tracked_image_digests, access_mode, fixed_host_port, fixed_node_id, tcp_domain_prefix, tcp_host_port, created_at, updated_at, enabled_providers, branding_site_name, branding_logo_url, branding_favicon_url, branding_primary_color, branding_sidebar_bg, branding_tagline, branding_description, branding_footer_text, branding_trust_text, last_image_tag, triggers_redeploy_of, allow_project_access, account_badge)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47)
+	`, p.ID, p.Name, p.ProjectType, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.OwnerID, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.PinnedNodeID, p.ImageRef, p.AutoDeployEnabled, p.LastTrackedCommitSHA, p.LastTrackedImageDigests, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.TCPDomainPrefix, p.TCPHostPort, p.CreatedAt, p.UpdatedAt, p.EnabledProviders, p.BrandingSiteName, p.BrandingLogoURL, p.BrandingFaviconURL, p.BrandingPrimaryColor, p.BrandingSidebarBg, p.BrandingTagline, p.BrandingDescription, p.BrandingFooterText, p.BrandingTrustText, p.LastImageTag, p.TriggersRedeployOf, p.AllowProjectAccess, p.AccountBadge)
 	if err != nil {
 		return nil, err
 	}
@@ -496,8 +496,8 @@ func (s *Store) UpdateProject(ctx context.Context, p *Project) error {
 		p.TriggersRedeployOf = "[]"
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, auth_bypass_paths=$9, container_port=$10, memory_limit=$11, volume_mount_path=$12, description=$13, icon=$14, tags=$15, compose_file_path=$16, expose_service=$17, expose_port=$18, image_ref=$19, auto_deploy_enabled=$20, access_mode=$21, fixed_host_port=$22, fixed_node_id=$23, updated_at=$24, enabled_providers=$25, branding_site_name=$26, branding_logo_url=$27, branding_favicon_url=$28, branding_primary_color=$29, branding_sidebar_bg=$30, branding_tagline=$31, branding_description=$32, branding_footer_text=$33, branding_trust_text=$34, triggers_redeploy_of=$35, sms_login_enabled=$36, tcp_domain_prefix=$37, tcp_host_port=$38, allow_project_access=$39 WHERE id=$40
-	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.ImageRef, p.AutoDeployEnabled, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.UpdatedAt, p.EnabledProviders, p.BrandingSiteName, p.BrandingLogoURL, p.BrandingFaviconURL, p.BrandingPrimaryColor, p.BrandingSidebarBg, p.BrandingTagline, p.BrandingDescription, p.BrandingFooterText, p.BrandingTrustText, p.TriggersRedeployOf, p.SMSLoginEnabled, p.TCPDomainPrefix, p.TCPHostPort, p.AllowProjectAccess, p.ID)
+		UPDATE projects SET name=$1, git_url=$2, git_branch=$3, git_source=$4, domain_prefix=$5, dockerfile_path=$6, auth_required=$7, auth_allowed_domains=$8, auth_bypass_paths=$9, container_port=$10, memory_limit=$11, volume_mount_path=$12, description=$13, icon=$14, tags=$15, compose_file_path=$16, expose_service=$17, expose_port=$18, image_ref=$19, auto_deploy_enabled=$20, access_mode=$21, fixed_host_port=$22, fixed_node_id=$23, updated_at=$24, enabled_providers=$25, branding_site_name=$26, branding_logo_url=$27, branding_favicon_url=$28, branding_primary_color=$29, branding_sidebar_bg=$30, branding_tagline=$31, branding_description=$32, branding_footer_text=$33, branding_trust_text=$34, triggers_redeploy_of=$35, sms_login_enabled=$36, tcp_domain_prefix=$37, tcp_host_port=$38, allow_project_access=$39, account_badge=$40 WHERE id=$41
+	`, p.Name, gitURL, p.GitBranch, p.GitSource, p.DomainPrefix, p.DockerfilePath, p.AuthRequired, p.AuthAllowedDomains, p.AuthBypassPaths, p.ContainerPort, p.MemoryLimit, p.VolumeMountPath, p.Description, p.Icon, p.Tags, p.ComposeFilePath, p.ExposeService, p.ExposePort, p.ImageRef, p.AutoDeployEnabled, p.AccessMode, p.FixedHostPort, p.FixedNodeID, p.UpdatedAt, p.EnabledProviders, p.BrandingSiteName, p.BrandingLogoURL, p.BrandingFaviconURL, p.BrandingPrimaryColor, p.BrandingSidebarBg, p.BrandingTagline, p.BrandingDescription, p.BrandingFooterText, p.BrandingTrustText, p.TriggersRedeployOf, p.SMSLoginEnabled, p.TCPDomainPrefix, p.TCPHostPort, p.AllowProjectAccess, p.AccountBadge, p.ID)
 	return err
 }
 
@@ -810,7 +810,16 @@ type AccessCheckResult struct {
 	// listed in fwd_session_revocations (BACKLOG-20261117-007). Answered by the
 	// same query that resolves the user row.
 	SessionIDRevoked bool
+	// AccountBadge is projects.account_badge: show the per-subsite account
+	// badge (BACKLOG-20261121-001). Read by a subquery in the same statement
+	// that resolves the user, so it is answered for platform admins too (whose
+	// allow decision never reads the project row) at no extra round trip.
+	AccountBadge bool
 }
+
+// accountBadgeExpr reads the project's account_badge inside the user lookup;
+// %s is the project id parameter. A missing project reads false.
+const accountBadgeExpr = `COALESCE((SELECT account_badge FROM projects WHERE id = %s), FALSE)`
 
 // sidRevokedExpr is the per-session revocation predicate shared by the access
 // check and the standalone revocation lookup; %s is the text[] parameter.
@@ -825,8 +834,8 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 	var res AccessCheckResult
 	var role UserRole
 	var revokedAt, cliRevokedAt *time.Time
-	var sidRevoked bool
-	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, cli_tokens_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE email = $1`, email, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &cliRevokedAt, &sidRevoked)
+	var sidRevoked, accountBadge bool
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, cli_tokens_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+`, `+fmt.Sprintf(accountBadgeExpr, "$3")+` FROM users WHERE email = $1`, email, nonNilSIDs(sids), projectID).Scan(&res.UserID, &role, &revokedAt, &cliRevokedAt, &sidRevoked, &accountBadge)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
@@ -837,6 +846,7 @@ func (s *Store) IsProjectAccessAllowedByEmail(ctx context.Context, email string,
 	res.FwdSessionsRevokedAt = revokedAt
 	res.CLITokensRevokedAt = cliRevokedAt
 	res.SessionIDRevoked = sidRevoked
+	res.AccountBadge = accountBadge
 	return res, err
 }
 
@@ -853,8 +863,8 @@ func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.
 	var res AccessCheckResult
 	var role UserRole
 	var revokedAt, cliRevokedAt *time.Time
-	var sidRevoked bool
-	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, cli_tokens_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+` FROM users WHERE id = $1`, userID, nonNilSIDs(sids)).Scan(&res.UserID, &role, &revokedAt, &cliRevokedAt, &sidRevoked)
+	var sidRevoked, accountBadge bool
+	err := s.db.QueryRow(ctx, `SELECT id, role, fwd_sessions_revoked_at, cli_tokens_revoked_at, `+fmt.Sprintf(sidRevokedExpr, "$2")+`, `+fmt.Sprintf(accountBadgeExpr, "$3")+` FROM users WHERE id = $1`, userID, nonNilSIDs(sids), projectID).Scan(&res.UserID, &role, &revokedAt, &cliRevokedAt, &sidRevoked, &accountBadge)
 	if err == pgx.ErrNoRows {
 		return res, nil
 	}
@@ -865,6 +875,7 @@ func (s *Store) IsProjectAccessAllowedByUserID(ctx context.Context, userID uuid.
 	res.FwdSessionsRevokedAt = revokedAt
 	res.CLITokensRevokedAt = cliRevokedAt
 	res.SessionIDRevoked = sidRevoked
+	res.AccountBadge = accountBadge
 	return res, err
 }
 
