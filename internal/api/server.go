@@ -916,6 +916,9 @@ func (s *Server) Router() http.Handler {
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: true,
 	}))
+	// Refuse browser writes from other origins before any route runs
+	// (BUG-20261123-001); see crossOriginGuard.
+	r.Use(s.crossOriginGuard)
 
 	// Auth – provider-agnostic routes (/auth/{provider}/login and /auth/{provider}/callback)
 	r.Get("/auth/{provider}/login", s.handleProviderLogin)
@@ -5861,7 +5864,17 @@ func applyForwardedUserHeaders(h http.Header, user *store.User) {
 // The authenticated user's email is injected as X-Forwarded-User so the container
 // sees the same identity as it would through Traefik ForwardAuth.
 // Route: /api/projects/{id}/proxy/*
+//
+// Only "Bearer " callers (muveectl curl / port-forward) are served. The
+// response is tenant content on the console origin: were the session cookie
+// accepted, a browser that opened this URL — directly, via a same-site iframe
+// or a redirect — would run tenant JavaScript same-origin with the console
+// and let it mint tokens as the viewer (BUG-20261123-001).
 func (s *Server) handleProjectProxy(w http.ResponseWriter, r *http.Request) {
+	if !hasBearer(r) {
+		http.Error(w, "project proxy requires a Bearer token (muveectl)", http.StatusUnauthorized)
+		return
+	}
 	projectID, ok := parsePathUUID(w, r, "id")
 	if !ok {
 		return
