@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -210,6 +211,51 @@ func processNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler
 	}
 }
 
+// deployNodeActiveWindow mirrors the liveness window scheduler.PickDeployNode,
+// resolveFixedDeployNode and pickOrReusePinnedNode use to accept a deploy node.
+const deployNodeActiveWindow = 2 * time.Minute
+
+// failoverSkipLog makes the "cannot fail over" warnings fire once per node
+// outage instead of on every one-minute tick. Entries are dropped as soon as
+// the node is seen alive again, so the next outage warns afresh.
+var failoverSkipLog = &nodeLogOnce{seen: map[uuid.UUID]map[string]bool{}}
+
+type nodeLogOnce struct {
+	mu   sync.Mutex
+	seen map[uuid.UUID]map[string]bool
+}
+
+func (l *nodeLogOnce) first(nodeID uuid.UUID, key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	keys := l.seen[nodeID]
+	if keys == nil {
+		keys = map[string]bool{}
+		l.seen[nodeID] = keys
+	}
+	if keys[key] {
+		return false
+	}
+	keys[key] = true
+	return true
+}
+
+func (l *nodeLogOnce) reset(nodeID uuid.UUID) {
+	l.mu.Lock()
+	delete(l.seen, nodeID)
+	l.mu.Unlock()
+}
+
+// checkNodeFailovers moves running deployments off deploy nodes whose agent
+// has not heartbeated for threshold.
+//
+// An offline agent does not mean the containers are down (the agent may have
+// crashed, or lost its control-plane link, while docker keeps serving). So a
+// deployment is only retired once a replacement has actually been dispatched;
+// whenever that is impossible the original row stays 'running' and keeps its
+// Traefik route (BACKLOG-20261124-002: a single-node stack lost every route
+// for 15 days because the old rows were stopped first and the replacement then
+// failed with "no active deploy nodes").
 func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.Scheduler, threshold time.Duration) {
 	nodes, err := st.ListNodes(ctx)
 	if err != nil {
@@ -220,6 +266,7 @@ func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.S
 			continue
 		}
 		if time.Since(node.LastSeenAt) < threshold {
+			failoverSkipLog.reset(node.ID)
 			continue
 		}
 		// Node is considered dead. Evict all its running deployments.
@@ -227,8 +274,18 @@ func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.S
 		if err != nil || len(deps) == 0 {
 			continue
 		}
-		log.Printf("Node %s (%s) has been offline for %s; evicting %d deployment(s)",
-			node.Hostname, node.ID, time.Since(node.LastSeenAt).Round(time.Second), len(deps))
+		offlineFor := time.Since(node.LastSeenAt).Round(time.Second)
+		// Without another live deploy node no replacement can be placed
+		// anywhere. Skip up front rather than create-and-roll-back a
+		// replacement row for every deployment on every tick of the outage.
+		if !hasOtherActiveDeployNode(nodes, node.ID) {
+			if failoverSkipLog.first(node.ID, "no-other-node") {
+				log.Printf("WARNING: node %s (%s) has been offline for %s, but there is no other active deploy node: "+
+					"NOT evicting its %d running deployment(s); they stay running and routed until the agent returns",
+					node.Hostname, node.ID, offlineFor, len(deps))
+			}
+			continue
+		}
 		for _, dep := range deps {
 			project, err := st.GetProject(ctx, dep.ProjectID)
 			if err != nil || project == nil {
@@ -246,29 +303,85 @@ func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.S
 				log.Printf("Skipping eviction of deployment %s: no image tag", dep.ID)
 				continue
 			}
-			// Mark old deployment as stopped before creating the replacement.
-			_ = st.UpdateDeploymentStatus(ctx, dep.ID, store.DeploymentStatusStopped,
-				fmt.Sprintf("evicted: node %s (%s) offline", node.Hostname, node.ID))
-
-			newDep, err := st.CreateDeployment(ctx, &store.Deployment{
-				ProjectID: dep.ProjectID,
-				ImageTag:  dep.ImageTag,
-				CommitSHA: dep.CommitSHA,
-			})
-			if err != nil {
-				log.Printf("Failed to create replacement deployment for project %s: %v", project.Name, err)
+			if reason := failoverBlocker(project, node.ID); reason != "" {
+				if failoverSkipLog.first(node.ID, dep.ID.String()) {
+					log.Printf("WARNING: not evicting deployment %s of project %s from offline node %s (%s): %s; it stays running and routed",
+						dep.ID, project.Name, node.Hostname, node.ID, reason)
+				}
 				continue
 			}
-			_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusDeploying, "")
-			if err := sched.DispatchDeploy(ctx, newDep, project, newDep.ImageTag); err != nil {
-				log.Printf("Failed to dispatch failover deploy for project %s: %v", project.Name, err)
-				_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusFailed, err.Error())
-				_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
-			} else {
-				log.Printf("Failover deployment %s dispatched for project %s", newDep.ID, project.Name)
-			}
+			log.Printf("Node %s (%s) has been offline for %s; evicting deployment %s of project %s",
+				node.Hostname, node.ID, offlineFor, dep.ID, project.Name)
+			failoverDeployment(ctx, st, sched, node, dep, project)
 		}
 	}
+}
+
+// hasOtherActiveDeployNode reports whether any deploy node other than exclude
+// is live enough for the scheduler to place a deployment on it.
+func hasOtherActiveDeployNode(nodes []*store.Node, exclude uuid.UUID) bool {
+	for _, n := range nodes {
+		if n.Role == store.NodeRoleDeploy && n.ID != exclude && time.Since(n.LastSeenAt) < deployNodeActiveWindow {
+			return true
+		}
+	}
+	return false
+}
+
+// failoverBlocker returns why the project's deployment cannot leave deadNode
+// at all, or "" if failover may try. These mirror the scheduler's refusals
+// (resolveFixedDeployNode, pickOrReusePinnedNode) that are certain when the
+// binding points at the dead node itself; anything less predictable is left to
+// the dispatch attempt and its rollback.
+func failoverBlocker(project *store.Project, deadNode uuid.UUID) string {
+	if project.FixedNodeID != nil {
+		if *project.FixedNodeID == deadNode {
+			return "project is fixed (fixed_node_id) to the offline node"
+		}
+		return ""
+	}
+	if (project.ProjectType == store.ProjectTypeCompose || project.ProjectType == store.ProjectTypeImage) &&
+		project.PinnedNodeID != nil && *project.PinnedNodeID == deadNode {
+		return "compose/image project is pinned to the offline node (its volumes live there)"
+	}
+	return ""
+}
+
+// failoverDeployment dispatches a replacement for dep and only then retires
+// dep. If dispatching fails, the replacement row is deleted (it never ran, and
+// a leftover 'failed' row would become the project's newest deployment and
+// show the project as failed) and dep is left exactly as it was — still
+// 'running', still routed, with no eviction note — so nothing has to be
+// repaired by hand once the node comes back.
+func failoverDeployment(ctx context.Context, st *store.Store, sched *scheduler.Scheduler, node *store.Node, dep *store.Deployment, project *store.Project) {
+	newDep, err := st.CreateDeployment(ctx, &store.Deployment{
+		ProjectID: dep.ProjectID,
+		ImageTag:  dep.ImageTag,
+		CommitSHA: dep.CommitSHA,
+	})
+	if err != nil {
+		log.Printf("Failed to create replacement deployment for project %s: %v", project.Name, err)
+		return
+	}
+	_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusDeploying, "")
+	if err := sched.DispatchDeploy(ctx, newDep, project, newDep.ImageTag); err != nil {
+		if derr := st.DeleteDeployment(ctx, newDep.ID); derr != nil {
+			log.Printf("Failover of project %s: could not roll back replacement deployment %s: %v", project.Name, newDep.ID, derr)
+			_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusFailed, err.Error())
+		}
+		log.Printf("WARNING: failover of project %s off offline node %s aborted: dispatching the replacement failed: %v; "+
+			"deployment %s left running and routed, replacement rolled back", project.Name, node.Hostname, err, dep.ID)
+		// The replacement was briefly in flight and may have made a concurrent
+		// deploy queue behind it; let that one run now.
+		_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
+		return
+	}
+	// The replacement is on its way: retire the old row now, so the dead
+	// node's address leaves the route set and the next tick does not evict
+	// the same deployment again.
+	_ = st.UpdateDeploymentStatus(ctx, dep.ID, store.DeploymentStatusStopped,
+		fmt.Sprintf("evicted: node %s (%s) offline", node.Hostname, node.ID))
+	log.Printf("Failover deployment %s dispatched for project %s", newDep.ID, project.Name)
 }
 
 // processBuildCompletions polls for completed build tasks and dispatches deploy tasks.

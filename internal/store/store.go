@@ -1533,6 +1533,14 @@ func (s *Store) StopProjectDeployments(ctx context.Context, projectID, exceptID 
 	return stopped, nil
 }
 
+// DeleteDeployment removes a deployment row; its tasks and container metrics
+// go with it (ON DELETE CASCADE). Only meant for rows that never took effect,
+// e.g. a failover replacement whose dispatch failed.
+func (s *Store) DeleteDeployment(ctx context.Context, id uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM deployments WHERE id=$1`, id)
+	return err
+}
+
 // GetRunningDeploymentsByNode returns all running deployments assigned to a specific node.
 func (s *Store) GetRunningDeploymentsByNode(ctx context.Context, nodeID uuid.UUID) ([]*Deployment, error) {
 	rows, err := s.db.Query(ctx, `
