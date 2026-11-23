@@ -154,7 +154,7 @@ func runServer() {
 	// directory and base domain that only the API server knows.
 	authSvc.SetAvatarMaterializer(srv.MaterializeAvatar)
 
-	handler := srv.TunnelAwareHandler(mountFrontend(srv.Router()))
+	handler := consoleHandler(srv.TunnelAwareHandler, srv.Router())
 	srv.StartBackgroundWorkers(ctx)
 
 	sched.SetImageWatchConfig(gitRepoBasePath, registryAddr, os.Getenv("REGISTRY_USER"), os.Getenv("REGISTRY_PASSWORD"))
@@ -171,6 +171,15 @@ func runServer() {
 
 	log.Printf("muvee server listening on :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
+}
+
+// consoleHandler assembles the server's root handler. Order matters:
+// tunnel / domain_only Hosts are routed away first (tenant traffic keeps the
+// tenant's headers); everything else — the console SPA included, which
+// mountFrontend serves without going through Router — gets the anti-framing
+// headers (BACKLOG-20261124-001).
+func consoleHandler(tunnelAware func(http.Handler) http.Handler, router http.Handler) http.Handler {
+	return tunnelAware(api.AntiFramingHandler(mountFrontend(router)))
 }
 
 // mountFrontend wraps the API router so that non-API/auth paths serve the embedded React app.

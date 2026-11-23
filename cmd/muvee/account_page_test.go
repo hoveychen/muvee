@@ -69,7 +69,9 @@ func TestAccountPage_SignedInShowsAccountAndActions(t *testing.T) {
 		"Fake X",                // the sign-in method (provider display name)
 		`href="/_oauth/logout"`, // same-origin sign-out (no confirmation page)
 		"/_oauth/logout?redirect=" + url.QueryEscape("/_oauth/login?sso=none"), // switch account
-		`href="https://site-b.test/settings/profile"`,                          // console of the host's own base domain
+		// console of the host's own base domain; _top because the console
+		// refuses to be framed (BACKLOG-20261124-001) and this page may be.
+		`href="https://site-b.test/settings/profile" target="_top"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("signed-in page lacks %q:\n%s", want, body)

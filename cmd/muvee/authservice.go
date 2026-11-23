@@ -1952,7 +1952,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
       {{else}}<p class="sub">{{if .Central}}{{$.M.CentralNone}}{{else}}{{$.M.NotSignedIn}} · {{$.M.NotSignedInSub}}{{end}}</p>
       {{if .LoginURL}}<a class="btn primary" href="{{.LoginURL}}">{{$.M.Login}}</a>{{end}}
       {{end}}
-      <a class="btn" href="{{.ConsoleURL}}">{{$.M.ManageInConsole}}</a>
+      <a class="btn" href="{{.ConsoleURL}}" target="_top">{{$.M.ManageInConsole}}</a>
       <p class="hint">{{$.M.ManageHint}}</p>{{end}}
       {{else if .LoggedOut}}<h1 class="head">{{.M.SignedOut}}</h1>
       <p class="sub">{{if .SiteName}}{{.M.SignedOutOf}} {{.SiteName}}{{if .M.EN}}.{{else}}。{{end}}{{end}}{{.M.SignedOutSub}}</p>
