@@ -8,6 +8,9 @@
 -- appear on pages nobody asked to change. New projects get it ON — the
 -- createProject handler writes true unless the body says otherwise.
 --
+-- Rollback ORDER MATTERS: first roll the muvee server/authservice back to a
+-- build without this column (older builds ignore it), THEN drop it. Dropping
+-- it first makes every project query and every ForwardAuth access check fail.
 -- Rollback: ALTER TABLE projects DROP COLUMN IF EXISTS account_badge;
 -- DELETE FROM schema_migrations WHERE filename = '061_project_account_badge.sql';
 
