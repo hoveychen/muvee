@@ -208,9 +208,11 @@ func TestCheckNodeFailovers_FixedNodeOfflineKeepsRunning_PG(t *testing.T) {
 }
 
 // Dispatch fails for a reason failover cannot foresee (here: the project is
-// fixed to a *different* node that is offline too). The replacement row must be
-// rolled back and the original deployment must never have been stopped.
-func TestCheckNodeFailovers_DispatchFailureRollsBack_PG(t *testing.T) {
+// fixed to a *different* node that is offline too). The original deployment
+// must never have been stopped and stays routed; the replacement row is kept
+// as 'failed' with the reason (review I-2: deleting it reset the backoff, so
+// every tick inserted, failed and deleted a row) and later ticks back off.
+func TestCheckNodeFailovers_DispatchFailureKeepsOriginal_PG(t *testing.T) {
 	f := newFailoverFixture(t)
 	dead := f.node("failover-dispatch-rb-dead", "10.99.3.2", false)
 	otherDead := f.node("failover-dispatch-rb-other", "10.99.3.4", false)
@@ -224,7 +226,33 @@ func TestCheckNodeFailovers_DispatchFailureRollsBack_PG(t *testing.T) {
 	}
 
 	f.failover(3)
-	f.assertUntouched(proj, dep)
+	deps, err := f.st.ListDeployments(f.ctx, proj.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed int
+	for _, d := range deps {
+		if d.ID == dep.ID {
+			continue
+		}
+		if d.Status != store.DeploymentStatusFailed || !strings.Contains(d.Logs, "is offline; refusing to dispatch") {
+			t.Errorf("replacement %s status=%s logs=%q, want failed with the dispatch error", d.ID, d.Status, d.Logs)
+		}
+		failed++
+	}
+	if failed != 1 {
+		t.Errorf("%d failed replacement row(s) after 3 ticks, want 1 (the later ticks back off)", failed)
+	}
+	got := f.dep(dep.ID)
+	if got.Status != store.DeploymentStatusRunning || strings.Contains(got.Logs, "evicted") {
+		t.Errorf("original status=%s logs=%q, want untouched running", got.Status, got.Logs)
+	}
+	if r := f.routes(proj); len(r) != 1 || r[0] != "10.99.3.2:34904" {
+		t.Errorf("routes=%v, want [10.99.3.2:34904]", r)
+	}
+	if n := f.countTasks(`SELECT COUNT(*) FROM tasks t JOIN deployments d ON d.id = t.deployment_id WHERE d.project_id = $1`, proj.ID); n != 0 {
+		t.Errorf("%d task(s) created, want 0", n)
+	}
 }
 
 // Regression guard for the normal case: with a healthy node available a

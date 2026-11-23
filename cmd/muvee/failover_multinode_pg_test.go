@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -677,3 +679,167 @@ func TestFailoverMultiNode_SameHostNoCleanup_PG(t *testing.T) {
 		}
 	}
 }
+
+// Review I-2: dispatching the replacement fails outright on every attempt
+// (fixed_node_id points at another node that is offline too) while another
+// deploy node is live. The failed replacement rows must count for the backoff
+// — at most one new row per backoff window, never more than MaxAttempts (8) —
+// and the original stays running and routed throughout.
+func TestFailoverMultiNode_DispatchFailureBacksOff_PG(t *testing.T) {
+	f := newFailoverFixture(t)
+	dead := f.node("fo-mn-df-dead", "10.97.13.2", false)
+	otherDead := f.node("fo-mn-df-other", "10.97.13.4", false)
+	f.node("fo-mn-df-healthy", "10.97.13.3", true)
+	proj, old := f.runningProject(&store.Project{
+		Name: "fo-mn-df", ProjectType: store.ProjectTypeDeployment, ContainerPort: 8080,
+	}, dead, 35013)
+	if _, err := f.pool.Exec(f.ctx, `UPDATE projects SET fixed_node_id = $1 WHERE id = $2`, otherDead.ID, proj.ID); err != nil {
+		t.Fatal(err)
+	}
+	age := func(d string) {
+		t.Helper()
+		if _, err := f.pool.Exec(f.ctx,
+			`UPDATE deployments SET updated_at = updated_at - $2::interval WHERE project_id = $1 AND id <> $3 AND status = 'failed'`,
+			proj.ID, d, old.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(stage string, wantRows int) {
+		t.Helper()
+		o := f.others(proj, old)
+		if len(o) != wantRows {
+			t.Fatalf("%s: %d replacement row(s), want %d", stage, len(o), wantRows)
+		}
+		for _, d := range o {
+			if d.Status != store.DeploymentStatusFailed || !strings.Contains(d.Logs, "is offline; refusing to dispatch") {
+				t.Errorf("%s: replacement %s status=%s logs=%q, want failed with the dispatch error", stage, d.ID, d.Status, d.Logs)
+			}
+		}
+		if got := f.dep(old.ID); got.Status != store.DeploymentStatusRunning || strings.Contains(got.Logs, "evicted") {
+			t.Fatalf("%s: original status=%s logs=%q, want running", stage, got.Status, got.Logs)
+		}
+		if r := f.routes(proj); len(r) != 1 || r[0] != "10.97.13.2:35013" {
+			t.Fatalf("%s: routes=%v, want [10.97.13.2:35013]", stage, r)
+		}
+	}
+
+	f.failover(30) // half an hour of one-minute ticks
+	check("30 immediate ticks", 1)
+
+	waits := []string{"5 minutes", "10 minutes", "20 minutes", "40 minutes", "80 minutes", "160 minutes", "320 minutes"}
+	for i, w := range waits {
+		age(w + " - 30 seconds")
+		f.failover(1)
+		check(fmt.Sprintf("before the %s backoff", w), i+1)
+		age("31 seconds")
+		f.failover(1)
+		check(fmt.Sprintf("after the %s backoff", w), i+2)
+	}
+	age("24 hours")
+	f.failover(10)
+	check("after giving up", 8)
+	if n := f.countTasks(`SELECT COUNT(*) FROM tasks t JOIN deployments d ON d.id = t.deployment_id WHERE d.project_id = $1`, proj.ID); n != 0 {
+		t.Errorf("%d task(s) created, want 0", n)
+	}
+}
+
+// Review I-3: a compose/image project keeps its named volumes on the node it
+// runs on. Failover may only move it when the admin explicitly fixed it
+// (fixed_node_id) to another node; pinned to the offline node, or neither
+// pinned nor fixed (e.g. fixed_node_id was cleared without a redeploy), it is
+// not evicted and stays routed — moving it would bring it up on empty volumes.
+// Build-type projects are unchanged.
+func TestFailoverMultiNode_ComposeImageNeedsExplicitFixedNode_PG(t *testing.T) {
+	f := newFailoverFixture(t)
+	dead := f.node("fo-mn-ci-dead", "10.97.14.2", false)
+	healthy := f.node("fo-mn-ci-healthy", "10.97.14.3", true)
+
+	var logs strings.Builder
+	var mu sync.Mutex
+	log.SetOutput(writerFunc(func(p []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return logs.Write(p) }))
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	type tc struct {
+		name    string
+		typ     store.ProjectType
+		pinned  *uuid.UUID
+		fixed   *uuid.UUID
+		migrate bool
+	}
+	cases := []tc{
+		{"fo-mn-ci-img-pin-dead", store.ProjectTypeImage, &dead.ID, nil, false},
+		{"fo-mn-ci-img-none", store.ProjectTypeImage, nil, nil, false},
+		{"fo-mn-ci-cmp-pin-dead", store.ProjectTypeCompose, &dead.ID, nil, false},
+		{"fo-mn-ci-cmp-none", store.ProjectTypeCompose, nil, nil, false},
+		{"fo-mn-ci-img-pin-healthy", store.ProjectTypeImage, &healthy.ID, nil, false},
+		{"fo-mn-ci-img-fixed", store.ProjectTypeImage, nil, &healthy.ID, true},
+		{"fo-mn-ci-img-pin-dead-fixed", store.ProjectTypeImage, &dead.ID, &healthy.ID, true},
+		{"fo-mn-ci-cmp-fixed", store.ProjectTypeCompose, nil, &healthy.ID, true},
+		{"fo-mn-ci-build", store.ProjectTypeDeployment, nil, nil, true},
+	}
+	type got struct {
+		proj *store.Project
+		dep  *store.Deployment
+	}
+	made := map[string]got{}
+	for i, c := range cases {
+		p := &store.Project{Name: c.name, ProjectType: c.typ, ContainerPort: 8080, PinnedNodeID: c.pinned}
+		if c.typ == store.ProjectTypeImage {
+			p.ImageRef = "example.invalid/app:1"
+		}
+		if c.typ == store.ProjectTypeCompose {
+			p.GitURL, p.GitBranch = "https://example.invalid/r.git", "main"
+		}
+		proj, dep := f.runningProject(p, dead, 35100+i)
+		if c.fixed != nil {
+			if _, err := f.pool.Exec(f.ctx, `UPDATE projects SET fixed_node_id = $1 WHERE id = $2`, *c.fixed, proj.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		made[c.name] = got{proj, dep}
+	}
+
+	f.failover(3)
+
+	for i, c := range cases {
+		g := made[c.name]
+		if !c.migrate {
+			f.assertUntouched(g.proj, g.dep)
+			want := fmt.Sprintf("10.97.14.2:%d", 35100+i)
+			if r := f.routes(g.proj); len(r) != 1 || r[0] != want {
+				t.Errorf("%s: routes=%v, want [%s]", c.name, r, want)
+			}
+			continue
+		}
+		o := f.others(g.proj, g.dep)
+		if len(o) != 1 {
+			t.Errorf("%s: %d replacement row(s), want 1 (failover must try)", c.name, len(o))
+			continue
+		}
+		if c.typ != store.ProjectTypeCompose && (o[0].NodeID == nil || *o[0].NodeID != healthy.ID) {
+			t.Errorf("%s: replacement node=%v status=%s logs=%q, want the healthy node", c.name, o[0].NodeID, o[0].Status, o[0].Logs)
+		}
+		if got := f.dep(g.dep.ID).Status; got != store.DeploymentStatusRunning {
+			t.Errorf("%s: original status=%s, want running until the replacement completes", c.name, got)
+		}
+	}
+
+	mu.Lock()
+	out := logs.String()
+	mu.Unlock()
+	for _, name := range []string{"fo-mn-ci-img-none", "fo-mn-ci-cmp-none"} {
+		found := false
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "of project "+name+" ") && strings.Contains(line, "fixed_node_id") && strings.Contains(line, "stays running and routed") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: no log line explaining why it was not evicted and how to move it (fixed_node_id)", name)
+		}
+	}
+}
+
+type writerFunc func(p []byte) (int, error)
+
+func (w writerFunc) Write(p []byte) (int, error) { return w(p) }

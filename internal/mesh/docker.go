@@ -266,6 +266,20 @@ func (h *gatewayHolder) String() string {
 	}
 }
 
+// shouldRememberHolder reports whether holder is persisted in the
+// foreign-holder memory: only another stack's container that is running (or
+// paused) and actually owns the IP right now. That is what the memory is for —
+// a live foreign agent about to be recreated by Watchtower (it is live before
+// the gap, so this agent has seen it). A stopped / created container of
+// another compose project only reserves its fixed IP: it still blocks the
+// current round (see parseGatewayHolder), but remembering it would disable
+// mesh for good on a single-stack host whose old agent was left behind under a
+// different project name (directory moved, -p changed); once it is
+// `docker rm`-ed the next round takes the IP.
+func shouldRememberHolder(h *gatewayHolder, selfStack string) bool {
+	return h != nil && h.Stack != selfStack && h.Live && (h.Status == "running" || h.Status == "paused")
+}
+
 // findGatewayHolder returns another container that holds or reserves ip on
 // network (nil when none).
 func findGatewayHolder(ctx context.Context, network, selfID, ip string) (*gatewayHolder, error) {
@@ -320,9 +334,10 @@ func parseGatewayHolder(out, selfID, ip string) *gatewayHolder {
 // container from restarting. The existing attachment is only dropped once the
 // gateway IP is known to be free.
 //
-// When another stack is seen holding the IP, mem remembers it for this
-// network ID and later calls refuse even if the IP looks free (see
-// holderMemory).
+// When a running container of another stack is seen holding the IP, mem
+// remembers it for this network ID and later calls refuse even if the IP looks
+// free (see holderMemory, shouldRememberHolder). A stopped reservation only
+// refuses the current call.
 func ensureSelfConnected(ctx context.Context, net meshNetwork, container, gatewayIP string, mem *holderMemory) error {
 	network := net.Name
 	self, err := selfAttachment(ctx, network, container)
@@ -352,7 +367,7 @@ func ensureSelfConnected(ctx context.Context, net meshNetwork, container, gatewa
 		msg := fmt.Sprintf("gateway IP %s on docker network %s is already held by container %s; "+
 			"if another muvee stack runs on this docker host, give each stack its own MESH_NETWORK "+
 			"and a non-overlapping MESH_SUBNET (mesh stays disabled until then)", gatewayIP, network, holder)
-		if holder.Stack != self.Stack {
+		if shouldRememberHolder(holder, self.Stack) {
 			rec := foreignHolder{Network: network, Holder: holder.Name, Stack: holder.Stack, SeenAt: time.Now().UTC()}
 			log.Printf("mesh: WARNING: gateway IP %s on docker network %s is held by %s of another muvee stack (%s; this agent is %s). "+
 				"This agent will not take that IP on this network again, even while the other stack's agent is being recreated; "+

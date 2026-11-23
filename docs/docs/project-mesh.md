@@ -157,9 +157,9 @@ non-overlapping `MESH_SUBNET` (e.g. `MESH_NETWORK=insnap-mesh`,
   disabled and retries every 30s; the agent itself keeps working and its
   container restarts normally. A *running* container that only carries a
   leftover entry for the IP (no live address) does not count.
-- **Held by another stack:** when the holder belongs to a different compose
-  project (or, without compose, is a differently named container), the agent
-  logs `mesh: WARNING: gateway IP ... is held by ... of another muvee stack
+- **Held by another stack:** when the holder is a *running* container of a
+  different compose project (or, without compose, a differently named
+  container), the agent logs `mesh: WARNING: gateway IP ... is held by ... of another muvee stack
   (compose project ...)` and **remembers it** in
   `$DATA_DIR/mesh-foreign-gateway-holders.json` (the agent's data volume, kept
   across upgrades). From then on it never takes the gateway IP on that network,
@@ -168,6 +168,10 @@ non-overlapping `MESH_SUBNET` (e.g. `MESH_NETWORK=insnap-mesh`,
   started), and the other, healthy stack's agent would be stuck. The record is
   per network: it disappears when that network is recreated. To retry
   anyway, delete the file and restart the agent, or change `MESH_NETWORK`.
+  A *stopped* or *created* container of another compose project (e.g. an old
+  agent left behind after the stack's directory or `-p` project name changed)
+  is not remembered: it only blocks while it exists, and once you
+  `docker rm` it the agent takes the gateway on its next 30s retry.
 - **The stack that already has the gateway can still lose it** while the
   stacks share a network: if the other agent does take the IP during an
   upgrade gap (e.g. it runs an older muvee, or its record was deleted), the
@@ -181,6 +185,12 @@ non-overlapping `MESH_SUBNET` (e.g. `MESH_NETWORK=insnap-mesh`,
   now be the *other* stack's agent. That gateway identifies callers only by
   their `muvee.domain_prefix` label, so a leftover project would be treated as
   a project of the other stack with the same prefix.
+- **Project `domain_prefix` values must be unique across all stacks on the
+  docker host**, not just within one stack. Containers are named
+  `muvee-<domain_prefix>` and the agent cleans up a project's containers by
+  their `muvee.domain_prefix` / compose project label, which carries no stack
+  identity: when a project leaves a node, the cleanup there can remove the
+  other stack's containers of a project with the same prefix.
 
 ### While the gateway is down
 

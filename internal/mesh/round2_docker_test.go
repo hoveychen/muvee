@@ -207,3 +207,48 @@ func TestDockerSelfConnectRemembersForeignHolderWithoutComposeLabels(t *testing.
 		t.Fatal("took the gateway IP of a differently named non-compose container after it left")
 	}
 }
+
+// Review I-1: a leftover agent of another compose project (e.g. the stack's
+// directory moved, so the project name changed) sits exited or created with
+// the gateway IP reserved. It blocks this round — starting it must keep
+// working — but it is not remembered: once removed, the next round connects.
+func TestDockerSelfConnectStoppedForeignHolderRemovedThenConnects(t *testing.T) {
+	for _, state := range []string{"exited", "created"} {
+		t.Run(state, func(t *testing.T) {
+			f := newMeshFixture(t)
+			other := "com.docker.compose.project=" + f.network + "old"
+			var holder string
+			if state == "exited" {
+				holder = f.run("holder", "--network", f.network, "--ip", f.gw, "--label", other)
+				if _, err := dockerCmd(f.ctx, "stop", "-t", "0", holder); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				holder = f.network + "holder"
+				if _, err := dockerCmd(f.ctx, "create", "--name", holder, "--network", f.network, "--ip", f.gw,
+					"--label", other, dockerTestImage, "sleep", "600"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			agent := f.run("agent", "--label", "com.docker.compose.project="+f.network+"self")
+
+			if err := ensureSelfConnectedForTest(f, agent); err == nil {
+				t.Fatal("took the gateway IP reserved by a stopped container")
+			} else {
+				t.Logf("reserved: %v", err)
+			}
+			f.assertRestartable(agent)
+			if _, err := dockerCmd(f.ctx, "rm", "-f", holder); err != nil {
+				t.Fatal(err)
+			}
+			// The agent may also have restarted in between (DATA_DIR kept).
+			f.holders = newHolderMemory(f.stateDir)
+			if err := ensureSelfConnectedForTest(f, agent); err != nil {
+				t.Fatalf("stopped foreign leftover was remembered; mesh stays down after it was removed: %v", err)
+			}
+			if e := f.meshEntry(agent); e == nil || e.IPAddress != f.gw {
+				t.Fatalf("want agent at %s, got %+v", f.gw, e)
+			}
+		})
+	}
+}

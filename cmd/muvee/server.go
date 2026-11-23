@@ -330,22 +330,29 @@ func hasOtherActiveDeployNode(nodes []*store.Node, exclude uuid.UUID) bool {
 }
 
 // failoverBlocker returns why the project's deployment cannot leave deadNode
-// at all, or "" if failover may try. These mirror the scheduler's refusals
-// (resolveFixedDeployNode, pickOrReusePinnedNode) that are certain when the
-// binding points at the dead node itself; anything less predictable is left to
-// the dispatch attempt and its rollback.
+// at all, or "" if failover may try. A project fixed to the dead node cannot
+// move. A compose/image project keeps its named volumes on the node it runs
+// on, so it only moves when an admin explicitly fixed it (fixed_node_id) to
+// another node: pinned to the dead node, or neither pinned nor fixed (e.g.
+// fixed_node_id was cleared without a redeploy), it would come up on empty
+// volumes elsewhere. Anything less predictable is left to the dispatch
+// attempt, whose failure is counted by the failover backoff.
 func failoverBlocker(project *store.Project, deadNode uuid.UUID) string {
-	if project.FixedNodeID != nil {
-		if *project.FixedNodeID == deadNode {
-			return "project is fixed (fixed_node_id) to the offline node"
-		}
+	if project.FixedNodeID != nil && *project.FixedNodeID == deadNode {
+		return "project is fixed (fixed_node_id) to the offline node"
+	}
+	if project.ProjectType != store.ProjectTypeCompose && project.ProjectType != store.ProjectTypeImage {
 		return ""
 	}
-	if (project.ProjectType == store.ProjectTypeCompose || project.ProjectType == store.ProjectTypeImage) &&
-		project.PinnedNodeID != nil && *project.PinnedNodeID == deadNode {
-		return "compose/image project is pinned to the offline node (its volumes live there)"
+	if project.FixedNodeID != nil {
+		return ""
 	}
-	return ""
+	if project.PinnedNodeID != nil && *project.PinnedNodeID == deadNode {
+		return "compose/image project is pinned to the offline node (its named volumes live there); " +
+			"to move it anyway, set its fixed_node_id to another node (it starts there with empty volumes unless you copy them)"
+	}
+	return "compose/image project is not fixed to another node (no fixed_node_id) and its named volumes live on the offline node; " +
+		"to move it anyway, set its fixed_node_id to another node (it starts there with empty volumes unless you copy them)"
 }
 
 // failoverBackoff: a replacement that keeps failing on the healthy node is
@@ -364,8 +371,10 @@ var failoverBackoff = store.FailoverBackoff{Base: 5 * time.Minute, MaxAttempts: 
 // queue runs one deployment of a project at a time and a user deployment
 // always supersedes a queued replacement.
 //
-// If dispatching fails outright, the replacement row is deleted (it never ran,
-// and a leftover 'failed' row would become the project's newest deployment).
+// If dispatching fails outright, the replacement row is kept as 'failed' with
+// the reason: the backoff counts failed replacements, so a deterministic
+// dispatch failure costs one row per backoff window and at most MaxAttempts
+// rows per outage instead of an insert/fail/delete cycle every tick.
 func failoverDeployment(ctx context.Context, st *store.Store, sched *scheduler.Scheduler, node *store.Node, dep *store.Deployment, project *store.Project) {
 	// Let the deploy queue reap what is presumed lost first: a deploy that was
 	// dispatched to this node just before it died stays in flight forever
@@ -400,12 +409,17 @@ func failoverDeployment(ctx context.Context, st *store.Store, sched *scheduler.S
 	dispatched, derr := sched.AdvanceDeployQueue(ctx, project.ID)
 	switch {
 	case dispatched == repl.ID && derr != nil:
-		if err := st.DeleteDeployment(ctx, repl.ID); err != nil {
-			log.Printf("Failover of project %s: could not roll back replacement deployment %s: %v", project.Name, repl.ID, err)
+		// AdvanceDeployQueue already marked it failed with derr; say what it
+		// means for the project (and make sure it is failed, so it counts for
+		// the backoff).
+		note := fmt.Sprintf("failover: dispatching this replacement failed: %v; deployment %s stays running and routed on offline node %s; "+
+			"failover retries with backoff", derr, dep.ID, node.Hostname)
+		if err := st.UpdateDeploymentStatus(ctx, repl.ID, store.DeploymentStatusFailed, note); err != nil {
+			log.Printf("Failover of project %s: could not mark replacement deployment %s failed: %v", project.Name, repl.ID, err)
 		}
 		if failoverSkipLog.first(node.ID, "dispatch-failed:"+dep.ID.String()) {
-			log.Printf("WARNING: failover of project %s off offline node %s aborted: dispatching the replacement failed: %v; "+
-				"deployment %s left running and routed, replacement rolled back", project.Name, node.Hostname, derr, dep.ID)
+			log.Printf("WARNING: failover of project %s off offline node %s: dispatching replacement %s failed: %v; "+
+				"deployment %s left running and routed, retrying with backoff", project.Name, node.Hostname, repl.ID, derr, dep.ID)
 		}
 		// Let anything that queued behind the replacement run now.
 		_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
