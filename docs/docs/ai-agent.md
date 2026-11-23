@@ -115,3 +115,5 @@ curl -H "Authorization: Bearer $USER_PAT" \
 | `/api/me/tokens`              | POST   | session or PAT   | Body: `{"name": "...", "expires_in": "720h"}` (omit `expires_in` for never) |
 | `/api/me/tokens/{id}`         | DELETE | session or PAT   | Revoke one PAT                               |
 | `/api/me`                     | GET    | session or PAT   | Identity probe — confirm which user a PAT belongs to |
+
+"Session" means the muvee console's own pages. Write calls (POST/PUT/PATCH/DELETE) authenticated by the session cookie are refused with `403` when a browser sends them from another origin; an agent backend should always use `Authorization: Bearer <PAT>`.
