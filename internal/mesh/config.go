@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	// NetworkName is the docker network every mesh participant joins.
-	NetworkName = "muvee-mesh"
+	// defaultNetwork is the docker network every mesh participant joins
+	// unless MESH_NETWORK names another one.
+	defaultNetwork = "muvee-mesh"
 	// Zone is the DNS suffix answered by the gateway.
 	Zone = "muvee.internal"
 
@@ -33,6 +34,11 @@ const (
 // Config is the agent-side mesh configuration. Zero values fall back to the
 // defaults; see ConfigFromEnv.
 type Config struct {
+	// Network is the docker network name (MESH_NETWORK, default
+	// "muvee-mesh"). Several muvee stacks on one docker host must each use a
+	// distinct name and a non-overlapping Subnet: the network is host-global,
+	// so two agents sharing it would fight over the same gateway IP.
+	Network string
 	// Subnet is used only when the network has to be created. An existing
 	// network is reused as-is and its actual subnet wins.
 	Subnet string
@@ -51,10 +57,11 @@ type Config struct {
 	AgentSecret     string
 }
 
-// ConfigFromEnv reads MESH_SUBNET / MESH_GATEWAY_IP / MESH_FALLBACK_DNS
-// (comma-separated) / MESH_SELF_CONTAINER.
+// ConfigFromEnv reads MESH_NETWORK / MESH_SUBNET / MESH_GATEWAY_IP /
+// MESH_FALLBACK_DNS (comma-separated) / MESH_SELF_CONTAINER.
 func ConfigFromEnv(controlPlaneURL, agentSecret string) Config {
 	cfg := Config{
+		Network:         strings.TrimSpace(os.Getenv("MESH_NETWORK")),
 		Subnet:          strings.TrimSpace(os.Getenv("MESH_SUBNET")),
 		GatewayIP:       strings.TrimSpace(os.Getenv("MESH_GATEWAY_IP")),
 		SelfContainer:   strings.TrimSpace(os.Getenv("MESH_SELF_CONTAINER")),
@@ -66,7 +73,18 @@ func ConfigFromEnv(controlPlaneURL, agentSecret string) Config {
 			cfg.FallbackDNS = append(cfg.FallbackDNS, s)
 		}
 	}
+	if cfg.Network == "" {
+		cfg.Network = defaultNetwork
+	}
 	return cfg
+}
+
+// network returns the configured network name, defaulting for a zero Config.
+func (c Config) network() string {
+	if c.Network == "" {
+		return defaultNetwork
+	}
+	return c.Network
 }
 
 // pickGatewayIP returns the gateway IP to use inside subnet. An explicit

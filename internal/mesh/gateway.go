@@ -62,7 +62,7 @@ func (g *Gateway) run(ctx context.Context) {
 		self = detectSelfContainer(ctx)
 	}
 	if self == "" {
-		log.Printf("mesh: agent is not running inside a docker container; muvee-mesh gateway disabled (set MESH_SELF_CONTAINER to override)")
+		log.Printf("mesh: agent is not running inside a docker container; mesh gateway disabled (set MESH_SELF_CONTAINER to override)")
 		return
 	}
 	upstreams := readResolvConf("/etc/resolv.conf").upstreams()
@@ -80,7 +80,8 @@ func (g *Gateway) run(ctx context.Context) {
 		log.Printf("mesh: could not determine a fallback DNS for project containers (set MESH_FALLBACK_DNS); they will depend on the gateway for all DNS")
 	}
 
-	callers := newDockerCallers()
+	network := g.cfg.network()
+	callers := newDockerCallers(network)
 	go callers.watch(ctx)
 	l := &listeners{
 		dns:   func(ip string) dns.Handler { return newDNSHandler(ip, upstreams) },
@@ -95,9 +96,9 @@ func (g *Gateway) run(ctx context.Context) {
 			g.setSpec(nil)
 		} else {
 			if g.Spec() == nil {
-				log.Printf("mesh: gateway up on %s (network %s, fallback dns %v)", gwIP, NetworkName, fallback)
+				log.Printf("mesh: gateway up on %s (network %s, fallback dns %v)", gwIP, network, fallback)
 			}
-			g.setSpec(&Spec{Network: NetworkName, GatewayIP: gwIP, FallbackDNS: fallback})
+			g.setSpec(&Spec{Network: network, GatewayIP: gwIP, FallbackDNS: fallback})
 		}
 		select {
 		case <-ctx.Done():
@@ -117,7 +118,8 @@ func (g *Gateway) reconcile(ctx context.Context, self string, l *listeners) (str
 	if err != nil {
 		return "", err
 	}
-	subnet, err := ensureNetwork(ctx, desired, desiredGW)
+	network := g.cfg.network()
+	subnet, err := ensureNetwork(ctx, network, desired, desiredGW)
 	if err != nil {
 		return "", err
 	}
@@ -125,7 +127,7 @@ func (g *Gateway) reconcile(ctx context.Context, self string, l *listeners) (str
 	if err != nil {
 		return "", err
 	}
-	if err := ensureSelfConnected(ctx, self, gwIP); err != nil {
+	if err := ensureSelfConnected(ctx, network, self, gwIP); err != nil {
 		return "", err
 	}
 	if err := l.ensure(gwIP); err != nil {

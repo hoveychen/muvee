@@ -92,14 +92,17 @@ WebSocket 和流式响应（SSE / chunked）都能透传。
 
 ### Agent 配置
 
-全部可选，默认值即可工作。
+全部可选；每台 docker 主机只跑一套 muvee 栈时，默认值即可工作。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
+| `MESH_NETWORK` | `muvee-mesh` | mesh docker 网络名。同一台 docker 主机上跑多套 muvee 栈时必须设置（见下）。 |
 | `MESH_SUBNET` | `10.213.0.0/16` | agent 创建 `muvee-mesh` 时用的子网。网络已存在则沿用其实际子网。只有和内网/VPN 网段冲突时才需要改。 |
 | `MESH_GATEWAY_IP` | `10.213.0.2` | agent 在 `muvee-mesh` 上的固定 IP，必须在子网内。 |
 | `MESH_FALLBACK_DNS` | 自动检测 | 逗号分隔，作为第二个 DNS 交给项目容器，保证网关不可用时外网解析仍可用。默认取 docker 给默认 bridge 上容器的上游 DNS。 |
 | `MESH_SELF_CONTAINER` | 自动检测 | agent 自身的容器名/ID，仅当从 `/proc/self/mountinfo` 自动识别失败时需要设置。 |
+
+**同一台 docker 主机上有多套 muvee 栈**（例如两个控制面的 deploy agent 跑在同一台机器上）：docker 网络是整机共享的，每套栈的 deploy agent **必须**各自设置不同的 `MESH_NETWORK` 和互不重叠的 `MESH_SUBNET`（例如 `MESH_NETWORK=insnap-mesh`、`MESH_SUBNET=10.214.0.0/16`）。用默认值时两个 agent 会在同一个 `muvee-mesh` 上争抢 `10.213.0.2`。agent 接入前会先检查：网关 IP 已被其他容器占用（运行中，或已停止但仍预留着该 IP）时，打印 `mesh: gateway IP ... is already held by container ...`，mesh 保持关闭并每 30 秒重试；agent 本身照常工作，其容器也能正常重启。已有节点改 `MESH_NETWORK` 会新建网络，之前部署的项目要重新部署才会加入新网络。
 
 ### 网关不可用时
 

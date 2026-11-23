@@ -64,6 +64,7 @@ sidebar_position: 3
 | `AGENT_SECRET` | — | 必须与控制平面上设置的值一致 |
 | `DATA_DIR` | `/muvee/data` | 本地数据集缓存根目录（部署节点使用） |
 | `HOST_IP` | _（自动检测）_ | Traefik 用来访问此节点上容器的 IP 地址。自动从到达 `CONTROL_PLANE_URL` 所使用的网络接口检测。若自动检测结果有误（如多网卡主机），可手动覆盖。 |
+| `MESH_NETWORK` | `muvee-mesh` | deploy 节点：[项目互访](./project-mesh)用的 mesh docker 网络名。同一台 docker 主机上的多套 muvee 栈须各自设置不同的 `MESH_NETWORK` 和互不重叠的 `MESH_SUBNET`。 |
 | `MESH_SUBNET` | `10.213.0.0/16` | deploy 节点：[项目互访](./project-mesh)用的 `muvee-mesh` 网络子网。仅在与内网/VPN 网段冲突时修改。 |
 | `MESH_GATEWAY_IP` | `10.213.0.2` | deploy 节点：agent 在 `muvee-mesh` 上的固定 IP（DNS + HTTP 网关）。 |
 | `MESH_FALLBACK_DNS` | _（自动检测）_ | deploy 节点：逗号分隔，网关不可用时项目容器使用的兜底 DNS。 |

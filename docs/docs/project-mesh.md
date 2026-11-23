@@ -124,14 +124,30 @@ A project may call itself through the mesh.
 
 ### Agent settings
 
-All optional — the defaults work out of the box.
+All optional — the defaults work out of the box for a single muvee stack per
+docker host.
 
 | Variable | Default | Description |
 |---|---|---|
+| `MESH_NETWORK` | `muvee-mesh` | Name of the mesh docker network. Required when several muvee stacks share one docker host (see below). |
 | `MESH_SUBNET` | `10.213.0.0/16` | Subnet used when the agent creates `muvee-mesh`. An existing network is reused with its own subnet. Change it only if it collides with your LAN/VPN. |
 | `MESH_GATEWAY_IP` | `10.213.0.2` | Fixed IP of the agent on `muvee-mesh`; must lie inside the subnet. |
 | `MESH_FALLBACK_DNS` | auto-detect | Comma-separated resolvers handed to project containers as a second DNS server, so external lookups keep working while the gateway is down. Auto-detected from what docker gives a container on the default bridge. |
 | `MESH_SELF_CONTAINER` | auto-detect | The agent's own container name/ID, if auto-detection from `/proc/self/mountinfo` fails. |
+
+**Several muvee stacks on one docker host** (e.g. two control planes whose
+deploy agents run on the same machine): docker networks are host-global, so
+each stack's deploy agent **must** set its own `MESH_NETWORK` and a
+non-overlapping `MESH_SUBNET` (e.g. `MESH_NETWORK=insnap-mesh`,
+`MESH_SUBNET=10.214.0.0/16`). With the defaults both agents would compete for
+`10.213.0.2` on the same `muvee-mesh`. The agent checks this before attaching:
+when the gateway IP is already held by another container — running, or
+stopped but still reserving it — it logs
+`mesh: gateway IP ... is already held by container ...`, keeps the mesh
+disabled and retries every 30s; the agent itself keeps working and its
+container restarts normally. Changing `MESH_NETWORK` on an existing node
+creates a new network; projects deployed earlier stay on the old one until
+redeployed.
 
 ### While the gateway is down
 
