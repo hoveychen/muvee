@@ -227,8 +227,10 @@ func TestCheckNodeFailovers_DispatchFailureRollsBack_PG(t *testing.T) {
 	f.assertUntouched(proj, dep)
 }
 
-// Regression guard for the normal case: with a healthy node available the dead
-// node's deployment is evicted and a replacement is dispatched there — once.
+// Regression guard for the normal case: with a healthy node available a
+// replacement of the dead node's deployment is dispatched there — once. The
+// original stays running and routed until the replacement completes (P6: the
+// completion callback retires it, see failover_multinode_pg_test.go).
 func TestCheckNodeFailovers_HealthyNodeStillMigrates_PG(t *testing.T) {
 	f := newFailoverFixture(t)
 	dead := f.node("failover-dispatch-mig-dead", "10.99.4.2", false)
@@ -244,8 +246,8 @@ func TestCheckNodeFailovers_HealthyNodeStillMigrates_PG(t *testing.T) {
 	if err != nil || old == nil {
 		t.Fatalf("get old deployment: %v", err)
 	}
-	if old.Status != store.DeploymentStatusStopped || !strings.Contains(old.Logs, "evicted") {
-		t.Errorf("old deployment status=%s logs=%q, want stopped with eviction note", old.Status, old.Logs)
+	if old.Status != store.DeploymentStatusRunning || strings.Contains(old.Logs, "evicted") {
+		t.Errorf("old deployment status=%s logs=%q, want still running (retired only when the replacement completes)", old.Status, old.Logs)
 	}
 	deps, err := f.st.ListDeployments(f.ctx, proj.ID)
 	if err != nil {

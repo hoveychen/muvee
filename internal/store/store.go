@@ -1731,8 +1731,8 @@ func (s *Store) AdvanceDeployQueue(ctx context.Context, projectID uuid.UUID, pol
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('deploy-queue:' || $1::text, 0))`, projectID); err != nil {
-		return nil, fmt.Errorf("lock deploy queue: %w", err)
+	if err := lockDeployQueue(ctx, tx, projectID); err != nil {
+		return nil, err
 	}
 
 	rows, err := tx.Query(ctx, `
@@ -1783,7 +1783,11 @@ func (s *Store) AdvanceDeployQueue(ctx context.Context, projectID uuid.UUID, pol
 		return res, tx.Commit(ctx)
 	}
 
-	rows, err = tx.Query(ctx, `SELECT id FROM deployments WHERE project_id=$1 AND status='queued' ORDER BY created_at DESC, id DESC`, projectID)
+	// A failover replacement never wins over a user deployment, whatever
+	// their created_at order (TriggerDeployment creates its row before taking
+	// this lock, so commit order and created_at can disagree). Without
+	// failover replacements in the queue this is plain newest-first.
+	rows, err = tx.Query(ctx, `SELECT id FROM deployments WHERE project_id=$1 AND status='queued' ORDER BY (logs LIKE $2) ASC, created_at DESC, id DESC`, projectID, failoverLogPrefix+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -1811,8 +1815,11 @@ func (s *Store) AdvanceDeployQueue(ctx context.Context, projectID uuid.UUID, pol
 	if len(queued) > 1 {
 		res.Superseded = queued[1:]
 		if _, err := tx.Exec(ctx, `
-			UPDATE deployments SET status='superseded', logs=logs||$2, updated_at=NOW() WHERE id = ANY($1)
-		`, res.Superseded, fmt.Sprintf("superseded by newer deployment %s; not executed\n", newest)); err != nil {
+			UPDATE deployments SET status='superseded',
+			  logs=logs||CASE WHEN logs LIKE $3 THEN $4 ELSE $2 END, updated_at=NOW()
+			WHERE id = ANY($1)
+		`, res.Superseded, fmt.Sprintf("superseded by newer deployment %s; not executed\n", newest),
+			failoverLogPrefix+"%", fmt.Sprintf("failover replacement superseded by deployment %s; not executed\n", newest)); err != nil {
 			return nil, err
 		}
 	}

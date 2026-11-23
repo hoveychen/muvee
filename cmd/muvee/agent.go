@@ -97,7 +97,7 @@ func runAgent() {
 	var meshGW *mesh.Gateway
 	if nodeRole == "deploy" {
 		cache = datacache.New(nil, nodeID, baseDir)
-		go runContainerStatusReporter(ctx, controlPlaneURL, agentSecret)
+		go runContainerStatusReporter(ctx, controlPlaneURL, agentSecret, nodeID)
 		// muvee-mesh gateway for project-to-project calls. Starts in the
 		// background and stays disabled (deploys skip the mesh) when it can't
 		// come up, so it never blocks the agent.
@@ -859,6 +859,9 @@ func runCleanup(ctx context.Context, task *store.Task) error {
 	if domainPrefix == "" {
 		return fmt.Errorf("cleanup task missing domain_prefix")
 	}
+	if str(task.Payload, "mode") == "compose_stop" {
+		return runComposeStopCleanup(ctx, task, domainPrefix)
+	}
 	if str(task.Payload, "mode") == "compose" {
 		projectID := str(task.Payload, "project_id")
 		composeFilePath := str(task.Payload, "compose_file_path")
@@ -881,9 +884,35 @@ func runCleanup(ctx context.Context, task *store.Task) error {
 	return nil
 }
 
+// runComposeStopCleanup removes a compose/image project from a node it has
+// moved away from: `compose down --remove-orphans` without -v (named volumes
+// hold the project's data and stay), then every remaining container carrying
+// the project's labels or legacy name is force-removed — that sweep also
+// covers an agent whose compose work dir is gone and a host without the
+// compose CLI.
+func runComposeStopCleanup(ctx context.Context, task *store.Task, domainPrefix string) error {
+	logFn := func(line string) { log.Print(line) }
+	log.Printf("Cleanup: stopping compose project %s (moved to another node; volumes kept)", domainPrefix)
+	if err := deployer.StopCompose(ctx, str(task.Payload, "project_id"), domainPrefix, str(task.Payload, "compose_file_path"), "", logFn); err != nil {
+		log.Printf("Cleanup: compose down for %s failed (%v); removing its containers directly", domainPrefix, err)
+	}
+	ids, err := containerIDsByDomainPrefix(ctx, domainPrefix, true)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, "docker", append([]string{"rm", "-f"}, ids...)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker rm -f %v: %w: %s", ids, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // runContainerStatusReporter periodically inspects all muvee-* containers on this node
 // and reports their restart counts, OOM-killed flags, and resource metrics to the control plane.
-func runContainerStatusReporter(ctx context.Context, baseURL, secret string) {
+func runContainerStatusReporter(ctx context.Context, baseURL, secret string, nodeID uuid.UUID) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -891,7 +920,7 @@ func runContainerStatusReporter(ctx context.Context, baseURL, secret string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			reportContainerStatuses(ctx, baseURL, secret)
+			reportContainerStatuses(ctx, baseURL, secret, nodeID)
 			reportContainerMetrics(ctx, baseURL, secret)
 		}
 	}
@@ -926,7 +955,7 @@ func suppressAmbiguousHostPorts(statuses []containerStatus) []containerStatus {
 	return statuses
 }
 
-func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
+func reportContainerStatuses(ctx context.Context, baseURL, secret string, nodeID uuid.UUID) {
 	names, err := listMuveeContainerNames(ctx)
 	if err != nil || len(names) == 0 {
 		return
@@ -973,7 +1002,9 @@ func reportContainerStatuses(ctx context.Context, baseURL, secret string) {
 	}
 	statuses = suppressAmbiguousHostPorts(statuses)
 	body, _ := json.Marshal(statuses)
-	resp, _ := agentPost(baseURL+"/api/agent/container-statuses", secret, "application/json", jsonReader(body))
+	// node_id lets the control plane apply the report only to deployments on
+	// this node (a server that predates it ignores the query parameter).
+	resp, _ := agentPost(baseURL+"/api/agent/container-statuses?node_id="+nodeID.String(), secret, "application/json", jsonReader(body))
 	if resp != nil {
 		resp.Body.Close()
 	}
