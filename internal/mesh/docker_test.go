@@ -110,3 +110,40 @@ func TestParseMeshNetwork(t *testing.T) {
 		t.Error("no IPv4 subnet must be an error")
 	}
 }
+
+// Review I-1: only a foreign holder that is running and really owns the IP is
+// remembered. A stopped / created leftover of another compose project (an old
+// agent left behind when the stack's directory or -p changed) still reserves
+// its fixed IP for this round, but must not disable mesh for good: once it is
+// `docker rm`-ed the agent takes the gateway on the next round.
+func TestShouldRememberHolder(t *testing.T) {
+	self, gw := "aaaa", "10.213.0.2"
+	selfStack := "compose project me"
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"running foreign holder", "bbbb|/yipu-agent|running|10.213.0.2|10.213.0.2|yipu", true},
+		{"paused foreign holder", "bbbb|/yipu-agent|paused|10.213.0.2|10.213.0.2|yipu", true},
+		{"exited foreign reservation", "bbbb|/old-agent|exited||10.213.0.2|muvee-old", false},
+		{"created foreign reservation", "bbbb|/old-agent|created||10.213.0.2|muvee-old", false},
+		{"restarting foreign reservation", "bbbb|/old-agent|restarting||10.213.0.2|muvee-old", false},
+		{"dead foreign reservation", "bbbb|/old-agent|dead||10.213.0.2|muvee-old", false},
+		// Some docker versions keep the last IPAddress on a stopped container.
+		{"exited foreign with stale IPAddress", "bbbb|/old-agent|exited|10.213.0.2|10.213.0.2|muvee-old", false},
+		{"running same-stack holder", "bbbb|/agent-old|running|10.213.0.2|10.213.0.2|me", false},
+	}
+	for _, c := range cases {
+		h := parseGatewayHolder(c.line, self, gw)
+		if h == nil {
+			t.Fatalf("%s: setup: not parsed as a holder", c.name)
+		}
+		if got := shouldRememberHolder(h, selfStack); got != c.want {
+			t.Errorf("%s: shouldRememberHolder = %v, want %v (holder %s)", c.name, got, c.want, h)
+		}
+	}
+	if shouldRememberHolder(nil, selfStack) {
+		t.Error("nil holder must not be remembered")
+	}
+}
