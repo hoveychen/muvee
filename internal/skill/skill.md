@@ -482,7 +482,7 @@ If the install directory isn't writable by the current user (e.g. `/usr/local/bi
 
 Projects with `--auth-required` (or `access_mode=private`) are gated by Traefik ForwardAuth in the browser, but `muveectl` ships two ways to bypass that gate using your CLI identity. Both rely on the server-side proxy at `/api/projects/{id}/proxy/*`, which:
 
-- Authenticates the request with your CLI Bearer token.
+- Authenticates the request with your CLI Bearer token — and **only** a Bearer token (`Authorization: Bearer ...`). The console session cookie is not accepted here: opening `/api/projects/{id}/proxy/...` directly in a browser returns `401`. To use a protected project from a browser, run `port-forward` (below) and open the local address; `muveectl` adds the Bearer header for you.
 - Authorizes against project membership (owner / member / admin) — the per-project `project_access_users` ACL is **not** consulted here.
 - Connects directly to the deployment's host:port, fully bypassing Traefik / forward-auth.
 - Injects `X-Forwarded-User: <your email>` into the request before it hits the container, so the container sees the same identity it would through the browser.
@@ -524,7 +524,9 @@ Exit code is `1` on any HTTP `>= 400` so shell scripts can check `$?`.
 
 ### `projects port-forward` — sustained sessions
 
-Best for development — opens a local TCP listener that proxies every request through the same authenticated path. Reuse from a browser, a frontend dev server, or repeated curls.
+Best for development — opens a local TCP listener that proxies every request through the same authenticated path. Reuse from a browser, a frontend dev server, or repeated curls. This is the supported way to open a protected project in a browser through the proxy (the proxy itself rejects cookie-authenticated browser requests with `401`).
+
+> **Calling the console API from your own code:** send `Authorization: Bearer <token>`. Console write endpoints (any method other than GET/HEAD/OPTIONS) refuse cookie-authenticated requests that a browser marks as cross-origin (`Sec-Fetch-Site` other than `same-origin`, or an `Origin` that is not the console's own host) with `403`. Bearer requests, `muveectl`, curl and server-side scripts are unaffected.
 
 ```bash
 # Auto-pick a free local port

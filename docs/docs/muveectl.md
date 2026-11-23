@@ -276,7 +276,13 @@ Then call the project's API locally:
 curl http://127.0.0.1:3000/api/some-endpoint
 ```
 
-This is useful when your local development code needs to call APIs exposed by a deployed project, without dealing with OAuth login flows or TLS certificates.
+This is useful when your local development code needs to call APIs exposed by a deployed project, without dealing with OAuth login flows or TLS certificates. You can also open the local address in a browser.
+
+:::note Bearer only
+`port-forward` and `projects curl` go through the server-side proxy at `/api/projects/{id}/proxy/*`, which accepts **only** `Authorization: Bearer` (your CLI token, added by `muveectl`). Opening that path directly in a browser with your console login returns `401` — use `port-forward` instead.
+
+Likewise, console write endpoints (anything other than GET/HEAD/OPTIONS) reject cookie-authenticated browser requests coming from another origin with `403`. Calls that carry a Bearer token — `muveectl`, curl, scripts — are not affected.
+:::
 
 ## Datasets
 

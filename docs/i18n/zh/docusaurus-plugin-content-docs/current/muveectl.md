@@ -207,7 +207,13 @@ muveectl projects port-forward PROJECT_ID --port 3000
 curl http://127.0.0.1:3000/api/some-endpoint
 ```
 
-适用于本地开发时需要调用已部署项目暴露的 API，无需处理 OAuth 登录流程或 TLS 证书。
+适用于本地开发时需要调用已部署项目暴露的 API，无需处理 OAuth 登录流程或 TLS 证书。也可以直接在浏览器里打开这个本地地址。
+
+:::note 只认 Bearer
+`port-forward` 和 `projects curl` 都经过服务端代理 `/api/projects/{id}/proxy/*`，它**只接受** `Authorization: Bearer`（由 `muveectl` 自动带上 CLI 令牌）。用控制台登录态在浏览器里直接打开这个路径会返回 `401`，请改用 `port-forward`。
+
+同样，控制台的写接口（GET/HEAD/OPTIONS 以外的方法）会以 `403` 拒绝来自其他源、靠 cookie 认证的浏览器请求。带 Bearer 令牌的调用（`muveectl`、curl、脚本）不受影响。
+:::
 
 ## 数据集管理
 
