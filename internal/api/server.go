@@ -4686,19 +4686,44 @@ func shouldRefreshHostPort(r containerStatusReport) bool {
 	return r.HostPort > 0
 }
 
+// statusReportNodeLiveWindow: a deployment on another node that heartbeated
+// within this window is never touched by a report (mirrors the scheduler's
+// deploy-node liveness window).
+const statusReportNodeLiveWindow = 2 * time.Minute
+
 // handleContainerStatuses receives a batch of container runtime statuses from deploy agents
 // and updates the restart_count / oom_killed / host_port fields on the currently running
 // deployment for each reported container (identified by domain_prefix).
+//
+// Agents send ?node_id=<their node>; the update is then limited to running
+// deployments on that node (or on a node that is not live / unknown), so a
+// stale container on a node that came back cannot rewrite the route of the
+// deployment that replaced it elsewhere. Agents that predate node_id keep the
+// old domain_prefix-only update.
 func (s *Server) handleContainerStatuses(w http.ResponseWriter, r *http.Request) {
 	var statuses []containerStatusReport
 	if err := json.NewDecoder(r.Body).Decode(&statuses); err != nil {
 		jsonErr(w, err, 400)
 		return
 	}
+	reporter, scoped := uuid.Nil, false
+	if v := r.URL.Query().Get("node_id"); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			reporter, scoped = id, true
+		}
+	}
+	liveSince := time.Now().Add(-statusReportNodeLiveWindow)
 	for _, s2 := range statuses {
-		_ = s.store.UpdateDeploymentRuntimeStatus(r.Context(), s2.DomainPrefix, s2.RestartCount, s2.OOMKilled)
+		if !scoped {
+			_ = s.store.UpdateDeploymentRuntimeStatus(r.Context(), s2.DomainPrefix, s2.RestartCount, s2.OOMKilled)
+			if shouldRefreshHostPort(s2) {
+				_ = s.store.UpdateDeploymentHostPortByDomainPrefix(r.Context(), s2.DomainPrefix, s2.HostPort)
+			}
+			continue
+		}
+		_ = s.store.UpdateDeploymentRuntimeStatusFromNode(r.Context(), reporter, liveSince, s2.DomainPrefix, s2.RestartCount, s2.OOMKilled)
 		if shouldRefreshHostPort(s2) {
-			_ = s.store.UpdateDeploymentHostPortByDomainPrefix(r.Context(), s2.DomainPrefix, s2.HostPort)
+			_ = s.store.UpdateDeploymentHostPortFromNode(r.Context(), reporter, liveSince, s2.DomainPrefix, s2.HostPort)
 		}
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
@@ -5005,19 +5030,12 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 				projectevents.Push(dep.ProjectID, projectevents.TypeDeployCompleted, projectevents.SeverityInfo,
 					fmt.Sprintf("deployed on host port %d", body.HostPort))
 			}
-			// Retire previous running deployments for the same project.
-			// For any retired deployment that ran on a different node, dispatch a cleanup
-			// task so the stale container is removed from that node.
+			// Retire previous running deployments for the same project; any
+			// that ran on a different node gets a cleanup task there.
 			if dep, err := s.store.GetDeployment(r.Context(), task.DeploymentID); err == nil && dep != nil {
-				if project, err := s.store.GetProject(r.Context(), dep.ProjectID); err == nil && project != nil {
-					if stopped, err := s.store.StopProjectDeployments(r.Context(), dep.ProjectID, task.DeploymentID); err == nil {
-						for _, old := range stopped {
-							if old.NodeID != nil && task.NodeID != nil && *old.NodeID != *task.NodeID {
-								_, _ = s.sched.DispatchCleanup(r.Context(), *old.NodeID, old, project.DomainPrefix)
-							}
-						}
-					}
-				}
+				// WithoutCancel: an agent that disconnects mid-request must not
+				// leave the old deployment running next to the new one.
+				s.sched.RetireReplacedDeployments(context.WithoutCancel(r.Context()), dep, task.NodeID)
 			}
 		} else {
 			_ = s.store.UpdateDeploymentStatus(r.Context(), task.DeploymentID, store.DeploymentStatusFailed, "deploy completed but no host_port reported")

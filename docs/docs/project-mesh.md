@@ -124,14 +124,73 @@ A project may call itself through the mesh.
 
 ### Agent settings
 
-All optional — the defaults work out of the box.
+All optional — the defaults work out of the box for a single muvee stack per
+docker host.
 
 | Variable | Default | Description |
 |---|---|---|
+| `MESH_NETWORK` | `muvee-mesh` | Name of the mesh docker network. Required when several muvee stacks share one docker host (see below). |
 | `MESH_SUBNET` | `10.213.0.0/16` | Subnet used when the agent creates `muvee-mesh`. An existing network is reused with its own subnet. Change it only if it collides with your LAN/VPN. |
 | `MESH_GATEWAY_IP` | `10.213.0.2` | Fixed IP of the agent on `muvee-mesh`; must lie inside the subnet. |
 | `MESH_FALLBACK_DNS` | auto-detect | Comma-separated resolvers handed to project containers as a second DNS server, so external lookups keep working while the gateway is down. Auto-detected from what docker gives a container on the default bridge. |
 | `MESH_SELF_CONTAINER` | auto-detect | The agent's own container name/ID, if auto-detection from `/proc/self/mountinfo` fails. |
+
+**Several muvee stacks on one docker host** (e.g. two control planes whose
+deploy agents run on the same machine): docker networks are host-global, so
+each stack's deploy agent **must** set its own `MESH_NETWORK` and a
+non-overlapping `MESH_SUBNET` (e.g. `MESH_NETWORK=insnap-mesh`,
+`MESH_SUBNET=10.214.0.0/16`). With the defaults both agents compete for
+`10.213.0.2` on the same `muvee-mesh`.
+
+- **Copying a stack's `.env` / compose directory to start a new stack:** change
+  both `MESH_NETWORK` and `MESH_SUBNET`. Changing only the subnet does nothing:
+  an existing network of that name is reused with its own subnet.
+- **`MESH_NETWORK` must name a network of its own** that the agent creates and
+  labels `muvee.mesh=1`. The agent refuses any existing network without that
+  label (e.g. the stack's compose network): it logs
+  `mesh: docker network ... is not a muvee mesh network`, keeps the mesh
+  disabled and never touches its own attachment to that network.
+- **Gateway IP already taken:** before attaching, the agent checks the gateway
+  IP. When another container holds it — running at that IP, or stopped /
+  created and still reserving it as a fixed IP — the agent logs
+  `mesh: gateway IP ... is already held by container ...`, keeps the mesh
+  disabled and retries every 30s; the agent itself keeps working and its
+  container restarts normally. A *running* container that only carries a
+  leftover entry for the IP (no live address) does not count.
+- **Held by another stack:** when the holder is a *running* container of a
+  different compose project (or, without compose, a differently named
+  container), the agent logs `mesh: WARNING: gateway IP ... is held by ... of another muvee stack
+  (compose project ...)` and **remembers it** in
+  `$DATA_DIR/mesh-foreign-gateway-holders.json` (the agent's data volume, kept
+  across upgrades). From then on it never takes the gateway IP on that network,
+  even when it looks free — otherwise it would grab it while Watchtower
+  recreates the other stack's agent (old container removed, new one not yet
+  started), and the other, healthy stack's agent would be stuck. The record is
+  per network: it disappears when that network is recreated. To retry
+  anyway, delete the file and restart the agent, or change `MESH_NETWORK`.
+  A *stopped* or *created* container of another compose project (e.g. an old
+  agent left behind after the stack's directory or `-p` project name changed)
+  is not remembered: it only blocks while it exists, and once you
+  `docker rm` it the agent takes the gateway on its next 30s retry.
+- **The stack that already has the gateway can still lose it** while the
+  stacks share a network: if the other agent does take the IP during an
+  upgrade gap (e.g. it runs an older muvee, or its record was deleted), the
+  upgraded agent's new container stays in `Created` and fails to start with
+  `Address already in use`. Recover with `docker rm <stuck container>` and
+  recreate the agent (`docker compose up -d <agent service>`), then give the
+  stacks separate networks.
+- **After changing `MESH_NETWORK`, redeploy every project of that stack.**
+  The agent creates the new network, but projects deployed earlier stay on the
+  old one, with their DNS still pointing at the gateway IP there — which may
+  now be the *other* stack's agent. That gateway identifies callers only by
+  their `muvee.domain_prefix` label, so a leftover project would be treated as
+  a project of the other stack with the same prefix.
+- **Project `domain_prefix` values must be unique across all stacks on the
+  docker host**, not just within one stack. Containers are named
+  `muvee-<domain_prefix>` and the agent cleans up a project's containers by
+  their `muvee.domain_prefix` / compose project label, which carries no stack
+  identity: when a project leaves a node, the cleanup there can remove the
+  other stack's containers of a project with the same prefix.
 
 ### While the gateway is down
 

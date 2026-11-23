@@ -5,7 +5,8 @@ import (
 	"strings"
 )
 
-// MeshSpec attaches a project container to the node's muvee-mesh network so
+// MeshSpec attaches a project container to the node's mesh network (the
+// agent's MESH_NETWORK, default muvee-mesh) so
 // it can reach sibling projects at <prefix>.muvee.internal through the agent's
 // gateway. GatewayIP is the first resolver (it answers muvee.internal and
 // forwards the rest); FallbackDNS keeps external lookups working while the

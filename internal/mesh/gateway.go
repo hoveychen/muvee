@@ -21,7 +21,8 @@ type Spec struct {
 
 // Gateway owns the mesh network attachment and the DNS/HTTP listeners.
 type Gateway struct {
-	cfg Config
+	cfg     Config
+	holders *holderMemory
 
 	mu   sync.Mutex
 	spec *Spec // non-nil only while the gateway is fully up
@@ -34,7 +35,7 @@ const reconcileInterval = 30 * time.Second
 // (Spec returns nil) and the agent keeps running. The reconcile loop re-attaches
 // the agent to the network if it gets disconnected or the network is removed.
 func Start(ctx context.Context, cfg Config) *Gateway {
-	g := &Gateway{cfg: cfg}
+	g := &Gateway{cfg: cfg, holders: newHolderMemory(cfg.StateDir)}
 	go g.run(ctx)
 	return g
 }
@@ -62,7 +63,7 @@ func (g *Gateway) run(ctx context.Context) {
 		self = detectSelfContainer(ctx)
 	}
 	if self == "" {
-		log.Printf("mesh: agent is not running inside a docker container; muvee-mesh gateway disabled (set MESH_SELF_CONTAINER to override)")
+		log.Printf("mesh: agent is not running inside a docker container; mesh gateway disabled (set MESH_SELF_CONTAINER to override)")
 		return
 	}
 	upstreams := readResolvConf("/etc/resolv.conf").upstreams()
@@ -80,7 +81,8 @@ func (g *Gateway) run(ctx context.Context) {
 		log.Printf("mesh: could not determine a fallback DNS for project containers (set MESH_FALLBACK_DNS); they will depend on the gateway for all DNS")
 	}
 
-	callers := newDockerCallers()
+	network := g.cfg.network()
+	callers := newDockerCallers(network)
 	go callers.watch(ctx)
 	l := &listeners{
 		dns:   func(ip string) dns.Handler { return newDNSHandler(ip, upstreams) },
@@ -95,9 +97,9 @@ func (g *Gateway) run(ctx context.Context) {
 			g.setSpec(nil)
 		} else {
 			if g.Spec() == nil {
-				log.Printf("mesh: gateway up on %s (network %s, fallback dns %v)", gwIP, NetworkName, fallback)
+				log.Printf("mesh: gateway up on %s (network %s, fallback dns %v)", gwIP, network, fallback)
 			}
-			g.setSpec(&Spec{Network: NetworkName, GatewayIP: gwIP, FallbackDNS: fallback})
+			g.setSpec(&Spec{Network: network, GatewayIP: gwIP, FallbackDNS: fallback})
 		}
 		select {
 		case <-ctx.Done():
@@ -117,15 +119,16 @@ func (g *Gateway) reconcile(ctx context.Context, self string, l *listeners) (str
 	if err != nil {
 		return "", err
 	}
-	subnet, err := ensureNetwork(ctx, desired, desiredGW)
+	network := g.cfg.network()
+	mn, err := ensureNetwork(ctx, network, desired, desiredGW)
 	if err != nil {
 		return "", err
 	}
-	gwIP, err := pickGatewayIP(subnet, g.cfg.GatewayIP)
+	gwIP, err := pickGatewayIP(mn.Subnet, g.cfg.GatewayIP)
 	if err != nil {
 		return "", err
 	}
-	if err := ensureSelfConnected(ctx, self, gwIP); err != nil {
+	if err := ensureSelfConnected(ctx, mn, self, gwIP, g.holders); err != nil {
 		return "", err
 	}
 	if err := l.ensure(gwIP); err != nil {

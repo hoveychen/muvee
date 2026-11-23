@@ -17,13 +17,14 @@ type callerLookup interface {
 }
 
 // dockerCallers keeps an IP → domain_prefix table built from the containers
-// attached to muvee-mesh that carry the muvee.domain_prefix label. The table
+// attached to the mesh network that carry the muvee.domain_prefix label. The table
 // is refreshed every ttl, and on a miss at most once per minMissInterval so a
 // freshly started caller is recognised without hammering docker. watch()
 // additionally drops the table on every connect/disconnect on the network:
 // docker reuses a stopped container's IP, and a stale entry would let the
 // next container on that IP borrow the old project's identity.
 type dockerCallers struct {
+	network         string
 	ttl             time.Duration
 	minMissInterval time.Duration
 	list            func(ctx context.Context) (map[string]string, error)
@@ -33,8 +34,9 @@ type dockerCallers struct {
 	refreshed time.Time
 }
 
-func newDockerCallers() *dockerCallers {
-	return &dockerCallers{ttl: 10 * time.Second, minMissInterval: time.Second, list: listMeshCallers}
+func newDockerCallers(network string) *dockerCallers {
+	return &dockerCallers{network: network, ttl: 10 * time.Second, minMissInterval: time.Second,
+		list: func(ctx context.Context) (map[string]string, error) { return listMeshCallers(ctx, network) }}
 }
 
 func (d *dockerCallers) Lookup(ctx context.Context, ip string) string {
@@ -66,7 +68,7 @@ func (d *dockerCallers) invalidate() {
 func (d *dockerCallers) watch(ctx context.Context) {
 	for ctx.Err() == nil {
 		cmd := exec.CommandContext(ctx, "docker", "events", "--format", "{{.Action}}",
-			"--filter", "type=network", "--filter", "network="+NetworkName)
+			"--filter", "type=network", "--filter", "network="+d.network)
 		out, err := cmd.StdoutPipe()
 		if err == nil {
 			err = cmd.Start()
@@ -89,8 +91,8 @@ func (d *dockerCallers) watch(ctx context.Context) {
 }
 
 // listMeshCallers queries docker for every labelled container on the mesh.
-func listMeshCallers(ctx context.Context) (map[string]string, error) {
-	ids, err := dockerCmd(ctx, "ps", "-q", "--no-trunc", "--filter", "network="+NetworkName, "--filter", "label=muvee.domain_prefix")
+func listMeshCallers(ctx context.Context, network string) (map[string]string, error) {
+	ids, err := dockerCmd(ctx, "ps", "-q", "--no-trunc", "--filter", "network="+network, "--filter", "label=muvee.domain_prefix")
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +100,7 @@ func listMeshCallers(ctx context.Context) (map[string]string, error) {
 		return map[string]string{}, nil
 	}
 	args := append([]string{"inspect", "-f",
-		`{{index .Config.Labels "muvee.domain_prefix"}} {{with index .NetworkSettings.Networks "` + NetworkName + `"}}{{.IPAddress}}{{end}}`},
+		`{{index .Config.Labels "muvee.domain_prefix"}} {{with index .NetworkSettings.Networks "` + network + `"}}{{.IPAddress}}{{end}}`},
 		strings.Fields(ids)...)
 	out, err := dockerCmd(ctx, args...)
 	if err != nil {

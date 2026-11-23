@@ -97,3 +97,14 @@ func TestParseCallerTable(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+func TestConfigFromEnvNetwork(t *testing.T) {
+	t.Setenv("MESH_NETWORK", "")
+	if got := ConfigFromEnv("", "").Network; got != "muvee-mesh" {
+		t.Errorf("default network = %q; want muvee-mesh", got)
+	}
+	t.Setenv("MESH_NETWORK", "  insnap-mesh ")
+	if got := ConfigFromEnv("", "").Network; got != "insnap-mesh" {
+		t.Errorf("MESH_NETWORK network = %q; want insnap-mesh", got)
+	}
+}

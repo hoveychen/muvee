@@ -68,6 +68,19 @@ func TestCheckNodeFailovers_SkipsPausedProject_PG(t *testing.T) {
 		t.Fatalf("age node: %v", err)
 	}
 
+	// A healthy second deploy node, so failover would really be able to move
+	// the deployment: without one it now skips the dead node up front and this
+	// test would pass without ever reaching the paused gate.
+	healthy, err := st.UpsertNode(ctx, &store.Node{
+		Hostname: "failover-paused-test-healthy",
+		Role:     store.NodeRoleDeploy,
+		HostIP:   "10.99.0.3",
+	})
+	if err != nil {
+		t.Fatalf("upsert healthy node: %v", err)
+	}
+	defer pool.Exec(ctx, `DELETE FROM nodes WHERE id = $1`, healthy.ID)
+
 	proj, err := st.CreateProject(ctx, &store.Project{
 		Name:         "failover-paused-test",
 		ProjectType:  store.ProjectTypeImage,
