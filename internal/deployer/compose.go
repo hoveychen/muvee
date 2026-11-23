@@ -69,8 +69,8 @@ type ComposeConfig struct {
 	// runs a pre-flight `ss -ltn` probe and fails fast if the port is already
 	// bound by another process on this node.
 	FixedHostPort int
-	// Mesh, when non-nil, joins the expose service to the muvee-mesh network
-	// (other services stay off it).
+	// Mesh, when non-nil, joins the expose service to the node's mesh network
+	// (Mesh.Network); other services stay off it.
 	Mesh *MeshSpec
 }
 

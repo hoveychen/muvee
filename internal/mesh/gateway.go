@@ -21,7 +21,8 @@ type Spec struct {
 
 // Gateway owns the mesh network attachment and the DNS/HTTP listeners.
 type Gateway struct {
-	cfg Config
+	cfg     Config
+	holders *holderMemory
 
 	mu   sync.Mutex
 	spec *Spec // non-nil only while the gateway is fully up
@@ -34,7 +35,7 @@ const reconcileInterval = 30 * time.Second
 // (Spec returns nil) and the agent keeps running. The reconcile loop re-attaches
 // the agent to the network if it gets disconnected or the network is removed.
 func Start(ctx context.Context, cfg Config) *Gateway {
-	g := &Gateway{cfg: cfg}
+	g := &Gateway{cfg: cfg, holders: newHolderMemory(cfg.StateDir)}
 	go g.run(ctx)
 	return g
 }
@@ -119,15 +120,15 @@ func (g *Gateway) reconcile(ctx context.Context, self string, l *listeners) (str
 		return "", err
 	}
 	network := g.cfg.network()
-	subnet, err := ensureNetwork(ctx, network, desired, desiredGW)
+	mn, err := ensureNetwork(ctx, network, desired, desiredGW)
 	if err != nil {
 		return "", err
 	}
-	gwIP, err := pickGatewayIP(subnet, g.cfg.GatewayIP)
+	gwIP, err := pickGatewayIP(mn.Subnet, g.cfg.GatewayIP)
 	if err != nil {
 		return "", err
 	}
-	if err := ensureSelfConnected(ctx, network, self, gwIP); err != nil {
+	if err := ensureSelfConnected(ctx, mn, self, gwIP, g.holders); err != nil {
 		return "", err
 	}
 	if err := l.ensure(gwIP); err != nil {

@@ -52,6 +52,9 @@ type Config struct {
 	FallbackDNS []string
 	// SelfContainer overrides auto-detection of the agent's own container.
 	SelfContainer string
+	// StateDir is where the gateway keeps state that must survive agent
+	// container recreation (the agent's DATA_DIR). Empty keeps it in memory.
+	StateDir string
 
 	ControlPlaneURL string
 	AgentSecret     string

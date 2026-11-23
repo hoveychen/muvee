@@ -66,8 +66,8 @@ All configuration is via environment variables.
 | `AGENT_SECRET` | — | Must match the value set on the control plane |
 | `DATA_DIR` | `/muvee/data` | Local dataset cache root (deploy nodes) |
 | `HOST_IP` | _(auto-detect)_ | IP address Traefik uses to reach containers on this node. Auto-detected from the network interface used to reach `CONTROL_PLANE_URL`. Override if auto-detection selects the wrong interface (e.g. on multi-NIC hosts). |
-| `MESH_NETWORK` | `muvee-mesh` | Deploy nodes: name of the mesh docker network for [project-to-project access](./project-mesh). Several muvee stacks on one docker host must each set a distinct `MESH_NETWORK` and a non-overlapping `MESH_SUBNET`. |
-| `MESH_SUBNET` | `10.213.0.0/16` | Deploy nodes: subnet of the `muvee-mesh` network for [project-to-project access](./project-mesh). Change only on a clash with your LAN/VPN. |
+| `MESH_NETWORK` | `muvee-mesh` | Deploy nodes: name of the mesh docker network for [project-to-project access](./project-mesh); the agent creates it with the label `muvee.mesh=1` and refuses an existing network without it. Several muvee stacks on one docker host must each set a distinct `MESH_NETWORK` and a non-overlapping `MESH_SUBNET` (when copying a stack's config, change both). After changing it, redeploy all projects of the stack. |
+| `MESH_SUBNET` | `10.213.0.0/16` | Deploy nodes: subnet used when the agent creates the mesh network for [project-to-project access](./project-mesh); an existing network keeps its own subnet, so changing only this has no effect there. Change it on a clash with your LAN/VPN or another stack's mesh. |
 | `MESH_GATEWAY_IP` | `10.213.0.2` | Deploy nodes: the agent's fixed IP on `muvee-mesh` (DNS + HTTP gateway). |
 | `MESH_FALLBACK_DNS` | _(auto-detect)_ | Deploy nodes: comma-separated fallback resolvers for project containers while the gateway is down. |
 | `MESH_SELF_CONTAINER` | _(auto-detect)_ | Deploy nodes: the agent's own container name/ID, if auto-detection fails. |

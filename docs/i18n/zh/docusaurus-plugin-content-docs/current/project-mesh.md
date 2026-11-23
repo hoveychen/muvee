@@ -102,7 +102,15 @@ WebSocket 和流式响应（SSE / chunked）都能透传。
 | `MESH_FALLBACK_DNS` | 自动检测 | 逗号分隔，作为第二个 DNS 交给项目容器，保证网关不可用时外网解析仍可用。默认取 docker 给默认 bridge 上容器的上游 DNS。 |
 | `MESH_SELF_CONTAINER` | 自动检测 | agent 自身的容器名/ID，仅当从 `/proc/self/mountinfo` 自动识别失败时需要设置。 |
 
-**同一台 docker 主机上有多套 muvee 栈**（例如两个控制面的 deploy agent 跑在同一台机器上）：docker 网络是整机共享的，每套栈的 deploy agent **必须**各自设置不同的 `MESH_NETWORK` 和互不重叠的 `MESH_SUBNET`（例如 `MESH_NETWORK=insnap-mesh`、`MESH_SUBNET=10.214.0.0/16`）。用默认值时两个 agent 会在同一个 `muvee-mesh` 上争抢 `10.213.0.2`。agent 接入前会先检查：网关 IP 已被其他容器占用（运行中，或已停止但仍预留着该 IP）时，打印 `mesh: gateway IP ... is already held by container ...`，mesh 保持关闭并每 30 秒重试；agent 本身照常工作，其容器也能正常重启。已有节点改 `MESH_NETWORK` 会新建网络，之前部署的项目要重新部署才会加入新网络。
+**同一台 docker 主机上有多套 muvee 栈**（例如两个控制面的 deploy agent 跑在同一台机器上）：docker 网络是整机共享的，每套栈的 deploy agent **必须**各自设置不同的 `MESH_NETWORK` 和互不重叠的 `MESH_SUBNET`（例如 `MESH_NETWORK=insnap-mesh`、`MESH_SUBNET=10.214.0.0/16`）。用默认值时两个 agent 会在同一个 `muvee-mesh` 上争抢 `10.213.0.2`。
+
+- **复制某套栈的 `.env` / compose 目录来建新栈时**：`MESH_NETWORK` 和 `MESH_SUBNET` 都要改。只改子网不改名没有用：同名网络已存在时会被直接复用，用的是它自己的子网。
+- **`MESH_NETWORK` 必须是专用网络**，由 agent 创建并打上 `muvee.mesh=1` 标签。已存在但没有这个标签的网络（例如栈自己的 compose 网络），agent 一律不碰：打印 `mesh: docker network ... is not a muvee mesh network`，mesh 保持关闭，也绝不改动自己在该网络上的连接。
+- **网关 IP 已被占用**：agent 接入前会先检查网关 IP。被其他容器占用时（运行中且就在这个 IP 上，或已停止 / 已创建未启动但仍把它预留为固定 IP），打印 `mesh: gateway IP ... is already held by container ...`，mesh 保持关闭并每 30 秒重试；agent 本身照常工作，其容器也能正常重启。*运行中*的容器若只是残留了该 IP 的配置条目（没有实际地址），不算占用。
+- **被另一套栈占用**：占用者属于另一个 compose 项目（不是 compose 起的则按容器名区分）时，agent 打印 `mesh: WARNING: gateway IP ... is held by ... of another muvee stack (compose project ...)`，并把它**记下来**，存在 `$DATA_DIR/mesh-foreign-gateway-holders.json`（agent 的数据卷，升级重建后仍在）。此后在这个网络上 agent 再也不抢网关 IP，即使它看起来空出来了——否则 Watchtower 重建另一套栈的 agent 时（先删旧容器、再建新容器）会被它趁空抢走，害得那套健康的栈起不来。记录按网络区分，网络重建后自动失效。确实要重试时，删掉这个文件并重启 agent，或改 `MESH_NETWORK`。
+- **已经占着网关的一方也可能被抢**：只要两套栈还共用网络，另一个 agent 仍可能在升级空窗里抢走 IP（例如它跑的是旧版 muvee，或它的记录被删了），这时升级后的新 agent 容器停在 `Created`，启动报 `Address already in use`。恢复：`docker rm <卡住的容器>`，再重建 agent（`docker compose up -d <agent 服务名>`），然后把两套栈的网络分开。
+- **改了 `MESH_NETWORK` 后，必须重新部署该栈的全部项目。** agent 会建新网络，但之前部署的项目还留在旧网络上，DNS 仍指向旧网络上的网关 IP——那可能已经是*另一套*栈的 agent。网关只按调用方容器的 `muvee.domain_prefix` 标签认身份，留在旧网络上的项目会被当成另一套栈里同前缀的项目。
+
 
 ### 网关不可用时
 
