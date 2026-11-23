@@ -199,6 +199,17 @@ muveectl projects update PROJECT_ID --allow-project-access=true    # allow again
 
 `projects create` accepts the same flag. See [Project-to-Project Access](./project-mesh) for details and limits.
 
+### Account Badge (`--account-badge`)
+
+For `--auth-required` projects: show a small **Account** link to `/_oauth/me` in the bottom-right corner of the protected pages. On by default for new projects, off for projects created before the switch existed:
+
+```bash
+muveectl projects update PROJECT_ID --account-badge          # show the badge
+muveectl projects update PROJECT_ID --account-badge=false    # hide it
+```
+
+See [Service Auth Integration → Account badge](./service-auth-integration.md#account-badge-no-code).
+
 ### Container Metrics
 
 The deploy agent collects resource usage from `docker stats` every ~15 seconds and reports it to the control plane. Use `projects metrics` to inspect a project's running container:

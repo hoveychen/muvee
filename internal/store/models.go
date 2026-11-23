@@ -212,6 +212,13 @@ type Project struct {
 	// verbatim, so Go callers that want the default must set it to true
 	// (the createProject handler does).
 	AllowProjectAccess bool `db:"allow_project_access" json:"allow_project_access"`
+	// AccountBadge shows a small "Account" link to the host's /_oauth/me on
+	// the project's top-level ForwardAuth-protected pages (embed-bridge SDK,
+	// decided by authservice's /_oauth/account-ui). OFF for projects that
+	// existed before migration 061, ON for new ones: like AllowProjectAccess,
+	// CreateProject writes the field verbatim and the createProject handler
+	// sets it to true (BACKLOG-20261121-001).
+	AccountBadge bool `db:"account_badge" json:"account_badge"`
 	// Branding fields drive the visual of the forward-auth login page served
 	// on this project's downstream subdomain. Empty = fall back to the
 	// platform-wide system_settings (and then to built-in defaults). See

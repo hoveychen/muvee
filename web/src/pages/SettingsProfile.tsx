@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Save, RotateCcw } from 'lucide-react'
+import { Save, RotateCcw, Globe, LogOut, ExternalLink } from 'lucide-react'
 import { api } from '../lib/api'
+import type { VisitedProject } from '../lib/types'
 import { useAuth } from '../lib/auth'
 import { useTranslation } from 'react-i18next'
 
@@ -157,6 +158,99 @@ export default function SettingsProfilePage() {
           </button>
         </div>
       </div>
+
+      <SubsiteSignInsCard />
     </div>
+  )
+}
+
+// "Subsite sign-ins" (BACKLOG-20261121-001 X2): recently visited subsites,
+// each linking to its /_oauth/me account page, and "sign out of all subsites".
+function SubsiteSignInsCard() {
+  const { t } = useTranslation()
+  const [visited, setVisited] = useState<VisitedProject[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [revoking, setRevoking] = useState(false)
+  const [revoked, setRevoked] = useState(false)
+  const [revokeError, setRevokeError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.visitedProjects.list()
+      .then(rows => setVisited(rows ?? []))
+      .catch(e => setLoadError((e as Error).message))
+  }, [])
+
+  const handleRevoke = async () => {
+    if (revoking || !confirm(t('settingsProfile.subsites.revokeConfirm'))) return
+    setRevoking(true)
+    setRevokeError(null)
+    setRevoked(false)
+    try {
+      await api.meFwdSessions.revokeAll()
+      setRevoked(true)
+    } catch (e) {
+      setRevokeError((e as Error).message)
+    } finally {
+      setRevoking(false)
+    }
+  }
+
+  return (
+    <>
+      <h2 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '2rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <Globe size={15} />
+        {t('settingsProfile.subsites.title')}
+      </h2>
+      <div className="card" style={{ padding: '1rem' }}>
+        <p style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
+          {t('settingsProfile.subsites.hint')}
+        </p>
+
+        <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginBottom: '0.375rem' }}>
+          {t('settingsProfile.subsites.recentLabel')}
+        </div>
+        {loadError && (
+          <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginBottom: '0.75rem' }}>{loadError}</p>
+        )}
+        {!loadError && visited === null && (
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem' }}>{t('settingsProfile.subsites.loading')}</p>
+        )}
+        {visited && visited.length === 0 && (
+          <p style={{ fontSize: '0.8125rem', color: 'var(--fg-muted)', marginBottom: '0.75rem' }}>{t('settingsProfile.subsites.empty')}</p>
+        )}
+        {visited && visited.length > 0 && (
+          <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 0.75rem 0', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+            {visited.map(v => (
+              <li key={v.project_id} style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', fontSize: '0.8125rem', flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, color: 'var(--fg-primary)' }}>{v.name}</span>
+                <a href={v.account_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: '3px' }} title={t('settingsProfile.subsites.openAccount')}>
+                  {v.host}
+                  <ExternalLink size={11} />
+                </a>
+                <span style={{ color: 'var(--fg-muted)', marginLeft: 'auto' }}>
+                  {t('settingsProfile.subsites.lastSeen', { time: new Date(v.last_seen_at).toLocaleString() })}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <button
+          onClick={handleRevoke}
+          disabled={revoking}
+          className="btn-secondary"
+          style={{ color: 'var(--danger)', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '6px', ...(revoking ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}
+        >
+          <LogOut size={13} />
+          {revoking ? t('settingsProfile.subsites.revoking') : t('settingsProfile.subsites.revokeAll')}
+        </button>
+        {revoked && (
+          <p style={{ fontSize: '0.8125rem', color: 'var(--success)', marginTop: '0.5rem' }}>{t('settingsProfile.subsites.revoked')}</p>
+        )}
+        {revokeError && (
+          <p style={{ fontSize: '0.8125rem', color: 'var(--danger)', marginTop: '0.5rem' }}>{revokeError}</p>
+        )}
+      </div>
+    </>
   )
 }

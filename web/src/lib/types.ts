@@ -88,6 +88,9 @@ export interface Project {
   // one from inside their containers at http://<domain_prefix>.muvee.internal
   // without credentials.
   allow_project_access: boolean
+  // Per-subsite account badge (link to /_oauth/me); off for projects that
+  // predate it, on for new ones (BACKLOG-20261121-001).
+  account_badge: boolean
   // Per-project branding for the forward-auth login page served on this
   // project's downstream subdomain. Empty = fall back to platform settings,
   // then built-in defaults.
@@ -251,6 +254,16 @@ export interface DatasetSnapshot {
   total_files: number
   total_size_bytes: number
   version: number
+}
+
+export interface VisitedProject {
+  project_id: string
+  name: string
+  project_type: string
+  host: string
+  account_url: string
+  last_seen_at: string
+  visit_count: number
 }
 
 export interface ApiToken {

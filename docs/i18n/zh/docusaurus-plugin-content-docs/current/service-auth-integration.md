@@ -12,6 +12,16 @@ sidebar_position: 8
 muvee 告诉你的服务**用户是谁**（authentication，认证）。它**不**管理每个用户能做什么——那是授权（authorization），由你的服务自行负责。例如，muvee 会告诉你"这个请求来自 `alice@company.com`"，但你的服务自己决定 Alice 是否能访问某个资源。
 :::
 
+:::warning 请提供登出入口
+muvee 替你完成登录，但没法在你的页面上放登出按钮。开启了**启用身份验证**的项目，每个页面都应该链接到 muvee 在每个项目域名下提供的账户页：
+
+```html
+<a href="/_oauth/me">账户</a>
+```
+
+`/_oauth/me` 显示当前登录的身份，并提供**退出登录**和**换个账号**。直接链接到 `/_oauth/logout` 也可以。如果应用自己维护会话，还请按[自有会话的应用](#自有会话的应用)一节处理。
+:::
+
 ## 读取用户身份（服务端）
 
 每个已认证的请求到达你的服务时，都会包含以下 Header，由 Traefik 在 muvee 认证网关验证用户后注入：
@@ -95,7 +105,27 @@ const user = await handle.wait();       // 登录完成后得到用户信息
 
 ## 登出
 
-最简单的登出无需写代码：在应用自己的域名下链接到 `/_oauth/logout` 即可（Traefik 会把每个项目域名下的 `/_oauth/*` 交给认证网关）：
+最简单的登出入口无需写代码：在应用自己的域名下链接到账户页 `/_oauth/me` 即可（Traefik 会把每个项目域名下的 `/_oauth/*` 交给认证网关）：
+
+```html
+<a href="/_oauth/me">账户</a>
+```
+
+账户页显示在本项目登录的账号和登录方式，并提供三个按钮：**退出登录**（`/_oauth/logout`）、**换个账号**（先退出，再显示登录页，不会借平台的中心会话悄悄登回去）和 **Muvee 控制台**。未登录时改为显示登录链接。该页不会被缓存，也不能被其他站点用 iframe 嵌入。
+
+### 账户角标（无需写代码）
+
+也可以让 muvee 替项目加上入口：开启 **页面角标**（项目设置 → 认证，或 `muveectl projects update PROJECT_ID --account-badge`）后，访客会在项目需要登录的页面右下角看到一个**账户**小链接，指向 `/_oauth/me`。访客可以把它收起（在该浏览器里记住）。开关推出之后新建的项目默认开启，之前已有的项目默认关闭。
+
+链接由 muvee 本来就注入到 HTML 页面里的脚本（`/_embed-bridge.js`）添加；脚本向同一域名下的 `/_oauth/account-ui` 询问是否显示，访客的任何信息都不会写进你的 HTML。以下情况不会出现：
+
+- iframe 内、公开页面、**认证豁免路径**里的路径；
+- CSP 拦截了注入脚本的页面（例如 `script-src` 用 `strict-dynamic` 或只认 nonce）——muvee 不会改动你的 CSP；
+- muvee 无法改写的 HTML：用 gzip 以外方式压缩的响应，或没有小写 `</head>` 的页面。
+
+角标画在 Shadow DOM 里，嵌入截图时会被跳过。如果应用已有自己的账户菜单或登出按钮，建议关闭角标，改在自己的菜单里链接到 `/_oauth/me`。和页面上的任何元素一样，角标可以被页面自己的脚本隐藏或仿冒，所以它只是导航入口，不是安全边界。
+
+想一键登出，直接链接到 `/_oauth/logout`：
 
 ```html
 <a href="/_oauth/logout">退出登录</a>
@@ -116,6 +146,35 @@ https://myapp.example.com/_oauth/logout?redirect=/goodbye
 登出会吊销本项目的会话及其所属的中心会话，因此由同一中心会话签出的其他项目会话会在下一次请求时失效（显示已退出页）：退出一个项目仍会同时退出该基域下的所有项目。它不会退出 OAuth 登录方式本身（如 Google），也不会退出 muvee 控制台。反过来则会联动：退出 muvee 控制台会同时作废该用户在所有设备、所有基域上的项目登录态，之后访问任一项目都需要重新登录。退出控制台还会作废该用户通过下文设备流获得的全部 Bearer 令牌（所有项目）；重新获取的方式见[令牌作废](#令牌作废)。
 
 如果 `/_oauth/logout` 是从其他来源触发的（例如其他页面里嵌入的链接或图片，通过 `Sec-Fetch-Site` 头判断），muvee 会先显示确认页，用户点击确认后才登出。不带该头的请求（curl、旧浏览器）直接登出。
+
+用户也可以在 muvee 控制台一次退出所有项目：**个人资料 → 子站登录 → 退出全部子站** 会结束该控制台账号在所有设备、所有基域上的全部项目会话（控制台登录和 CLI 令牌保留）。它只作用于当前登录控制台的账号；用户用其他邮箱账号登录的项目不受影响。
+
+## 自有会话的应用
+
+如果你的服务在 muvee 传入的身份之上，还自己维护登录会话（会话 Cookie、服务端 session 存储），需要额外遵守两条。
+
+**1. 按顺序登出。** 应用的登出端点先清掉自己的会话，再 302 到 `/_oauth/logout`。只跳 `/_oauth/logout` 不够：muvee 会话结束了，但应用自己的 Cookie 还留在浏览器里。
+
+```js
+app.get('/logout', (req, res) => {
+  req.session.destroy();               // 先清自己的会话
+  res.clearCookie('app_sid');
+  res.redirect('/_oauth/logout');      // 再交给 muvee 结束平台会话
+});
+```
+
+**2. 每个请求都比对身份。** 大多数登出根本不会经过你的 `/logout`：用户退出控制台、在别的项目登出、使用「退出全部子站」，或者换另一个账号重新登录（Google 账号和飞书账号即使同名也是两个用户）。这些情况下应用的旧会话 Cookie 都还在，而下一个通过 ForwardAuth 的请求带的 `X-Forwarded-User` 可能已经是另一个人。请在每个请求上比对，身份变了就丢弃旧会话——否则新用户会拿到上一个用户的会话：
+
+```js
+app.use((req, res, next) => {
+  const user = req.headers['x-forwarded-user'];
+  if (req.session.user && req.session.user !== user) {
+    req.session.destroy();             // 身份变了：丢弃旧会话
+    return res.redirect(req.originalUrl);
+  }
+  next();
+});
+```
 
 ## CLI / Headless 访问（Device Flow）
 

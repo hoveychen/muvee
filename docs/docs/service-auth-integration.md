@@ -12,6 +12,16 @@ This guide is for developers who deploy services on muvee and want to leverage m
 muvee tells your service **who the user is** (authentication). It does **not** manage what each user is allowed to do — that is authorization, and it is your service's responsibility. For example, muvee will tell you "this request is from `alice@company.com`", but your service decides whether Alice can access a given resource.
 :::
 
+:::warning Give your users a way to sign out
+muvee signs users in for you, but it cannot put a sign-out button on your pages. Every page of a project with **Require Auth** should link to the account page muvee serves on every project host:
+
+```html
+<a href="/_oauth/me">Account</a>
+```
+
+`/_oauth/me` shows who is signed in, with **Sign out** and **Switch account**. Linking straight to `/_oauth/logout` also works. If your app keeps its own session, also follow [Apps with their own session](#apps-with-their-own-session).
+:::
+
 ## Reading User Identity (Server-Side)
 
 Every authenticated request that reaches your service includes the following headers, injected by Traefik after muvee's auth gateway verifies the user:
@@ -95,7 +105,27 @@ The legacy `POST /_oauth/login-token` and `/poll` endpoints still exist, but a s
 
 ## Logout
 
-The simplest sign-out needs no code: link to `/_oauth/logout` on your app's own host (Traefik routes `/_oauth/*` on every project host to the auth gateway):
+The simplest sign-out entry needs no code: link to the account page `/_oauth/me` on your app's own host (Traefik routes `/_oauth/*` on every project host to the auth gateway):
+
+```html
+<a href="/_oauth/me">Account</a>
+```
+
+The account page shows the account signed in to this project and the sign-in method, with three buttons: **Sign out** (`/_oauth/logout`), **Switch account** (signs out, then shows the sign-in page without silently signing back in through the platform's central session) and **Muvee console**. When nobody is signed in it shows a sign-in link instead. It is never cached and cannot be framed by another site.
+
+### Account badge (no code)
+
+A project can also let muvee add the entry for it: with **Account badge** on (project settings → Auth, or `muveectl projects update PROJECT_ID --account-badge`), visitors see a small **Account** link in the bottom-right corner of the project's sign-in-protected pages, pointing at `/_oauth/me`. Visitors can collapse it (remembered in that browser). It is on by default for projects created after the switch was introduced and off for older ones.
+
+The link is added by the script muvee already injects into HTML pages (`/_embed-bridge.js`); the script asks `/_oauth/account-ui` on the same host whether to show it, so nothing about the visitor is written into your HTML. It does not appear:
+
+- inside iframes, on public pages, or on paths listed in **Auth Bypass Paths**;
+- on pages whose CSP blocks the injected script (e.g. `strict-dynamic` / nonce-only `script-src`) — muvee never changes your CSP;
+- on HTML muvee cannot rewrite: responses compressed with anything but gzip, or without a lowercase `</head>`.
+
+The badge is drawn in a Shadow DOM and skipped by the embed screenshot. If your app has its own account menu or sign-out button, turn the badge off and link to `/_oauth/me` from your menu instead. Like any element on your page, the badge can be hidden or imitated by your page's own scripts, so it is a navigation aid, not a security boundary.
+
+To sign out in one click, link to `/_oauth/logout` directly:
 
 ```html
 <a href="/_oauth/logout">Sign out</a>
@@ -116,6 +146,35 @@ Sign-out also leaves a `__Host-muvee_fwd_signed_out` marker cookie (host-only, o
 Sign-out revokes this project's session and the central session it was minted from, so every other project's session minted from the same central session stops working on its next request (it shows the signed-out page): signing out of one project still signs the user out of all projects on that base domain. It does not sign the user out of the OAuth provider (e.g. Google) or of the muvee console. The reverse does apply: signing out of the muvee console also ends the user's project sessions on every device and every base domain — the next request to any project asks them to sign in again. Signing out of the console also revokes every Bearer token the user obtained through the device flow below, on every project; see [Token revocation](#token-revocation) for how to get a new one.
 
 If `/_oauth/logout` is opened from another origin — for example a link or image embedded in another page, detected through the `Sec-Fetch-Site` header — muvee first shows a confirmation page and only signs the user out when they click confirm. Requests without that header (curl, old browsers) sign out directly.
+
+Users can also sign out of every project at once from the muvee console: **Profile → Subsite sign-ins → Sign out of all subsites** ends every project session of that console account on every device and base domain (the console session and CLI tokens stay). It only covers the account signed in to the console; projects the user signed in to with another email account are not affected.
+
+## Apps with their own session
+
+If your service keeps its own login session (a session cookie, a server-side session store) on top of the identity muvee passes in, two extra rules apply.
+
+**1. Sign out in order.** Your sign-out endpoint clears your own session first, then redirects to `/_oauth/logout`. Redirecting to `/_oauth/logout` alone is not enough: the muvee session ends, but your app's cookie stays in the browser.
+
+```js
+app.get('/logout', (req, res) => {
+  req.session.destroy();               // clear your own session first
+  res.clearCookie('app_sid');
+  res.redirect('/_oauth/logout');      // then let muvee end the platform session
+});
+```
+
+**2. Compare the identity on every request.** Most sign-outs never reach your `/logout`: the user signs out of the console, signs out on another project, uses *Sign out of all subsites*, or signs in again with a different account (a Google and a Feishu account are different users even with the same name). Your old session cookie survives all of these, and the next request that passes ForwardAuth may carry a different `X-Forwarded-User`. Check it on every request and drop the old session when it changed — otherwise the new user is served the previous user's session:
+
+```js
+app.use((req, res, next) => {
+  const user = req.headers['x-forwarded-user'];
+  if (req.session.user && req.session.user !== user) {
+    req.session.destroy();             // identity changed: drop the old session
+    return res.redirect(req.originalUrl);
+  }
+  next();
+});
+```
 
 ## CLI / Headless Access (Device Flow)
 

@@ -278,6 +278,12 @@ func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	snippet := []byte(`<script src="` + e.scriptPath + `" defer></script>`)
+	if accountMarkable(req) {
+		// Lets the SDK's account badge ask authservice whether to show
+		// (sdkAccountBadgeScript). A bare attribute, never the identity: the
+		// spliced page may be cached by a CDN.
+		snippet = []byte(`<script src="` + e.scriptPath + `" defer data-muvee-account></script>`)
+	}
 	out := make([]byte, 0, len(body)+len(snippet))
 	out = append(out, body[:idx]...)
 	out = append(out, snippet...)
@@ -301,6 +307,15 @@ func (e *EmbedBridge) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	rw.WriteHeader(status)
 	rw.Write(out)
+}
+
+// accountMarkable reports whether the page load is a top-level document that
+// passed ForwardAuth (X-Forwarded-User is set by authservice through the
+// router's auth middleware, which runs before this plugin). Only such pages
+// may carry the account badge (BACKLOG-20261121-001); iframes and clients
+// without Fetch Metadata never do.
+func accountMarkable(req *http.Request) bool {
+	return req.Header.Get("Sec-Fetch-Dest") == "document" && req.Header.Get("X-Forwarded-User") != ""
 }
 
 // isDocumentRequest reports whether req is a browser page load (top-level or
@@ -470,6 +485,7 @@ func (r *responseRecorder) flush(rw http.ResponseWriter) {
 //      plus v2 `embed:selection-screenshot` viewport raster.
 //   4. sdkAnnotateScript — shell-driven element annotation.
 //   5. sdkAuthGuardScript — expired-session relogin, top-level pages too.
+//   6. sdkAccountBadgeScript — per-subsite account badge (top-level only).
 const sdkScript = `// _embed-bridge.js — bridge SDK injected by muvee traefik plugin so any
 // muvee-deployed app surfaces its real <title> + URL to a host page that
 // iframes it (e.g. agent-workspace ` + "`/embed`" + ` page).
@@ -524,7 +540,7 @@ const sdkScript = `// _embed-bridge.js — bridge SDK injected by muvee traefik 
   window.addEventListener("popstate", function () { setTimeout(send, 0); });
   window.addEventListener("hashchange", function () { setTimeout(send, 0); });
 })();
-` + html2canvasBundle + sdkSelectionScripts + sdkAnnotateScript + sdkAuthGuardScript
+` + html2canvasBundle + sdkSelectionScripts + sdkAnnotateScript + sdkAuthGuardScript + sdkAccountBadgeScript
 
 // sdkSelectionScripts is the v1 + v2 selection-upstream blocks concatenated
 // onto sdkScript after html2canvasBundle. v1 sends `embed:selection` (plain

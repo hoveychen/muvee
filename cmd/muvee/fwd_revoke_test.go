@@ -712,7 +712,10 @@ func TestResolveRequestClaimsOnlyInVerify(t *testing.T) {
 				continue
 			}
 			calls++
-			if !strings.HasPrefix(fn, "func handleVerify(") && !strings.HasPrefix(fn, "func resolveAuthClaims(") {
+			// accountBadgeShown (/_oauth/account-ui) answers revocation through
+			// the access check like handleVerify does (BACKLOG-20261121-001).
+			if !strings.HasPrefix(fn, "func handleVerify(") && !strings.HasPrefix(fn, "func resolveAuthClaims(") &&
+				!strings.HasPrefix(fn, "func accountBadgeShown(") {
 				t.Errorf("%s: %q calls resolveRequestClaims directly; use resolveAuthClaims", name, fn)
 			}
 		}

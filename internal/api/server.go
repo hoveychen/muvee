@@ -332,6 +332,10 @@ func (s *Server) handleInternalAccessCheck(w http.ResponseWriter, r *http.Reques
 	resp := map[string]interface{}{
 		"allowed": res.Allowed,
 		"mode":    res.Mode,
+		// The project's account badge switch, for authservice's
+		// /_oauth/account-ui (BACKLOG-20261121-001). An older authservice
+		// ignores the field.
+		"account_badge": res.AccountBadge,
 	}
 	// Console-logout revocation of browser sessions (session_iat,
 	// BACKLOG-20261117-008), of CLI device-flow tokens (cli_iat,
@@ -1015,6 +1019,11 @@ func (s *Server) Router() http.Handler {
 		// Void every CLI device-flow token issued to the caller so far
 		// (BACKLOG-20261117-009); console session and subsite sessions stay.
 		r.Post("/api/me/cli-tokens/revoke", s.handleRevokeCLITokens)
+		// Console "subsite sign-ins" card (BACKLOG-20261121-001): sign out of
+		// every subsite (console session and CLI tokens stay), and the
+		// subsites visited recently, each linking to its /_oauth/me.
+		r.Post("/api/me/fwd-sessions/revoke", s.handleRevokeFwdSessions)
+		r.Get("/api/me/visited-projects", s.handleListVisitedProjects)
 		r.Get("/api/runtime/config", s.handleRuntimeConfig)
 
 		// Authorization – any authenticated user can check status and submit requests
@@ -2705,8 +2714,9 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromCtx(r.Context())
 	// allow_project_access defaults to ON (migration 056); a body that omits
-	// it must not silently opt the new project out of the mesh.
-	p := store.Project{AllowProjectAccess: true}
+	// it must not silently opt the new project out of the mesh. account_badge
+	// is ON for new projects too (existing ones stay off, migration 061).
+	p := store.Project{AllowProjectAccess: true, AccountBadge: true}
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		jsonErr(w, err, 400)
 		return
