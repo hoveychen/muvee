@@ -73,6 +73,12 @@ title and URL. Hosts must verify `event.origin` against the iframe's
   (`window.parent === window`), so they cost nothing for direct visitors.
   The [auth-guard](#auth-guard) below is the one part that runs on
   top-level pages too.
+- It does not make the muvee console embeddable. The console answers with
+  `Content-Security-Policy: frame-ancestors 'none'` and
+  `X-Frame-Options: DENY` (clickjacking protection), so an iframe pointing at
+  the console shows the browser's "refused to connect" page. Embed project
+  subdomains instead; they, tunnels, and the sign-in redirects through the
+  console host's `/_oauth/*` are unaffected.
 
 ## Auth-guard
 
