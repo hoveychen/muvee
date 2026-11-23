@@ -101,7 +101,9 @@ func runAgent() {
 		// muvee-mesh gateway for project-to-project calls. Starts in the
 		// background and stays disabled (deploys skip the mesh) when it can't
 		// come up, so it never blocks the agent.
-		meshGW = mesh.Start(ctx, mesh.ConfigFromEnv(controlPlaneURL, agentSecret))
+		meshCfg := mesh.ConfigFromEnv(controlPlaneURL, agentSecret)
+		meshCfg.StateDir = baseDir // remembers other stacks' gateway holders across recreation
+		meshGW = mesh.Start(ctx, meshCfg)
 	}
 	go runNodeMetricsReporter(ctx, controlPlaneURL, agentSecret, nodeID, baseDir)
 	go runAgentHealthReporter(ctx, controlPlaneURL, agentSecret, nodeID, nodeRole, registryAddr, volumeNFSBasePath, datasetNFSBasePath)

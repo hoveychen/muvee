@@ -15,7 +15,8 @@ import (
 // These tests drive a real docker daemon. They are skipped unless
 // TEST_DOCKER_MESH=1 (and docker is reachable), mirroring the
 // TEST_DATABASE_URL gate of the *_pg_test.go files. Everything they create is
-// named mt<random>* and removed on cleanup; they need the busybox image.
+// named <prefix><random>* (prefix TEST_DOCKER_MESH_PREFIX, default "mt") and
+// removed on cleanup; they need the busybox image.
 //
 //	TEST_DOCKER_MESH=1 go test ./internal/mesh/ -run Docker -v
 
@@ -27,9 +28,36 @@ type dockerFixture struct {
 	network string
 	subnet  string
 	gw      string
+	// holders is the gateway's foreign-holder memory, persisted under a
+	// per-test temp dir.
+	holders  *holderMemory
+	stateDir string
+}
+
+// meshNet resolves the test network the way ensureNetwork would (minus the
+// label check, which the direct ensureSelfConnected tests do not need).
+func (f *dockerFixture) meshNet() meshNetwork {
+	f.t.Helper()
+	id, err := dockerCmd(f.ctx, "network", "inspect", "-f", "{{.Id}}", f.network)
+	if err != nil {
+		f.t.Fatalf("inspect network: %v", err)
+	}
+	return meshNetwork{Name: f.network, ID: id, Subnet: f.subnet}
 }
 
 func newDockerFixture(t *testing.T) *dockerFixture {
+	t.Helper()
+	return newDockerFixtureNet(t)
+}
+
+// newMeshFixture creates the test network the way the agent does, with the
+// muvee.mesh=1 label that marks it as a mesh network.
+func newMeshFixture(t *testing.T) *dockerFixture {
+	t.Helper()
+	return newDockerFixtureNet(t, "--label", "muvee.mesh=1")
+}
+
+func newDockerFixtureNet(t *testing.T, netFlags ...string) *dockerFixture {
 	t.Helper()
 	if os.Getenv("TEST_DOCKER_MESH") != "1" {
 		t.Skip("set TEST_DOCKER_MESH=1 to run docker-backed mesh tests")
@@ -42,12 +70,17 @@ func newDockerFixture(t *testing.T) *dockerFixture {
 	if _, err := dockerCmd(ctx, "info", "-f", "{{.ServerVersion}}"); err != nil {
 		t.Skipf("docker daemon not reachable: %v", err)
 	}
-	f := &dockerFixture{t: t, ctx: ctx, network: fmt.Sprintf("mt%d", rand.Intn(1_000_000))}
+	prefix := os.Getenv("TEST_DOCKER_MESH_PREFIX")
+	if prefix == "" {
+		prefix = "mt"
+	}
+	f := &dockerFixture{t: t, ctx: ctx, network: fmt.Sprintf("%s%d", prefix, rand.Intn(1_000_000)), stateDir: t.TempDir()}
+	f.holders = newHolderMemory(f.stateDir)
 	// Pick a free /24 inside 10.249.0.0/16; docker rejects overlapping pools.
 	var lastErr error
 	for i := 0; i < 20; i++ {
 		f.subnet = fmt.Sprintf("10.249.%d.0/24", rand.Intn(250))
-		if _, lastErr = dockerCmd(ctx, "network", "create", "--subnet", f.subnet, f.network); lastErr == nil {
+		if _, lastErr = dockerCmd(ctx, append(append([]string{"network", "create", "--subnet", f.subnet}, netFlags...), f.network)...); lastErr == nil {
 			break
 		}
 	}
@@ -109,7 +142,7 @@ func TestDockerSelfConnectGatewayTakenByRunningContainer(t *testing.T) {
 	f.run("holder", "--network", f.network, "--ip", f.gw)
 	target := f.run("agent")
 
-	err := ensureSelfConnected(f.ctx, f.network, target, f.gw)
+	err := ensureSelfConnectedForTest(f, target)
 	if err == nil {
 		t.Fatal("ensureSelfConnected succeeded although the gateway IP is taken")
 	}
@@ -133,7 +166,7 @@ func TestDockerSelfConnectClearsPreexistingStaleEntry(t *testing.T) {
 		t.Fatalf("setup: expected a stale entry after the failed connect, got %+v", e)
 	}
 
-	if err := ensureSelfConnected(f.ctx, f.network, target, f.gw); err == nil {
+	if err := ensureSelfConnectedForTest(f, target); err == nil {
 		t.Fatal("ensureSelfConnected succeeded although the gateway IP is taken")
 	}
 	f.assertRestartable(target)
@@ -149,7 +182,7 @@ func TestDockerSelfConnectRespectsStoppedHolder(t *testing.T) {
 	}
 	target := f.run("agent")
 
-	err := ensureSelfConnected(f.ctx, f.network, target, f.gw)
+	err := ensureSelfConnectedForTest(f, target)
 	if err == nil {
 		t.Fatal("ensureSelfConnected took an IP reserved by a stopped container")
 	}
@@ -164,7 +197,7 @@ func TestDockerSelfConnectHappyPathAndIdempotent(t *testing.T) {
 	f := newDockerFixture(t)
 	target := f.run("agent")
 	for i := 0; i < 2; i++ {
-		if err := ensureSelfConnected(f.ctx, f.network, target, f.gw); err != nil {
+		if err := ensureSelfConnectedForTest(f, target); err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
 	}
@@ -189,7 +222,7 @@ func TestDockerSelfConnectRecoversAfterHolderLeaves(t *testing.T) {
 	if _, err := dockerCmd(f.ctx, "rm", "-f", holder); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureSelfConnected(f.ctx, f.network, target, f.gw); err != nil {
+	if err := ensureSelfConnectedForTest(f, target); err != nil {
 		t.Fatalf("ensureSelfConnected: %v", err)
 	}
 	if _, err := dockerCmd(f.ctx, "restart", "-t", "0", target); err != nil {
