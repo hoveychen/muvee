@@ -175,6 +175,80 @@ func (s *Scheduler) DispatchCleanup(ctx context.Context, nodeID uuid.UUID, stopp
 	return created.ID, nil
 }
 
+// DispatchMigrationCleanup tears down a compose/image project on a node it
+// has moved away from (e.g. an admin changed its fixed_node_id): every
+// container of the project goes, its named volumes stay — the data still lives
+// on that node. The mode is deliberately not "compose": an agent that predates
+// it would run the project-deletion cleanup (`compose down -v`) for "compose";
+// for an unknown mode it falls back to `docker rm -f muvee-<prefix>`.
+func (s *Scheduler) DispatchMigrationCleanup(ctx context.Context, nodeID uuid.UUID, stoppedDeployment *store.Deployment, project *store.Project) (uuid.UUID, error) {
+	created, err := s.store.CreateTask(ctx, &store.Task{
+		Type:         store.TaskTypeCleanup,
+		NodeID:       &nodeID,
+		DeploymentID: stoppedDeployment.ID,
+		Payload: map[string]interface{}{
+			"mode":              "compose_stop",
+			"project_id":        project.ID.String(),
+			"domain_prefix":     project.DomainPrefix,
+			"compose_file_path": project.ComposeFilePath,
+		},
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return created.ID, nil
+}
+
+// RetireReplacedDeployments runs when dep's deploy task completed on
+// taskNodeID: the project's other running deployments are stopped, and each
+// one that ran on another node gets a cleanup task there so its container
+// does not linger as an orphan (a dead node picks the task up when it
+// returns). This is also how a node-failover replacement retires the
+// deployment it replaces — failover itself never stops it, so the original
+// keeps its route until the replacement is actually serving.
+func (s *Scheduler) RetireReplacedDeployments(ctx context.Context, dep *store.Deployment, taskNodeID *uuid.UUID) {
+	project, err := s.store.GetProject(ctx, dep.ProjectID)
+	if err != nil || project == nil {
+		return
+	}
+	stopped, err := s.store.StopProjectDeployments(ctx, dep.ProjectID, dep.ID)
+	if err != nil {
+		return
+	}
+	_, failover := store.FailoverReplacedID(dep)
+	for _, old := range stopped {
+		if failover {
+			_ = s.store.AppendDeploymentLog(ctx, old.ID, fmt.Sprintf("evicted: node offline; replaced by failover deployment %s", dep.ID))
+		}
+		s.CleanUpRetiredDeployment(ctx, old, taskNodeID, project)
+	}
+}
+
+// CleanUpRetiredDeployment queues the removal of a retired deployment's
+// containers on the node it ran on, when that is another docker host than
+// newNodeID's: compose/image projects with DispatchMigrationCleanup, others
+// with DispatchCleanup. A node row with the same host_ip as the new node is
+// the same docker host (an agent re-registered under another NODE_NAME); the
+// deploy there already replaced the container, and a cleanup would remove the
+// live one should the old name ever poll again — so none is queued.
+func (s *Scheduler) CleanUpRetiredDeployment(ctx context.Context, old *store.Deployment, newNodeID *uuid.UUID, project *store.Project) {
+	if old.NodeID == nil || newNodeID == nil || *old.NodeID == *newNodeID {
+		return
+	}
+	oldNode, err1 := s.store.GetNode(ctx, *old.NodeID)
+	newNode, err2 := s.store.GetNode(ctx, *newNodeID)
+	if err1 == nil && err2 == nil && oldNode != nil && newNode != nil && oldNode.HostIP != "" && oldNode.HostIP == newNode.HostIP {
+		log.Printf("deployment %s of project %s retired on node %s: same host (%s) as node %s, no cleanup queued",
+			old.ID, project.Name, oldNode.Hostname, oldNode.HostIP, newNode.Hostname)
+		return
+	}
+	if project.ProjectType == store.ProjectTypeCompose || project.ProjectType == store.ProjectTypeImage {
+		_, _ = s.DispatchMigrationCleanup(ctx, *old.NodeID, old, project)
+	} else {
+		_, _ = s.DispatchCleanup(ctx, *old.NodeID, old, project.DomainPrefix)
+	}
+}
+
 // DispatchRuntimeLogs creates a runtime_logs task on the node where the given
 // deployment is running. The agent will run `docker logs --tail N --since T`
 // against the deployment's container and write the captured output back into
@@ -425,6 +499,15 @@ func (s *Scheduler) dispatchChain(ctx context.Context, dep *store.Deployment) er
 	// deployment sat in the queue.
 	if project.Paused {
 		return fmt.Errorf("project %s is paused", project.ID)
+	}
+	// A node-failover replacement redeploys the image the evicted deployment
+	// ran, on another node — no rebuild from the branch head.
+	if _, ok := store.FailoverReplacedID(dep); ok && dep.ImageTag != "" {
+		_ = s.store.UpdateDeploymentStatus(ctx, dep.ID, store.DeploymentStatusDeploying, "")
+		if err := s.DispatchDeploy(ctx, dep, project, dep.ImageTag); err != nil {
+			return fmt.Errorf("dispatch deploy: %w", err)
+		}
+		return nil
 	}
 	if project.ProjectType == store.ProjectTypeCompose || project.ProjectType == store.ProjectTypeImage {
 		if err := s.DispatchDeploy(ctx, dep, project, ""); err != nil {

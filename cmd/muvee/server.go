@@ -251,11 +251,12 @@ func (l *nodeLogOnce) reset(nodeID uuid.UUID) {
 //
 // An offline agent does not mean the containers are down (the agent may have
 // crashed, or lost its control-plane link, while docker keeps serving). So a
-// deployment is only retired once a replacement has actually been dispatched;
-// whenever that is impossible the original row stays 'running' and keeps its
-// Traefik route (BACKLOG-20261124-002: a single-node stack lost every route
-// for 15 days because the old rows were stopped first and the replacement then
-// failed with "no active deploy nodes").
+// deployment is only retired once its replacement has completed (see
+// failoverDeployment); until then — and whenever no replacement can be placed
+// at all — the original row stays 'running' and keeps its Traefik route
+// (BACKLOG-20261124-002: a single-node stack lost every route for 15 days
+// because the old rows were stopped first and the replacement then failed
+// with "no active deploy nodes").
 func checkNodeFailovers(ctx context.Context, st *store.Store, sched *scheduler.Scheduler, threshold time.Duration) {
 	nodes, err := st.ListNodes(ctx)
 	if err != nil {
@@ -347,41 +348,72 @@ func failoverBlocker(project *store.Project, deadNode uuid.UUID) string {
 	return ""
 }
 
-// failoverDeployment dispatches a replacement for dep and only then retires
-// dep. If dispatching fails, the replacement row is deleted (it never ran, and
-// a leftover 'failed' row would become the project's newest deployment and
-// show the project as failed) and dep is left exactly as it was — still
-// 'running', still routed, with no eviction note — so nothing has to be
-// repaired by hand once the node comes back.
+// failoverBackoff: a replacement that keeps failing on the healthy node is
+// retried after 5m, 10m, 20m, ... and given up after 8 failed attempts in one
+// outage, so a deterministic failure costs at most 8 failed rows instead of
+// one per one-minute tick.
+var failoverBackoff = store.FailoverBackoff{Base: 5 * time.Minute, MaxAttempts: 8}
+
+// failoverDeployment queues a replacement for dep through the project's deploy
+// queue and lets the queue dispatch it. dep itself is left alone — 'running'
+// and routed — until the replacement's deploy completes; the completion
+// callback (scheduler.RetireReplacedDeployments) then stops it and queues a
+// cleanup on the dead node. So a replacement that fails on the healthy node
+// leaves the project routed exactly as before, the orphan container is
+// removed when the node returns, and a user deployment is never raced: the
+// queue runs one deployment of a project at a time and a user deployment
+// always supersedes a queued replacement.
+//
+// If dispatching fails outright, the replacement row is deleted (it never ran,
+// and a leftover 'failed' row would become the project's newest deployment).
 func failoverDeployment(ctx context.Context, st *store.Store, sched *scheduler.Scheduler, node *store.Node, dep *store.Deployment, project *store.Project) {
-	newDep, err := st.CreateDeployment(ctx, &store.Deployment{
-		ProjectID: dep.ProjectID,
-		ImageTag:  dep.ImageTag,
-		CommitSHA: dep.CommitSHA,
-	})
+	// Let the deploy queue reap what is presumed lost first: a deploy that was
+	// dispatched to this node just before it died stays in flight forever
+	// otherwise (the queue sweeper only visits projects with queued rows) and
+	// would block the failover for the whole outage.
+	_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
+	res, err := st.EnqueueFailoverReplacement(ctx, dep, node, failoverBackoff)
 	if err != nil {
-		log.Printf("Failed to create replacement deployment for project %s: %v", project.Name, err)
+		log.Printf("Failover of project %s: could not queue a replacement for deployment %s: %v", project.Name, dep.ID, err)
 		return
 	}
-	_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusDeploying, "")
-	if err := sched.DispatchDeploy(ctx, newDep, project, newDep.ImageTag); err != nil {
-		if derr := st.DeleteDeployment(ctx, newDep.ID); derr != nil {
-			log.Printf("Failover of project %s: could not roll back replacement deployment %s: %v", project.Name, newDep.ID, derr)
-			_ = st.UpdateDeploymentStatus(ctx, newDep.ID, store.DeploymentStatusFailed, err.Error())
+	if res.Retired != nil {
+		log.Printf("Failover of project %s: deployment %s on offline node %s retired, newer deployment %s already runs",
+			project.Name, dep.ID, node.Hostname, res.RetiredFor.ID)
+		sched.CleanUpRetiredDeployment(ctx, res.Retired, res.RetiredFor.NodeID, project)
+		return
+	}
+	if res.Replacement == nil {
+		key := fmt.Sprintf("skip:%s:%d:%v", dep.ID, res.Failures, res.GaveUp)
+		if res.GaveUp {
+			if failoverSkipLog.first(node.ID, key) {
+				log.Printf("WARNING: failover of project %s off offline node %s: %s; deployment %s stays running and routed "+
+					"(redeploy the project, or bring the node back)", project.Name, node.Hostname, res.Skip, dep.ID)
+			}
+		} else if failoverSkipLog.first(node.ID, key) {
+			log.Printf("Failover of project %s off offline node %s: not queuing a replacement for deployment %s: %s",
+				project.Name, node.Hostname, dep.ID, res.Skip)
 		}
-		log.Printf("WARNING: failover of project %s off offline node %s aborted: dispatching the replacement failed: %v; "+
-			"deployment %s left running and routed, replacement rolled back", project.Name, node.Hostname, err, dep.ID)
-		// The replacement was briefly in flight and may have made a concurrent
-		// deploy queue behind it; let that one run now.
-		_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
 		return
 	}
-	// The replacement is on its way: retire the old row now, so the dead
-	// node's address leaves the route set and the next tick does not evict
-	// the same deployment again.
-	_ = st.UpdateDeploymentStatus(ctx, dep.ID, store.DeploymentStatusStopped,
-		fmt.Sprintf("evicted: node %s (%s) offline", node.Hostname, node.ID))
-	log.Printf("Failover deployment %s dispatched for project %s", newDep.ID, project.Name)
+	repl := res.Replacement
+	dispatched, derr := sched.AdvanceDeployQueue(ctx, project.ID)
+	switch {
+	case dispatched == repl.ID && derr != nil:
+		if err := st.DeleteDeployment(ctx, repl.ID); err != nil {
+			log.Printf("Failover of project %s: could not roll back replacement deployment %s: %v", project.Name, repl.ID, err)
+		}
+		if failoverSkipLog.first(node.ID, "dispatch-failed:"+dep.ID.String()) {
+			log.Printf("WARNING: failover of project %s off offline node %s aborted: dispatching the replacement failed: %v; "+
+				"deployment %s left running and routed, replacement rolled back", project.Name, node.Hostname, derr, dep.ID)
+		}
+		// Let anything that queued behind the replacement run now.
+		_, _ = sched.AdvanceDeployQueue(ctx, project.ID)
+	case dispatched == repl.ID:
+		log.Printf("Failover deployment %s dispatched for project %s (replaces %s on offline node %s)", repl.ID, project.Name, dep.ID, node.Hostname)
+	default:
+		log.Printf("Failover deployment %s queued for project %s (replaces %s on offline node %s)", repl.ID, project.Name, dep.ID, node.Hostname)
+	}
 }
 
 // processBuildCompletions polls for completed build tasks and dispatches deploy tasks.
