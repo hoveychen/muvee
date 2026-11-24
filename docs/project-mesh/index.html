@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.7.0">
 <title data-rh="true">Project-to-Project Access (muvee-mesh) | muvee</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://hoveychen.github.io/muvee/docs/project-mesh"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" property="og:locale:alternate" content="zh"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Project-to-Project Access (muvee-mesh) | muvee"><meta data-rh="true" name="description" content="Projects that belong to the same owner can call each other from inside"><meta data-rh="true" property="og:description" content="Projects that belong to the same owner can call each other from inside"><link data-rh="true" rel="icon" href="/muvee/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://hoveychen.github.io/muvee/docs/project-mesh"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/project-mesh" hreflang="en"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/zh/docs/project-mesh" hreflang="zh"><link data-rh="true" rel="alternate" href="https://hoveychen.github.io/muvee/docs/project-mesh" hreflang="x-default"><link rel="stylesheet" href="/muvee/assets/css/styles.57b27fd8.css">
-<script src="/muvee/assets/js/runtime~main.a51d0d89.js" defer="defer"></script>
+<script src="/muvee/assets/js/runtime~main.b6347e6c.js" defer="defer"></script>
 <script src="/muvee/assets/js/main.a0f63c22.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
@@ -82,8 +82,65 @@ whether the call is allowed, and proxies it to the target&#x27;s running
 deployment.</li>
 </ol>
 <h3 class="anchor anchorWithStickyNavbar_pE4O" id="agent-settings">Agent settings<a href="#agent-settings" class="hash-link" aria-label="Direct link to Agent settings" title="Direct link to Agent settings">​</a></h3>
-<p>All optional — the defaults work out of the box.</p>
-<table><thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead><tbody><tr><td><code>MESH_SUBNET</code></td><td><code>10.213.0.0/16</code></td><td>Subnet used when the agent creates <code>muvee-mesh</code>. An existing network is reused with its own subnet. Change it only if it collides with your LAN/VPN.</td></tr><tr><td><code>MESH_GATEWAY_IP</code></td><td><code>10.213.0.2</code></td><td>Fixed IP of the agent on <code>muvee-mesh</code>; must lie inside the subnet.</td></tr><tr><td><code>MESH_FALLBACK_DNS</code></td><td>auto-detect</td><td>Comma-separated resolvers handed to project containers as a second DNS server, so external lookups keep working while the gateway is down. Auto-detected from what docker gives a container on the default bridge.</td></tr><tr><td><code>MESH_SELF_CONTAINER</code></td><td>auto-detect</td><td>The agent&#x27;s own container name/ID, if auto-detection from <code>/proc/self/mountinfo</code> fails.</td></tr></tbody></table>
+<p>All optional — the defaults work out of the box for a single muvee stack per
+docker host.</p>
+<table><thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead><tbody><tr><td><code>MESH_NETWORK</code></td><td><code>muvee-mesh</code></td><td>Name of the mesh docker network. Required when several muvee stacks share one docker host (see below).</td></tr><tr><td><code>MESH_SUBNET</code></td><td><code>10.213.0.0/16</code></td><td>Subnet used when the agent creates <code>muvee-mesh</code>. An existing network is reused with its own subnet. Change it only if it collides with your LAN/VPN.</td></tr><tr><td><code>MESH_GATEWAY_IP</code></td><td><code>10.213.0.2</code></td><td>Fixed IP of the agent on <code>muvee-mesh</code>; must lie inside the subnet.</td></tr><tr><td><code>MESH_FALLBACK_DNS</code></td><td>auto-detect</td><td>Comma-separated resolvers handed to project containers as a second DNS server, so external lookups keep working while the gateway is down. Auto-detected from what docker gives a container on the default bridge.</td></tr><tr><td><code>MESH_SELF_CONTAINER</code></td><td>auto-detect</td><td>The agent&#x27;s own container name/ID, if auto-detection from <code>/proc/self/mountinfo</code> fails.</td></tr></tbody></table>
+<p><strong>Several muvee stacks on one docker host</strong> (e.g. two control planes whose
+deploy agents run on the same machine): docker networks are host-global, so
+each stack&#x27;s deploy agent <strong>must</strong> set its own <code>MESH_NETWORK</code> and a
+non-overlapping <code>MESH_SUBNET</code> (e.g. <code>MESH_NETWORK=insnap-mesh</code>,
+<code>MESH_SUBNET=10.214.0.0/16</code>). With the defaults both agents compete for
+<code>10.213.0.2</code> on the same <code>muvee-mesh</code>.</p>
+<ul>
+<li><strong>Copying a stack&#x27;s <code>.env</code> / compose directory to start a new stack:</strong> change
+both <code>MESH_NETWORK</code> and <code>MESH_SUBNET</code>. Changing only the subnet does nothing:
+an existing network of that name is reused with its own subnet.</li>
+<li><strong><code>MESH_NETWORK</code> must name a network of its own</strong> that the agent creates and
+labels <code>muvee.mesh=1</code>. The agent refuses any existing network without that
+label (e.g. the stack&#x27;s compose network): it logs
+<code>mesh: docker network ... is not a muvee mesh network</code>, keeps the mesh
+disabled and never touches its own attachment to that network.</li>
+<li><strong>Gateway IP already taken:</strong> before attaching, the agent checks the gateway
+IP. When another container holds it — running at that IP, or stopped /
+created and still reserving it as a fixed IP — the agent logs
+<code>mesh: gateway IP ... is already held by container ...</code>, keeps the mesh
+disabled and retries every 30s; the agent itself keeps working and its
+container restarts normally. A <em>running</em> container that only carries a
+leftover entry for the IP (no live address) does not count.</li>
+<li><strong>Held by another stack:</strong> when the holder is a <em>running</em> container of a
+different compose project (or, without compose, a differently named
+container), the agent logs <code>mesh: WARNING: gateway IP ... is held by ... of another muvee stack (compose project ...)</code> and <strong>remembers it</strong> in
+<code>$DATA_DIR/mesh-foreign-gateway-holders.json</code> (the agent&#x27;s data volume, kept
+across upgrades). From then on it never takes the gateway IP on that network,
+even when it looks free — otherwise it would grab it while Watchtower
+recreates the other stack&#x27;s agent (old container removed, new one not yet
+started), and the other, healthy stack&#x27;s agent would be stuck. The record is
+per network: it disappears when that network is recreated. To retry
+anyway, delete the file and restart the agent, or change <code>MESH_NETWORK</code>.
+A <em>stopped</em> or <em>created</em> container of another compose project (e.g. an old
+agent left behind after the stack&#x27;s directory or <code>-p</code> project name changed)
+is not remembered: it only blocks while it exists, and once you
+<code>docker rm</code> it the agent takes the gateway on its next 30s retry.</li>
+<li><strong>The stack that already has the gateway can still lose it</strong> while the
+stacks share a network: if the other agent does take the IP during an
+upgrade gap (e.g. it runs an older muvee, or its record was deleted), the
+upgraded agent&#x27;s new container stays in <code>Created</code> and fails to start with
+<code>Address already in use</code>. Recover with <code>docker rm &lt;stuck container&gt;</code> and
+recreate the agent (<code>docker compose up -d &lt;agent service&gt;</code>), then give the
+stacks separate networks.</li>
+<li><strong>After changing <code>MESH_NETWORK</code>, redeploy every project of that stack.</strong>
+The agent creates the new network, but projects deployed earlier stay on the
+old one, with their DNS still pointing at the gateway IP there — which may
+now be the <em>other</em> stack&#x27;s agent. That gateway identifies callers only by
+their <code>muvee.domain_prefix</code> label, so a leftover project would be treated as
+a project of the other stack with the same prefix.</li>
+<li><strong>Project <code>domain_prefix</code> values must be unique across all stacks on the
+docker host</strong>, not just within one stack. Containers are named
+<code>muvee-&lt;domain_prefix&gt;</code> and the agent cleans up a project&#x27;s containers by
+their <code>muvee.domain_prefix</code> / compose project label, which carries no stack
+identity: when a project leaves a node, the cleanup there can remove the
+other stack&#x27;s containers of a project with the same prefix.</li>
+</ul>
 <h3 class="anchor anchorWithStickyNavbar_pE4O" id="while-the-gateway-is-down">While the gateway is down<a href="#while-the-gateway-is-down" class="hash-link" aria-label="Direct link to While the gateway is down" title="Direct link to While the gateway is down">​</a></h3>
 <p>During an agent restart or upgrade the gateway is briefly unavailable:</p>
 <ul>
